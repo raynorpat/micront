@@ -108,6 +108,18 @@ _start:
     /* loader_main returns the address of KiSystemStartup */
     /* It also returns LOADER_PARAMETER_BLOCK pointer in loader_block global */
 
+    /* Initialize FPU and clear any pending exceptions */
+    clts
+    fninit
+    fnclex
+
+    /* Mask all PIC interrupts. HalInitializeProcessor will reprogram the PIC.
+     * Without this, spurious or stale interrupts can fire before the kernel's
+     * interrupt dispatch table is initialized, causing BugCheck 0x50. */
+    movb $0xFF, %al
+    outb %al, $0x21        /* Mask all master PIC IRQs */
+    outb %al, $0xA1        /* Mask all slave PIC IRQs */
+
     /* Push LoaderBlock as argument to KiSystemStartup */
     pushl loader_block
     call *%eax

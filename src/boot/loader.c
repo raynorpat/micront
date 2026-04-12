@@ -485,6 +485,7 @@ static void setup_page_tables(void) {
      * PTE index = (0xFFDF0000 - 0xFFC00000) / 4096 = 496 */
     hal_pt[496] = ((ULONG)SharedUserDataPage) | PAGE_PRESENT | PAGE_READWRITE;
 
+
     print("  PCR at phys ");
     print_hex((ULONG)BootPcr);
     print(" -> virt 0xFFDFF000\n");
