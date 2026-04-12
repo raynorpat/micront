@@ -99,7 +99,7 @@ static char ArcBootDevice[] = "multi(0)disk(0)rdisk(0)partition(1)";
 static char ArcHalDevice[]  = "multi(0)disk(0)rdisk(0)partition(1)";
 static char NtBootPath[]    = "\\";
 static char NtHalPath[]     = "\\";
-static char LoadOptions[]   = "DEBUG DEBUGPORT=COM1 BAUDRATE=115200";
+static char LoadOptions[]   = "CRASHDEBUG DEBUGPORT=COM1 BAUDRATE=115200";
 
 /* Module names (wide char for UNICODE_STRING) */
 static USHORT KernelNameW[] = { 'n','t','o','s','k','r','n','l','.','e','x','e',0 };
@@ -795,6 +795,20 @@ ULONG loader_main(multiboot_info_t *mbi) {
         e->BaseHigh = (tss_kseg0 >> 24) & 0xFF;
     }
 
+    /* KGDT_GDT_ALIAS (GDT entry 14, selector 0x70) - describes the GDT itself.
+     * KiInitializeAbios reads this to find the GDT length. Without it,
+     * the ABIOS GDT free list scan loops forever. */
+    {
+        GDT_ENTRY *e = &gdt_virt[14];  /* selector 0x70 */
+        ULONG gdt_size = 32 * 8;       /* 32 entries * 8 bytes = 256 (0x100) */
+        e->LimitLow = (gdt_size - 1) & 0xFFFF;
+        e->BaseLow  = gdt_kseg0 & 0xFFFF;
+        e->BaseMid  = (gdt_kseg0 >> 16) & 0xFF;
+        e->Access   = 0x92;  /* Present, DPL=0, data, read/write */
+        e->LimitHigh = (((gdt_size - 1) >> 16) & 0x0F) | 0x40; /* D/B=1, G=0 (byte granularity) */
+        e->BaseHigh = (gdt_kseg0 >> 24) & 0xFF;
+    }
+
     /* PCR descriptor (GDT entry 6, selector 0x30) - base = 0xFFDFF000 */
     {
         ULONG pcr_addr = 0xFFDFF000;
@@ -814,8 +828,8 @@ ULONG loader_main(multiboot_info_t *mbi) {
             ULONG  base;
         } gdt_ptr, idt_ptr;
 
-        /* GDT: 12 entries * 8 = 96 bytes minimum, but we allocated more */
-        gdt_ptr.limit = (12 * 8) - 1;
+        /* GDT: 32 entries * 8 = 256 bytes */
+        gdt_ptr.limit = (32 * 8) - 1;
         gdt_ptr.base  = gdt_kseg0;
 
         idt_ptr.limit = (256 * 8) - 1;

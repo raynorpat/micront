@@ -113,22 +113,22 @@ PcSelfPcr equ 01CH
 PcPrcb equ 020H
 PcTeb equ 018H
 PcIrql equ 024H
-PcIRR equ 028H
-PcIrrActive equ 02CH
-PcIDR equ 030H
-PcIdt equ 038H
-PcGdt equ 03CH
-PcTss equ 040H
-PcDebugActive equ 050H
-PcNumber equ 051H
-PcVdmAlert equ 052H
-PcSetMember equ 048H
-PcStallScaleFactor equ 04CH
-PcHal equ 094H
-PcKernel equ 054H
-PcPrcbData equ 0120H
-PcIsExecutingDpc equ 0D8H
-ProcessorControlRegisterLength equ 0468H
+PcIRR equ 026H
+PcIrrActive equ 02AH
+PcIDR equ 02EH
+PcIdt equ 036H
+PcGdt equ 03AH
+PcTss equ 03EH
+PcDebugActive equ 04EH
+PcNumber equ 04FH
+PcVdmAlert equ 050H
+PcSetMember equ 046H
+PcStallScaleFactor equ 04AH
+PcHal equ 092H
+PcKernel equ 052H
+PcPrcbData equ 011CH
+PcIsExecutingDpc equ 0D6H
+ProcessorControlRegisterLength equ 0460H
 
 ;
 ;   Defines for user shared data
@@ -199,21 +199,21 @@ PbKernelTime equ 01C4H
 PbUserTime equ 01C8H
 PbDpcTime equ 01CCH
 PbInterruptTime equ 01D0H
-PbThreadStartCount equ 021CH
-PbAlignmentFixupCount equ 0244H
-PbContextSwitches equ 0248H
-PbDcacheFlushCount equ 024CH
-PbExceptionDispatchcount equ 0250H
-PbFirstLevelTbFills equ 0254H
-PbFloatingEmulationCount equ 0258H
-PbIcacheFlushCount equ 025CH
-PbSecondLevelTbFills equ 0260H
-PbSystemCalls equ 0264H
-PbDpcListHead equ 02E8H
-PbDpcCount equ 02F0H
-PbQuantumEnd equ 0344H
-PbDpcLock equ 0330H
-PbSkipTick equ 0334H
+PbThreadStartCount equ 021AH
+PbAlignmentFixupCount equ 0242H
+PbContextSwitches equ 0246H
+PbDcacheFlushCount equ 024AH
+PbExceptionDispatchcount equ 024EH
+PbFirstLevelTbFills equ 0252H
+PbFloatingEmulationCount equ 0256H
+PbIcacheFlushCount equ 025AH
+PbSecondLevelTbFills equ 025EH
+PbSystemCalls equ 0262H
+PbDpcListHead equ 02E6H
+PbDpcCount equ 02EEH
+PbQuantumEnd equ 0340H
+PbDpcLock equ 032EH
+PbSkipTick equ 0332H
 ProcessorBlockLength equ 0350H
 
 ; 
@@ -231,7 +231,7 @@ TbThreadLocalStoragePointer equ 02CH
 TbCountOfOwnedCriticalSections equ 038H
 TbSystemReserved1 equ 0CCH
 TbSystemReserved2 equ 01D4H
-TbVdm equ 0F18H
+TbVdm equ 0F16H
 TbCsrQlpcStack equ 044H
 TbGdiClientPID equ 06F4H
 TbGdiClientTID equ 06F8H
@@ -342,12 +342,12 @@ InDispatchAddress equ 01CH
 InVector equ 020H
 InIrql equ 024H
 InSynchronizeIrql equ 025H
-InMode equ 02CH
-InShareVector equ 030H
+InMode equ 02AH
+InShareVector equ 02EH
 InNumber equ 028H
 InFloatingSave equ 026H
 InConnected equ 027H
-InDispatchCode equ 034H
+InDispatchCode equ 030H
 InLevelSensitive equ 00H
 InLatched equ 01H
 
@@ -367,7 +367,7 @@ PfRangeLimit equ 014H
 PfBucketShift equ 018H
 PfBuffer equ 01CH
 PfStarted equ 020H
-PfSegment equ 024H
+PfSegment equ 022H
 ProfileObjectLength equ 028H
 ; 
 ; 
@@ -394,7 +394,7 @@ PrBasePriority equ 063H
 PrState equ 064H
 PrThreadQuantum equ 065H
 ProcessObjectLength equ 070H
-ExtendedProcessObjectLength equ 0200H
+ExtendedProcessObjectLength equ 01F0H
 
 ; 
 ;  Thread Object Structure Offset Definitions
@@ -406,47 +406,47 @@ ThWaitListEntry equ 028H
 ThKernelTime equ 030H
 ThUserTime equ 034H
 ThTimer equ 038H
-ThSuspendApc equ 060H
-ThSuspendSemaphore equ 090H
-ThWaitBlock equ 0A4H
-ThApcState equ 0130H
-ThSavedApcState equ 0148H
-ThApcStatePointer equ 0160H
-ThInitialStack equ 0168H
-ThKernelStack equ 016CH
-ThTeb equ 0170H
-ThContextSwitches equ 0174H
-ThWaitTime equ 0180H
-ThAffinity equ 0188H
-ThWaitBlockList equ 018CH
-ThWaitStatus equ 0190H
-ThAlertable equ 0194H
-ThAlerted equ 0195H
-ThApcQueueable equ 0197H
-ThAutoAlignment equ 0198H
-ThDebugActive equ 0199H
-ThPreempted equ 019AH
-ThProcessReadyQueue equ 019BH
-ThKernelStackResident equ 019CH
-ThWaitNext equ 019DH
-ThApcStateIndex equ 019EH
-ThDecrementCount equ 019FH
-ThNextProcessor equ 01A0H
-ThPriority equ 01A1H
-ThState equ 01A2H
-ThSuspendCount equ 01A4H
-ThWaitIrql equ 01A5H
-ThWaitMode equ 01A6H
-ThWaitReason equ 01A7H
-ThPreviousMode equ 01A8H
-ThBasePriority equ 01A9H
-ThPriorityDecrement equ 01AAH
-ThQuantum equ 01ABH
-ThNpxState equ 01ADH
-ThKernelApcDisable equ 01AEH
+ThSuspendApc equ 05EH
+ThSuspendSemaphore equ 08EH
+ThWaitBlock equ 0A2H
+ThApcState equ 0124H
+ThSavedApcState equ 013CH
+ThApcStatePointer equ 0154H
+ThInitialStack equ 015CH
+ThKernelStack equ 0160H
+ThTeb equ 0164H
+ThContextSwitches equ 0168H
+ThWaitTime equ 0174H
+ThAffinity equ 017CH
+ThWaitBlockList equ 0180H
+ThWaitStatus equ 0184H
+ThAlertable equ 0188H
+ThAlerted equ 0189H
+ThApcQueueable equ 018BH
+ThAutoAlignment equ 018CH
+ThDebugActive equ 018DH
+ThPreempted equ 018EH
+ThProcessReadyQueue equ 018FH
+ThKernelStackResident equ 0190H
+ThWaitNext equ 0191H
+ThApcStateIndex equ 0192H
+ThDecrementCount equ 0193H
+ThNextProcessor equ 0194H
+ThPriority equ 0195H
+ThState equ 0196H
+ThSuspendCount equ 0198H
+ThWaitIrql equ 0199H
+ThWaitMode equ 019AH
+ThWaitReason equ 019BH
+ThPreviousMode equ 019CH
+ThBasePriority equ 019DH
+ThPriorityDecrement equ 019EH
+ThQuantum equ 019FH
+ThNpxState equ 01A1H
+ThKernelApcDisable equ 01A2H
 ThreadObjectLength equ 01B0H
 ExtendedThreadObjectLength equ 0240H
-EVENT_WAIT_BLOCK_OFFSET equ 0F8H
+EVENT_WAIT_BLOCK_OFFSET equ 0F0H
 NPX_STATE_NOT_LOADED equ 08H
 NPX_STATE_LOADED equ 00H
 NPX_STATE_EMULATED equ 01H
@@ -470,7 +470,7 @@ WbThread equ 08H
 WbObject equ 0CH
 WbNextWaitBlock equ 010H
 WbWaitKey equ 014H
-WbWaitType equ 018H
+WbWaitType equ 016H
 
 ;
 ;  System Time (KSYSTEM_TIME) Structure Offset Definitions
@@ -743,14 +743,14 @@ ProcessorStateLength equ 0120H
 ;  EPROCESS
 ;
 
-EpDebugPort equ 0FCH
+EpDebugPort equ 0F2H
 ;
 ;  ETHREAD
 ;
 
-EtEventPair equ 0224H
-EtPerformanceCountLow equ 0204H
-EtPerformanceCountHigh equ 023CH
+EtEventPair equ 0218H
+EtPerformanceCountLow equ 01F8H
+EtPerformanceCountHigh equ 0230H
 
 ;
 ;  NTDDK Resource

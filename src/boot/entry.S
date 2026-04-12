@@ -177,8 +177,15 @@ boot_gdt:
     /* 0x58: KGDT_NMI_TSS - filled in by kernel */
     .quad 0x0000000000000000
 
-    /* Extra entries for V86 mode etc - pad to 0x100 */
-    .fill 20, 8, 0
+    /* 0x60-0x68: reserved */
+    .quad 0x0000000000000000
+    .quad 0x0000000000000000
+
+    /* 0x70: KGDT_GDT_ALIAS - filled in at runtime */
+    .quad 0x0000000000000000
+
+    /* 0x78-0xF8: ABIOS selectors + KGDT_STACK16/CODE16 + padding */
+    .fill 17, 8, 0
 boot_gdt_end:
 
 gdt_ptr:

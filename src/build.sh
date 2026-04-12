@@ -93,6 +93,35 @@ run_wine_cmd() {
     return $rc
 }
 
+# --- Generate struct offset headers (KS386.INC, HAL386.INC) ---
+# These MUST match our compiler's struct layout or ASM/C code will disagree.
+
+build_geni386() {
+    echo "========================================"
+    echo "Building: GENI386 (struct offset generator)"
+    echo "========================================"
+
+    local geni_src="$NT_ROOT/PRIVATE/NTOS/KE/I386/GENI386.C"
+    local geni_obj="/tmp/geni386.obj"
+    local geni_exe="/tmp/geni386.exe"
+
+    if [ ! -f "$geni_src" ]; then
+        echo "ERROR: GENI386.C not found"
+        return 1
+    fi
+
+    run_wine_cmd "GENI386 compile" \
+        "cl386 -nologo -c -Zp8 -Gz -Di386=1 -D_X86_=1 -DNT_UP=1 -DSTD_CALL -DCONDITION_HANDLING=1 -DWIN32_LEAN_AND_MEAN=1 -D_NTSYSTEM_ -DDBG=0 -DDEVL=1 -ID:\\PRIVATE\\NTOS\\INC -ID:\\PRIVATE\\NTOS\\KE -ID:\\PRIVATE\\INC -ID:\\PUBLIC\\OAK\\INC -ID:\\PUBLIC\\SDK\\INC -ID:\\PUBLIC\\SDK\\INC\\CRT D:\\PRIVATE\\NTOS\\KE\\I386\\GENI386.C -FoZ:\\tmp\\geni386.obj"
+
+    run_wine_cmd "GENI386 link" \
+        "link -nologo -subsystem:console -out:Z:\\tmp\\geni386.exe Z:\\tmp\\geni386.obj D:\\PUBLIC\\SDK\\LIB\\I386\\LIBC.LIB D:\\PUBLIC\\SDK\\LIB\\I386\\KERNEL32.LIB"
+
+    run_wine_cmd "GENI386 run" \
+        "Z:\\tmp\\geni386.exe D:\\PUBLIC\\SDK\\INC\\KS386.INC D:\\PRIVATE\\NTOS\\INC\\HAL386.INC"
+
+    echo ">>> GENI386: KS386.INC and HAL386.INC regenerated"
+}
+
 # --- Kernel library components (each produces a .lib in NTOS/obj/i386/) ---
 
 build_ke()     { run_nmake "$NTOS/KE/UP"      "KE - Kernel Core"; }
@@ -207,7 +236,9 @@ case "$COMPONENT" in
     vdm)    build_vdm ;;
     init)   build_init ;;
     hal)    build_hal ;;
+    geni386) build_geni386 ;;
     all)
+        build_geni386
         build_ke
         build_rtl
         build_ex

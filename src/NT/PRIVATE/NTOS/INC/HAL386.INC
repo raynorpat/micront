@@ -56,19 +56,19 @@ PcSelfPcr equ 01CH
 PcPrcb equ 020H
 PcTeb equ 018H
 PcIrql equ 024H
-PcIRR equ 028H
-PcIrrActive equ 02CH
-PcIDR equ 030H
-PcIdt equ 038H
-PcGdt equ 03CH
-PcTss equ 040H
-PcDebugActive equ 050H
-PcNumber equ 051H
-PcVdmAlert equ 052H
-PcSetMember equ 048H
-PcStallScaleFactor equ 04CH
-PcHal equ 094H
-PcKernel equ 054H
+PcIRR equ 026H
+PcIrrActive equ 02AH
+PcIDR equ 02EH
+PcIdt equ 036H
+PcGdt equ 03AH
+PcTss equ 03EH
+PcDebugActive equ 04EH
+PcNumber equ 04FH
+PcVdmAlert equ 050H
+PcSetMember equ 046H
+PcStallScaleFactor equ 04AH
+PcHal equ 092H
+PcKernel equ 052H
 
 ;
 ;   Defines for user shared data
