@@ -264,12 +264,19 @@ case "$COMPONENT" in
         build_fastfat
         echo ""
         echo "========================================"
+        echo "Building boot disk image"
+        echo "========================================"
+        python3 "$SCRIPT_DIR/tools/mkhive.py" "$SCRIPT_DIR/boot/data/SYSTEM"
+        python3 "$SCRIPT_DIR/tools/mkdisk.py"
+        echo ""
+        echo "========================================"
         echo "Build complete."
         echo "  NTOSKRNL: $NTOS/INIT/UP/obj/i386/ntoskrnl.exe"
         echo "  HAL:      $NTOS/NTHALS/HAL/obj/i386/hal.dll"
         echo "  ATDISK:   $NT_ROOT/PUBLIC/SDK/LIB/I386/atdisk.sys"
         echo "  NULL:     $NT_ROOT/PUBLIC/SDK/LIB/I386/null.sys"
         echo "  FASTFAT:  $NT_ROOT/PUBLIC/SDK/LIB/I386/fastfat.sys"
+        echo "  DISK:     $SCRIPT_DIR/boot/data/disk.raw"
         echo "========================================"
         ;;
     *)

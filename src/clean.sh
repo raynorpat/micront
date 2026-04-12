@@ -53,6 +53,9 @@ fi
 # RC temp files that may be left behind
 find "$NTOS" -maxdepth 3 \( -name "RC*00*" -o -name "RD*00*" \) -delete 2>/dev/null
 
+# Generated boot disk image
+rm -f "$SCRIPT_DIR/boot/data/disk.raw" 2>/dev/null && echo "  cleaned boot/data/disk.raw"
+
 # Build products in PUBLIC/SDK/LIB that we generate
 for f in ntoskrnl.lib ntoskrnl.exp hal.lib hal.exp tmp.lib tmp.exp \
          atdisk.sys null.sys fastfat.sys; do

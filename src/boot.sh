@@ -78,6 +78,16 @@ if echo "$SERIAL2_OPT" | grep -q "file:"; then
 fi
 echo ""
 
+DISK="$SCRIPT_DIR/boot/data/disk.raw"
+if [ ! -f "$DISK" ]; then
+    echo "WARNING: $DISK not found — atdisk will find no disk. Run ./build.sh all to build it."
+    DISK_OPT=""
+else
+    # Attach as a plain IDE disk (QEMU default PIIX3 controller). atdisk.sys
+    # talks to the standard ATA/IDE ports 0x1F0 + IRQ 14.
+    DISK_OPT="-drive file=$DISK,format=raw,if=ide,index=0,media=disk"
+fi
+
 eval qemu-system-i386 \
     -kernel "$BOOT" \
     -initrd "\"$KERN,$HAL,$NLS_ANSI,$NLS_OEM,$NLS_LANG,$SYSTEM_HIVE,$ATDISK,$NULL_DRV,$FASTFAT\"" \
@@ -85,6 +95,7 @@ eval qemu-system-i386 \
     $DISPLAY_OPT \
     $SERIAL1_OPT \
     $SERIAL2_OPT \
+    $DISK_OPT \
     -no-reboot \
     $GDB_OPT \
     $TRACE_OPT
