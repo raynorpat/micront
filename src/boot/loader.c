@@ -158,7 +158,10 @@ static void serial_hex(ULONG v) {
 static USHORT *vga = (USHORT *)0xB8000;
 static int vga_pos = 0;
 
+static int vga_enabled = 1;
+
 static void vga_putc(char c) {
+    if (!vga_enabled) return;
     if (c == '\n') {
         vga_pos = (vga_pos / 80 + 1) * 80;
     } else {
@@ -598,7 +601,9 @@ static void build_loader_block(multiboot_info_t *mbi) {
     add_memory_descriptor(LoaderFree,         0x200, 0x200);   /* 2-4MB */
     add_memory_descriptor(LoaderHalCode,      0x400, 0x100);   /* 4-5MB */
     add_memory_descriptor(LoaderOsloaderHeap, 0x500, 0x100);   /* 5-6MB */
-    add_memory_descriptor(LoaderFree,         0x600, 0x3A00);  /* 6-64MB */
+    add_memory_descriptor(LoaderFree,         0x600, 0x800);   /* 6-14MB free */
+    add_memory_descriptor(LoaderOsloaderHeap, 0xE00, 0x100);   /* 14-15MB: boot stub + data */
+    add_memory_descriptor(LoaderFree,         0xF00, 0x3100);  /* 15-64MB free */
 
     /* NLS data descriptor — the kernel walks memory descriptors to find
      * LoaderNlsData and sums up the page count for InitNlsTableSize */
@@ -669,6 +674,10 @@ static void build_loader_block(multiboot_info_t *mbi) {
 
 ULONG loader_main(multiboot_info_t *mbi) {
     serial_init();
+
+    /* Disable VGA on -cpu 486 / -display none configurations.
+     * VGA access at 0xB8000 may fault without a VGA device. */
+    vga_enabled = 0;
 
     print("\n");
     print("MicroNT Boot Loader\n");

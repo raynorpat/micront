@@ -2,7 +2,7 @@ CC = gcc
 AS = gcc
 LD = ld
 
-CFLAGS = -m32 -ffreestanding -nostdlib -nostartfiles -fno-builtin \
+CFLAGS = -m32 -march=i486 -ffreestanding -nostdlib -nostartfiles -fno-builtin \
          -fno-stack-protector -fno-pic -Wall -Wextra -O2 -g
 ASFLAGS = -m32
 LDFLAGS = -m elf_i386 -T linker.ld -nostdlib -z max-page-size=0x10
