@@ -263,12 +263,11 @@ static PVOID load_pe_image(ULONG file_base, ULONG load_addr, const char *name) {
     print_hex(size_of_image);
     print("\n");
 
-    /* Clear only the headers region. DON'T zero the full image —
-     * the kernel's NPX save area in BSS needs to be left as-is
-     * (the real OSLOADER doesn't zero allocated physical pages).
-     * Sections with raw data are copied below, BSS sections have
-     * SizeOfRawData=0 so they get skipped and retain whatever
-     * was in physical memory (or zeros from multiboot). */
+    /* Zero the entire image region first. BSS sections (where
+     * VirtualSize > SizeOfRawData) must be zero — kernel globals like
+     * KiIdleProcess, PsInitialSystemProcess live in BSS and must be NULL
+     * on startup. Without this, Token/other pointer fields contain garbage. */
+    memset((void *)load_addr, 0, size_of_image);
 
     /* Copy headers */
     ULONG header_size = nt->OptionalHeader.SizeOfHeaders;
@@ -279,20 +278,26 @@ static PVOID load_pe_image(ULONG file_base, ULONG load_addr, const char *name) {
         ((UCHAR *)&nt->OptionalHeader + nt->FileHeader.SizeOfOptionalHeader);
 
     for (ULONG i = 0; i < num_sections; i++) {
-        if (sec[i].SizeOfRawData == 0) continue;
         ULONG dst = load_addr + sec[i].VirtualAddress;
         ULONG src = file_base + sec[i].PointerToRawData;
-        ULONG len = sec[i].SizeOfRawData;
+        ULONG raw_len = sec[i].SizeOfRawData;
+        ULONG virt_len = sec[i].VirtualSize;
+        (void)virt_len;  /* BSS tail zeroed by initial memset */
         serial_puts("    sec ");
         serial_hex(sec[i].VirtualAddress);
         serial_puts(" raw ");
         serial_hex(sec[i].PointerToRawData);
         serial_puts(" sz ");
-        serial_hex(len);
+        serial_hex(raw_len);
+        serial_puts("/");
+        serial_hex(virt_len);
         serial_puts(" -> ");
         serial_hex(dst);
         serial_putc('\n');
-        memcpy((void *)dst, (void *)src, len);
+        if (raw_len > 0) {
+            memcpy((void *)dst, (void *)src, raw_len);
+        }
+        /* BSS tail already zeroed by initial memset above */
     }
 
     return (PVOID)load_addr;

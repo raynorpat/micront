@@ -163,9 +163,12 @@ KfReleaseSpinLock(
 }
 
 /*
- * Fast mutex (UP versions)
+ * Fast mutex (UP versions) — MUST be __fastcall per IXLOCK.ASM original HAL.
+ * The kernel passes FastMutex in ECX. Wrong calling convention corrupts the
+ * caller's stack (extra `ret 4` pops 4 bytes that shouldn't be popped).
  */
 VOID
+__fastcall
 ExAcquireFastMutex(
     IN PVOID FastMutex
     )
@@ -174,6 +177,7 @@ ExAcquireFastMutex(
 }
 
 BOOLEAN
+__fastcall
 ExTryToAcquireFastMutex(
     IN PVOID FastMutex
     )
@@ -183,6 +187,7 @@ ExTryToAcquireFastMutex(
 }
 
 VOID
+__fastcall
 ExReleaseFastMutex(
     IN PVOID FastMutex
     )
