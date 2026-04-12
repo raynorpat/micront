@@ -126,6 +126,56 @@ static char LoadOptions[]   = "CRASHDEBUG DEBUGPORT=COM1 BAUDRATE=115200";
 static USHORT KernelNameW[] = { 'n','t','o','s','k','r','n','l','.','e','x','e',0 };
 static USHORT HalNameW[]    = { 'h','a','l','.','d','l','l',0 };
 
+/* Boot drivers.
+ *
+ * The kernel's IopInitializeBootDrivers walks LoaderBlock.BootDriverListHead
+ * and for each BOOT_DRIVER_LIST_ENTRY opens its RegistryPath and calls
+ * DriverEntry via LdrEntry->EntryPoint. No re-loading of the image is done
+ * by the kernel — we must produce a fully-relocated, import-resolved image
+ * here and point the LDR entry at it.
+ *
+ * We load drivers into the 5-6MB physical range (currently LoaderFree) which
+ * gets re-classified as LoaderBootDriver so its KSEG0 PTEs aren't zeroed. */
+#define MAX_DRIVERS 8
+static LDR_DATA_TABLE_ENTRY  DriverLdrEntries[MAX_DRIVERS];
+static BOOT_DRIVER_LIST_ENTRY DriverBootEntries[MAX_DRIVERS];
+static int NumDrivers = 0;
+
+/* Wide-char name/path buffers (all null-terminated, patched to KSEG0 later). */
+static USHORT AtdiskBaseNameW[]     = { 'a','t','d','i','s','k','.','s','y','s',0 };
+static USHORT NullBaseNameW[]       = { 'n','u','l','l','.','s','y','s',0 };
+static USHORT FastFatBaseNameW[]    = { 'f','a','s','t','f','a','t','.','s','y','s',0 };
+static USHORT AtdiskFilePathW[]     = { '\\','S','y','s','t','e','m','R','o','o','t',
+                                         '\\','S','y','s','t','e','m','3','2',
+                                         '\\','D','r','i','v','e','r','s',
+                                         '\\','a','t','d','i','s','k','.','s','y','s',0 };
+static USHORT NullFilePathW[]       = { '\\','S','y','s','t','e','m','R','o','o','t',
+                                         '\\','S','y','s','t','e','m','3','2',
+                                         '\\','D','r','i','v','e','r','s',
+                                         '\\','n','u','l','l','.','s','y','s',0 };
+static USHORT FastFatFilePathW[]    = { '\\','S','y','s','t','e','m','R','o','o','t',
+                                         '\\','S','y','s','t','e','m','3','2',
+                                         '\\','D','r','i','v','e','r','s',
+                                         '\\','f','a','s','t','f','a','t','.','s','y','s',0 };
+static USHORT AtdiskRegistryW[]     = { '\\','R','e','g','i','s','t','r','y',
+                                         '\\','M','a','c','h','i','n','e',
+                                         '\\','S','y','s','t','e','m',
+                                         '\\','C','u','r','r','e','n','t','C','o','n','t','r','o','l','S','e','t',
+                                         '\\','S','e','r','v','i','c','e','s',
+                                         '\\','a','t','d','i','s','k',0 };
+static USHORT NullRegistryW[]       = { '\\','R','e','g','i','s','t','r','y',
+                                         '\\','M','a','c','h','i','n','e',
+                                         '\\','S','y','s','t','e','m',
+                                         '\\','C','u','r','r','e','n','t','C','o','n','t','r','o','l','S','e','t',
+                                         '\\','S','e','r','v','i','c','e','s',
+                                         '\\','n','u','l','l',0 };
+static USHORT FastFatRegistryW[]    = { '\\','R','e','g','i','s','t','r','y',
+                                         '\\','M','a','c','h','i','n','e',
+                                         '\\','S','y','s','t','e','m',
+                                         '\\','C','u','r','r','e','n','t','C','o','n','t','r','o','l','S','e','t',
+                                         '\\','S','e','r','v','i','c','e','s',
+                                         '\\','f','a','s','t','f','a','t',0 };
+
 /*======================================================================
  * Serial port output (COM2 0x2F8) for debug
  * COM1 is reserved for KD (kernel debugger binary protocol)
@@ -452,6 +502,151 @@ static void resolve_imports(ULONG image_base, const char *image_name,
 }
 
 /*======================================================================
+ * PE base relocations — drivers prefer 0x10000 but load elsewhere
+ *====================================================================*/
+
+/* Apply PE base relocations.
+ *   physical_base — where the image bytes live NOW (we'll write through this)
+ *   new_base      — where the image will EXECUTE (determines fixup value)
+ *   preferred_base — what the linker built for (typically ImageBase = 0x10000)
+ * Delta = new_base - preferred_base is added to every HIGHLOW reloc target. */
+static void apply_relocations(ULONG physical_base, ULONG new_base, ULONG preferred_base) {
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)physical_base;
+    IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(physical_base + dos->e_lfanew);
+
+    if (nt->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_BASERELOC)
+        return;
+
+    ULONG reloc_rva  = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress;
+    ULONG reloc_size = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size;
+    if (reloc_rva == 0 || reloc_size == 0)
+        return;
+
+    LONG delta = (LONG)(new_base - preferred_base);
+    if (delta == 0)
+        return;
+
+    IMAGE_BASE_RELOCATION *block = (IMAGE_BASE_RELOCATION *)(physical_base + reloc_rva);
+    IMAGE_BASE_RELOCATION *end   = (IMAGE_BASE_RELOCATION *)((UCHAR *)block + reloc_size);
+
+    ULONG patched = 0;
+    while (block < end && block->SizeOfBlock != 0) {
+        ULONG count = (block->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(USHORT);
+        USHORT *entries = (USHORT *)((UCHAR *)block + sizeof(IMAGE_BASE_RELOCATION));
+        for (ULONG i = 0; i < count; i++) {
+            USHORT type   = entries[i] >> 12;
+            USHORT offset = entries[i] & 0x0FFF;
+            if (type == IMAGE_REL_BASED_ABSOLUTE) {
+                /* Padding — no fixup */
+                continue;
+            }
+            if (type == IMAGE_REL_BASED_HIGHLOW) {
+                /* Read/write through physical_base (where the bytes live) */
+                ULONG *target = (ULONG *)(physical_base + block->VirtualAddress + offset);
+                *target += delta;
+                patched++;
+            } else {
+                print("    WARNING: unsupported reloc type\n");
+            }
+        }
+        block = (IMAGE_BASE_RELOCATION *)((UCHAR *)block + block->SizeOfBlock);
+    }
+    print("    relocs patched: ");
+    print_hex(patched);
+    print("\n");
+}
+
+/*======================================================================
+ * Boot driver loader — PE load + relocate + import-resolve + build LDR entry
+ *====================================================================*/
+
+/* Fills in an LDR_DATA_TABLE_ENTRY + BOOT_DRIVER_LIST_ENTRY pair for one
+ * driver. The image is copied and patched in place at target_phys.
+ * All pointers stored here are PHYSICAL — the KSEG0 fixup pass at end
+ * of loader_main converts them.
+ * Returns 0 on success, non-zero on failure. */
+static int load_driver(ULONG file_base, ULONG file_size,
+                       ULONG target_phys, ULONG target_size,
+                       USHORT *base_name, USHORT *file_path, USHORT *reg_path,
+                       const char *log_name,
+                       ULONG kernel_phys, ULONG hal_phys) {
+    if (NumDrivers >= MAX_DRIVERS) {
+        print("    too many drivers\n");
+        return -1;
+    }
+    (void)file_size;
+
+    print("  Loading ");
+    print(log_name);
+    print(" -> ");
+    print_hex(target_phys);
+    print("\n");
+
+    /* 1. Copy the PE image sections to target address. */
+    PVOID loaded = load_pe_image(file_base, target_phys, log_name);
+    if (loaded == NULL) {
+        print("    load_pe_image failed\n");
+        return -1;
+    }
+
+    /* 2. Patch up in-image absolute addresses for the actual load site. */
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)target_phys;
+    IMAGE_NT_HEADERS *nt  = (IMAGE_NT_HEADERS *)(target_phys + dos->e_lfanew);
+    ULONG preferred_base  = nt->OptionalHeader.ImageBase;
+    ULONG size_of_image   = nt->OptionalHeader.SizeOfImage;
+    ULONG entry_rva       = nt->OptionalHeader.AddressOfEntryPoint;
+
+    if (size_of_image > target_size) {
+        print("    driver image exceeds reserved size\n");
+        return -1;
+    }
+
+    /* Drivers are built for ImageBase=0x10000. The kernel will execute them
+     * at their KSEG0 mapping (0x8000_0000 | target_phys). Apply relocations
+     * with delta = kseg_base - preferred_base, writing through target_phys. */
+    ULONG kseg_base = KSEG0_BASE | target_phys;
+    apply_relocations(target_phys, kseg_base, preferred_base);
+
+    /* 3. Resolve imports from ntoskrnl.exe + hal.dll */
+    resolve_imports(target_phys, log_name, kernel_phys, hal_phys);
+
+    /* 4. Populate LDR_DATA_TABLE_ENTRY */
+    LDR_DATA_TABLE_ENTRY *ldr = &DriverLdrEntries[NumDrivers];
+    memset(ldr, 0, sizeof(*ldr));
+    ldr->DllBase      = (PVOID)kseg_base;
+    ldr->EntryPoint   = (PVOID)(kseg_base + entry_rva);
+    ldr->SizeOfImage  = size_of_image;
+
+    /* Count wide-char length excluding the null terminator */
+    ULONG base_len = 0;
+    while (base_name[base_len]) base_len++;
+    ldr->BaseDllName.Length = (USHORT)(base_len * 2);
+    ldr->BaseDllName.MaximumLength = (USHORT)((base_len + 1) * 2);
+    ldr->BaseDllName.Buffer = base_name;
+    /* FullDllName = same as BaseDllName for simplicity */
+    ldr->FullDllName = ldr->BaseDllName;
+
+    /* 5. Populate BOOT_DRIVER_LIST_ENTRY */
+    BOOT_DRIVER_LIST_ENTRY *bde = &DriverBootEntries[NumDrivers];
+    memset(bde, 0, sizeof(*bde));
+
+    ULONG fp_len = 0; while (file_path[fp_len]) fp_len++;
+    bde->FilePath.Length = (USHORT)(fp_len * 2);
+    bde->FilePath.MaximumLength = (USHORT)((fp_len + 1) * 2);
+    bde->FilePath.Buffer = file_path;
+
+    ULONG rp_len = 0; while (reg_path[rp_len]) rp_len++;
+    bde->RegistryPath.Length = (USHORT)(rp_len * 2);
+    bde->RegistryPath.MaximumLength = (USHORT)((rp_len + 1) * 2);
+    bde->RegistryPath.Buffer = reg_path;
+
+    bde->LdrEntry = ldr;
+
+    NumDrivers++;
+    return 0;
+}
+
+/*======================================================================
  * Page tables
  *
  * NT kernel expects:
@@ -684,7 +879,9 @@ static void build_loader_block(multiboot_info_t *mbi) {
             add_memory_descriptor(LoaderFree, 0x400 + hal_pages, 0x500 - (0x400 + hal_pages));
         }
 
-        add_memory_descriptor(LoaderFree,         0x500, 0x100);     /* 5-6MB */
+        /* 5-6MB reserved for boot drivers (atdisk/null/fastfat).
+         * Marked LoaderBootDriver so MmInit keeps the pages mapped/used. */
+        add_memory_descriptor(LoaderBootDriver,   0x500, 0x100);     /* 5-6MB drivers */
         add_memory_descriptor(LoaderFree,         0x600, 0x800);     /* 6-14MB */
 
         /* Boot stub region (0xE00-0xEFF): carve out specific sub-regions.
@@ -822,6 +1019,19 @@ static void build_loader_block(multiboot_info_t *mbi) {
     HalModule.InLoadOrderLinks.Blink = &KernelModule.InLoadOrderLinks;
     head->Flink = &KernelModule.InLoadOrderLinks;
     head->Blink = &HalModule.InLoadOrderLinks;
+
+    /* Boot driver list — tail-insert each loaded driver.
+     * The kernel's IopInitializeBootDrivers walks this list. */
+    {
+        LIST_ENTRY *bhead = &LoaderBlock.BootDriverListHead;
+        for (int i = 0; i < NumDrivers; i++) {
+            LIST_ENTRY *e = &DriverBootEntries[i].Link;
+            e->Flink = bhead;
+            e->Blink = bhead->Blink;
+            bhead->Blink->Flink = e;
+            bhead->Blink = e;
+        }
+    }
 
     /* Store pointer for assembly code — will be fixed up to KSEG0 later */
     loader_block = (ULONG)&LoaderBlock;
@@ -977,6 +1187,38 @@ ULONG loader_main(multiboot_info_t *mbi) {
     print("\nResolving imports...\n");
     resolve_imports(kern_phys, "ntoskrnl", kern_phys, hal_phys);
     resolve_imports(hal_phys, "hal", kern_phys, hal_phys);
+
+    /* Load boot drivers into the 5-6MB physical range (LoaderBootDriver).
+     * Modules 6..8 are atdisk.sys, null.sys, fastfat.sys.
+     * Each driver gets a fixed 64KB slot for atdisk/null, 256KB for fastfat. */
+    print("\nLoading boot drivers...\n");
+    if (mbi->mods_count > 8) {
+        struct {
+            int mod_idx;
+            ULONG target_phys;
+            ULONG target_size;
+            USHORT *base_name;
+            USHORT *file_path;
+            USHORT *reg_path;
+            const char *log_name;
+        } drv_table[] = {
+            { 6, 0x00500000, 0x00010000, AtdiskBaseNameW,  AtdiskFilePathW,  AtdiskRegistryW,  "atdisk.sys"  },
+            { 7, 0x00510000, 0x00008000, NullBaseNameW,    NullFilePathW,    NullRegistryW,    "null.sys"    },
+            { 8, 0x00520000, 0x00040000, FastFatBaseNameW, FastFatFilePathW, FastFatRegistryW, "fastfat.sys" },
+        };
+        for (int i = 0; i < 3; i++) {
+            int mi = drv_table[i].mod_idx;
+            ULONG fbase = mods[mi].mod_start;
+            ULONG fsize = mods[mi].mod_end - mods[mi].mod_start;
+            load_driver(fbase, fsize,
+                        drv_table[i].target_phys, drv_table[i].target_size,
+                        drv_table[i].base_name, drv_table[i].file_path,
+                        drv_table[i].reg_path, drv_table[i].log_name,
+                        kern_phys, hal_phys);
+        }
+    } else {
+        print("  (skipped — need modules 6,7,8 for atdisk/null/fastfat)\n");
+    }
 
     /* Set up page tables and enable paging */
     print("\nSetting up page tables...\n");
@@ -1191,6 +1433,21 @@ ULONG loader_main(multiboot_info_t *mbi) {
         KernelModule.FullDllName.Buffer = TOKSEG(KernelModule.FullDllName.Buffer);
         HalModule.BaseDllName.Buffer = TOKSEG(HalModule.BaseDllName.Buffer);
         HalModule.FullDllName.Buffer = TOKSEG(HalModule.FullDllName.Buffer);
+
+        /* Boot driver LDR entries: their DllBase/EntryPoint already point into
+         * KSEG0 (set by load_driver). Only the UNICODE_STRING name buffers
+         * need fixing since they point to static arrays in loader BSS. Also
+         * fix the BOOT_DRIVER_LIST_ENTRY's LdrEntry pointer. */
+        for (int i = 0; i < NumDrivers; i++) {
+            LDR_DATA_TABLE_ENTRY *ldr = &DriverLdrEntries[i];
+            ldr->BaseDllName.Buffer = TOKSEG(ldr->BaseDllName.Buffer);
+            ldr->FullDllName.Buffer = TOKSEG(ldr->FullDllName.Buffer);
+
+            BOOT_DRIVER_LIST_ENTRY *bde = &DriverBootEntries[i];
+            bde->FilePath.Buffer     = TOKSEG(bde->FilePath.Buffer);
+            bde->RegistryPath.Buffer = TOKSEG(bde->RegistryPath.Buffer);
+            bde->LdrEntry            = TOKSEG(bde->LdrEntry);
+        }
 
         /* LoaderBlock pointer itself */
         loader_block = (ULONG)&LoaderBlock | KSEG0_BASE;

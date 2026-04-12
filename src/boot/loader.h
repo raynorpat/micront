@@ -153,6 +153,30 @@ typedef struct _LDR_DATA_TABLE_ENTRY {
     ULONG TimeDateStamp;
 } LDR_DATA_TABLE_ENTRY, *PLDR_DATA_TABLE_ENTRY;
 
+/* BOOT_DRIVER_LIST_ENTRY — entries in LoaderBlock.BootDriverListHead.
+ * IopInitializeBootDrivers walks this list and for each entry calls
+ * DriverEntry via LdrEntry->EntryPoint after opening RegistryPath. */
+typedef struct _BOOT_DRIVER_LIST_ENTRY {
+    LIST_ENTRY Link;
+    UNICODE_STRING FilePath;
+    UNICODE_STRING RegistryPath;
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+} BOOT_DRIVER_LIST_ENTRY, *PBOOT_DRIVER_LIST_ENTRY;
+
+/* PE base relocation block — list of 16-bit relocations within a 4KB page.
+ * Type (high 4 bits) + Offset (low 12 bits) for each entry. */
+typedef struct _IMAGE_BASE_RELOCATION {
+    ULONG VirtualAddress;
+    ULONG SizeOfBlock;
+    /* followed by array of USHORTs */
+} IMAGE_BASE_RELOCATION, *PIMAGE_BASE_RELOCATION;
+
+#define IMAGE_REL_BASED_ABSOLUTE 0
+#define IMAGE_REL_BASED_HIGHLOW  3
+
+/* Data directory index for base relocations */
+#define IMAGE_DIRECTORY_ENTRY_BASERELOC 5
+
 /* I386 loader block extension */
 typedef struct _I386_LOADER_BLOCK {
     PVOID CommonDataArea;

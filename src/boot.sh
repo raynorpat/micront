@@ -19,9 +19,14 @@ NLS_ANSI="$SCRIPT_DIR/boot/data/C_1252.NLS"
 NLS_OEM="$SCRIPT_DIR/boot/data/C_437.NLS"
 NLS_LANG="$SCRIPT_DIR/boot/data/L_INTL.NLS"
 SYSTEM_HIVE="$SCRIPT_DIR/boot/data/SYSTEM"
+# Boot drivers — must match module indices expected by loader.c (6,7,8)
+ATDISK="$SCRIPT_DIR/NT/PUBLIC/SDK/LIB/I386/atdisk.sys"
+NULL_DRV="$SCRIPT_DIR/NT/PUBLIC/SDK/LIB/I386/null.sys"
+FASTFAT="$SCRIPT_DIR/NT/PUBLIC/SDK/LIB/I386/fastfat.sys"
 
 # Check build products exist
-for f in "$KERN" "$HAL" "$BOOT" "$NLS_ANSI" "$NLS_OEM" "$NLS_LANG" "$SYSTEM_HIVE"; do
+for f in "$KERN" "$HAL" "$BOOT" "$NLS_ANSI" "$NLS_OEM" "$NLS_LANG" "$SYSTEM_HIVE" \
+         "$ATDISK" "$NULL_DRV" "$FASTFAT"; do
     if [ ! -f "$f" ]; then
         echo "ERROR: $f not found. Run ./build.sh all first."
         exit 1
@@ -75,7 +80,7 @@ echo ""
 
 eval qemu-system-i386 \
     -kernel "$BOOT" \
-    -initrd "\"$KERN,$HAL,$NLS_ANSI,$NLS_OEM,$NLS_LANG,$SYSTEM_HIVE\"" \
+    -initrd "\"$KERN,$HAL,$NLS_ANSI,$NLS_OEM,$NLS_LANG,$SYSTEM_HIVE,$ATDISK,$NULL_DRV,$FASTFAT\"" \
     -m 64 \
     $DISPLAY_OPT \
     $SERIAL1_OPT \

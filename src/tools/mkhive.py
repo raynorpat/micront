@@ -414,6 +414,29 @@ def build_micront_system_hive() -> Hive:
 
     h["ControlSet001\\Control"]
 
+    # Services keys for boot drivers. IopInitializeBootDrivers opens each
+    # BOOT_DRIVER_LIST_ENTRY's RegistryPath; IopGetDriverNameFromKeyNode reads
+    # Type to decide whether to put the driver under \Driver or \FileSystem.
+    # Values from NTDDK.H:
+    #   SERVICE_KERNEL_DRIVER      = 1
+    #   SERVICE_FILE_SYSTEM_DRIVER = 2
+    #   SERVICE_BOOT_START         = 0
+    #   SERVICE_SYSTEM_START       = 1
+    #   SERVICE_ERROR_NORMAL       = 1
+    services = h["ControlSet001\\Services"]
+    services["atdisk"] \
+        .set_dword("Type",         1) \
+        .set_dword("Start",        0) \
+        .set_dword("ErrorControl", 1)
+    services["null"] \
+        .set_dword("Type",         1) \
+        .set_dword("Start",        1) \
+        .set_dword("ErrorControl", 1)
+    services["fastfat"] \
+        .set_dword("Type",         2) \
+        .set_dword("Start",        0) \
+        .set_dword("ErrorControl", 1)
+
     return h
 
 
