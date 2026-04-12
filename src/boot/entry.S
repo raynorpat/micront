@@ -113,12 +113,12 @@ _start:
     fninit
     fnclex
 
-    /* Mask all PIC interrupts. HalInitializeProcessor will reprogram the PIC.
-     * Without this, spurious or stale interrupts can fire before the kernel's
-     * interrupt dispatch table is initialized, causing BugCheck 0x50. */
-    movb $0xFF, %al
-    outb %al, $0x21        /* Mask all master PIC IRQs */
-    outb %al, $0xA1        /* Mask all slave PIC IRQs */
+    /* Disable interrupts before kernel entry.
+     * The real OSLOADER enters KiSystemStartup with interrupts disabled.
+     * HalpInitializePICs will reprogram the PICs and re-enable interrupts.
+     * Without CLI here, stale BIOS PIC vectors or LAPIC interrupts can fire
+     * between IDT setup and PIC reprogramming, hitting uninitialized handlers. */
+    cli
 
     /* Push LoaderBlock as argument to KiSystemStartup */
     pushl loader_block

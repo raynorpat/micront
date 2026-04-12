@@ -266,6 +266,15 @@ static PVOID load_pe_image(ULONG file_base, ULONG load_addr, const char *name) {
         ULONG dst = load_addr + sec[i].VirtualAddress;
         ULONG src = file_base + sec[i].PointerToRawData;
         ULONG len = sec[i].SizeOfRawData;
+        serial_puts("    sec ");
+        serial_hex(sec[i].VirtualAddress);
+        serial_puts(" raw ");
+        serial_hex(sec[i].PointerToRawData);
+        serial_puts(" sz ");
+        serial_hex(len);
+        serial_puts(" -> ");
+        serial_hex(dst);
+        serial_putc('\n');
         memcpy((void *)dst, (void *)src, len);
     }
 
