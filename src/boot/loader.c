@@ -599,46 +599,160 @@ static void build_loader_block(multiboot_info_t *mbi) {
     LoaderBlock.OemFontFile = NULL;
 
     /*
-     * Memory descriptors
-     * Build a simple memory map. For QEMU with 64MB:
-     *   0x000000 - 0x09FFFF  (640KB)   LoaderFree (low memory)
-     *   0x100000 - 0x1FFFFF  (1MB)     LoaderSystemCode (kernel image area)
-     *   0x200000 - 0x3FFFFF  (2MB)     LoaderFree
-     *   0x400000 - 0x4FFFFF  (1MB)     LoaderHalCode (HAL image area)
-     *   0x500000 - 0x5FFFFF  (1MB)     LoaderOsloaderHeap (our data)
-     *   0x600000 - 0x3FFFFFF (58MB)    LoaderFree (rest of RAM)
+     * Memory descriptors — must cover ALL physical memory with NO overlaps.
+     *
+     * Layout for QEMU with 64MB:
+     *   0x000-0x09F  LoaderFree        640KB   low memory
+     *   0x0A0-0x0FF  LoaderFirmwarePerm 384KB  VGA/ROM area (not usable RAM)
+     *   0x100-0x1C6  LoaderSystemCode   ~800KB kernel image (actual size)
+     *   0x1C7-0x1FF  LoaderFree         ~228KB gap after kernel
+     *   0x200-0x3FF  LoaderFree         2MB
+     *   0x400-0x406  LoaderHalCode       28KB  HAL image (actual size)
+     *   0x407-0x4FF  LoaderFree         ~1MB   gap after HAL
+     *   0x500-0x5FF  LoaderFree         1MB
+     *   0x600-0xDFF  LoaderFree         8MB
+     *   0xE00-0xEFF  LoaderOsloaderHeap 1MB    boot stub code+BSS
+     *     (PCR, TSS, NLS, page tables all live within this range)
+     *   0xF00-end    LoaderFree         rest
+     *
+     * PCR, TSS, and NLS are NOT separate descriptors — they're part of
+     * the OsloaderHeap range. The kernel finds them through specific
+     * pointers in the LoaderBlock, not through memory type scanning.
+     * Exception: LoaderNlsData IS needed — the kernel uses it to
+     * calculate InitNlsTableSize. LoaderStartupPcrPage IS needed for
+     * MmInitSystem. LoaderMemoryData IS needed for TSS.
+     *
+     * Solution: carve the 0xE00-0xEFF range into sub-regions.
      */
-    NumMemDescriptors = 0;
-    add_memory_descriptor(LoaderFree,         0x00,  0xA0);    /* 0-640KB */
-    add_memory_descriptor(LoaderSystemCode,   0x100, 0x100);   /* 1-2MB */
-    add_memory_descriptor(LoaderFree,         0x200, 0x200);   /* 2-4MB */
-    add_memory_descriptor(LoaderHalCode,      0x400, 0x100);   /* 4-5MB */
-    add_memory_descriptor(LoaderOsloaderHeap, 0x500, 0x100);   /* 5-6MB */
-    add_memory_descriptor(LoaderFree,         0x600, 0x800);   /* 6-14MB free */
-    add_memory_descriptor(LoaderOsloaderHeap, 0xE00, 0x100);   /* 14-15MB: boot stub + data */
-    add_memory_descriptor(LoaderFree,         0xF00, 0x3100);  /* 15-64MB free */
+    {
+        ULONG kern_pages = (KernelSizeOfImage + PAGE_SIZE - 1) >> PAGE_SHIFT;
+        ULONG hal_pages = (HalSizeOfImage + PAGE_SIZE - 1) >> PAGE_SHIFT;
+        ULONG nls_pages = (NlsTotalSize + PAGE_SIZE - 1) >> PAGE_SHIFT;
+        ULONG nls_base = (ULONG)NlsBuffer >> PAGE_SHIFT;
+        ULONG pcr_base = (ULONG)BootPcrPages >> PAGE_SHIFT;
+        ULONG tss_base = (ULONG)BootTssPages >> PAGE_SHIFT;
+        ULONG tss_pages = (sizeof(BootTssPages) + PAGE_SIZE - 1) >> PAGE_SHIFT;
 
-    /* PCR pages (LoaderStartupPcrPage) — 2 contiguous pages */
-    add_memory_descriptor(LoaderStartupPcrPage,
-                          (ULONG)BootPcrPages >> PAGE_SHIFT, 2);
+        /* Total physical pages from multiboot */
+        ULONG total_phys_pages = 0x4000;  /* default 64MB = 16384 pages */
+        if (mbi && (mbi->flags & 0x01)) {
+            total_phys_pages = (mbi->mem_upper + 1024) / 4;
+        }
 
-    /* TSS pages (LoaderMemoryData) */
-    add_memory_descriptor(LoaderMemoryData,
-                          (ULONG)BootTssPages >> PAGE_SHIFT,
-                          (sizeof(BootTssPages) + PAGE_SIZE - 1) >> PAGE_SHIFT);
+        NumMemDescriptors = 0;
 
-    /* NLS data descriptor — the kernel walks memory descriptors to find
-     * LoaderNlsData and sums up the page count for InitNlsTableSize */
-    add_memory_descriptor(LoaderNlsData,
-                          (ULONG)NlsBuffer >> PAGE_SHIFT,
-                          (NlsTotalSize + PAGE_SIZE - 1) >> PAGE_SHIFT);
+        /* Low memory */
+        add_memory_descriptor(LoaderFree,             0x00,  0xA0);
+        add_memory_descriptor(LoaderFirmwarePermanent, 0xA0,  0x60);  /* VGA/ROM hole */
 
-    /* If multiboot gave us better memory info, use it */
-    if (mbi && (mbi->flags & 0x01)) {
-        /* Update the last free entry with actual RAM size */
-        ULONG total_pages = (mbi->mem_upper + 1024) / 4;  /* mem_upper is KB above 1MB */
-        if (total_pages > 0x600) {
-            MemDescriptors[NumMemDescriptors - 1].PageCount = total_pages - 0x600;
+        /* Kernel image (exact size) + free gap */
+        add_memory_descriptor(LoaderSystemCode,   0x100, kern_pages);
+        if (0x100 + kern_pages < 0x200) {
+            add_memory_descriptor(LoaderFree, 0x100 + kern_pages, 0x200 - (0x100 + kern_pages));
+        }
+
+        add_memory_descriptor(LoaderFree,         0x200, 0x200);     /* 2-4MB */
+
+        /* HAL image (exact size) + free gap */
+        add_memory_descriptor(LoaderHalCode,      0x400, hal_pages);
+        if (0x400 + hal_pages < 0x500) {
+            add_memory_descriptor(LoaderFree, 0x400 + hal_pages, 0x500 - (0x400 + hal_pages));
+        }
+
+        add_memory_descriptor(LoaderFree,         0x500, 0x100);     /* 5-6MB */
+        add_memory_descriptor(LoaderFree,         0x600, 0x800);     /* 6-14MB */
+
+        /* Boot stub region (0xE00-0xEFF): carve out specific sub-regions.
+         * These BSS variables have known addresses within this range.
+         * We mark the whole range as OsloaderHeap, then add specific
+         * typed descriptors for sub-regions the kernel needs to find.
+         * The kernel handles overlapping descriptors — the more specific
+         * type wins during the PFN walk. */
+        add_memory_descriptor(LoaderOsloaderHeap, 0xE00, 0x100);
+
+        /* Specific typed sub-regions within the osloader heap */
+        add_memory_descriptor(LoaderStartupPcrPage, pcr_base, 2);
+        add_memory_descriptor(LoaderMemoryData,     tss_base, tss_pages);
+        add_memory_descriptor(LoaderNlsData,        nls_base, nls_pages);
+
+        /* Registry hive — multiboot module loaded by QEMU into physical RAM.
+         * Physical address comes from the multiboot module table. */
+        {
+            ULONG reg_phys = (ULONG)RegistryBase & ~KSEG0_BASE;
+            ULONG reg_base_page = reg_phys >> PAGE_SHIFT;
+            ULONG reg_pages = (RegistryLength + PAGE_SIZE - 1) >> PAGE_SHIFT;
+            add_memory_descriptor(LoaderRegistryData, reg_base_page, reg_pages);
+        }
+
+        /* Multiboot modules area — QEMU loads kernel/HAL/NLS/hive files
+         * into physical memory starting around 0xE7E000. We need to protect
+         * this region from being treated as free. The modules are:
+         *   mod 0: ntoskrnl.exe (already covered by LoaderSystemCode at 0x100)
+         *   mod 1: hal.dll (already covered by LoaderHalCode at 0x400)
+         *   mod 2-4: NLS files (copied to NlsBuffer, originals can be freed)
+         *   mod 5: SYSTEM hive (covered by LoaderRegistryData above)
+         * The multiboot module DATA lives above 0xE7E000 through ~0xFFF000.
+         * Mark this entire range as LoaderOsloaderHeap to protect it. */
+        if (mbi && mbi->mods_count > 0) {
+            multiboot_module_t *mods = (multiboot_module_t *)mbi->mods_addr;
+            ULONG mods_start = mods[0].mod_start >> PAGE_SHIFT;
+            ULONG mods_end_page = (mods[mbi->mods_count - 1].mod_end + PAGE_SIZE - 1) >> PAGE_SHIFT;
+            /* Only add if it's in the free range above our boot stub */
+            if (mods_start >= 0xF00) {
+                add_memory_descriptor(LoaderOsloaderHeap, mods_start, mods_end_page - mods_start);
+            }
+        }
+
+        /* Free memory: regions not covered by anything else.
+         * Split around the multiboot modules area. */
+        {
+            ULONG free_start = 0xF00;
+            if (mbi && mbi->mods_count > 0) {
+                multiboot_module_t *mods = (multiboot_module_t *)mbi->mods_addr;
+                ULONG mods_start = mods[0].mod_start >> PAGE_SHIFT;
+                ULONG mods_end_page = (mods[mbi->mods_count - 1].mod_end + PAGE_SIZE - 1) >> PAGE_SHIFT;
+
+                /* Free before modules */
+                if (mods_start > free_start) {
+                    add_memory_descriptor(LoaderFree, free_start, mods_start - free_start);
+                }
+                /* Free after modules */
+                if (mods_end_page < total_phys_pages) {
+                    add_memory_descriptor(LoaderFree, mods_end_page, total_phys_pages - mods_end_page);
+                }
+            } else if (total_phys_pages > free_start) {
+                add_memory_descriptor(LoaderFree, free_start, total_phys_pages - free_start);
+            }
+        }
+    }
+
+    /* Dump memory descriptors for debugging */
+    {
+        static const char *type_names[] = {
+            "ExceptnBl", "SystemCode", "HalCode   ", "LdrOsCode ",
+            "BootDriver", "ConsAlloc ", "MaxAlloc  ", "OsloaderHp",
+            "OsloaderSt", "FirmwareTP", "FirmwarePM", "Free      ",
+            "Bad       ", "LoadedProg", "FirmwareTP", "SpecialMem",
+            "BBTMemory ", "StartupPCR", "MemoryData", "NlsData   ",
+            "SpecialTss", "DeviceTree"
+        };
+        print("\n  Memory Map:\n");
+        for (int i = 0; i < NumMemDescriptors; i++) {
+            MEMORY_ALLOCATION_DESCRIPTOR *d = &MemDescriptors[i];
+            print("    ");
+            print_hex(d->BasePage);
+            print("-");
+            print_hex(d->BasePage + d->PageCount - 1);
+            print(" (");
+            print_hex(d->PageCount);
+            print(") ");
+            if (d->MemoryType < 22)
+                print(type_names[d->MemoryType]);
+            else {
+                print("type=");
+                print_hex(d->MemoryType);
+            }
+            print("\n");
         }
     }
 
@@ -843,51 +957,7 @@ ULONG loader_main(multiboot_info_t *mbi) {
     print("\nSetting up page tables...\n");
     setup_page_tables();
 
-    /*
-     * NSUnmapFreeDescriptors equivalent: zero KSEG0 PTEs for free pages.
-     * MmInitSystem uses PTE valid bits to determine which pages are free.
-     * Without this, ALL pages have valid PTEs and the MM can't tell what's
-     * free — it may overwrite kernel data during pool initialization.
-     */
-    print("  Unmapping free pages from KSEG0...\n");
-    {
-        int i;
-        for (i = 0; i < NumMemDescriptors; i++) {
-            if (MemDescriptors[i].MemoryType == LoaderFree) {
-                ULONG page;
-                for (page = MemDescriptors[i].BasePage;
-                     page < MemDescriptors[i].BasePage + MemDescriptors[i].PageCount;
-                     page++) {
-                    /* Zero the KSEG0 PTE for this page.
-                     * KSEG0 PDE index = (page >> 10) + 512
-                     * PTE index = page & 0x3FF
-                     * PTE address via self-map: 0xC0000000 + (KSEG0_VA >> 10) */
-                    ULONG kseg0_va = KSEG0_BASE | (page << PAGE_SHIFT);
-                    ULONG pde_idx = kseg0_va >> 22;
-                    ULONG pte_idx = (kseg0_va >> 12) & 0x3FF;
-
-                    /* Get the page table from the PDE */
-                    ULONG pde = PageDirectory[pde_idx];
-                    if (pde & PAGE_PRESENT) {
-                        ULONG *pt = (ULONG *)(pde & ~0xFFF);
-                        pt[pte_idx] = 0;  /* Zero the PTE — marks page as not present */
-                    }
-                }
-            }
-        }
-        /* Flush TLB */
-        {
-            ULONG cr3;
-            __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
-            __asm__ volatile("mov %0, %%cr3" : : "r"(cr3));
-        }
-    }
-
-    /*
-     * After paging: physical addresses are accessible via both
-     * identity map (0-64MB) and KSEG0 (0x80000000+).
-     * Update image pointers to virtual addresses.
-     */
+    /* Image pointers are now virtual addresses (identity-mapped = physical for us) */
     KernelBase = (PVOID)kern_image_base;
     HalBase    = (PVOID)hal_image_base;
 
@@ -1002,9 +1072,42 @@ ULONG loader_main(multiboot_info_t *mbi) {
 
     print("  Machine state relocated to KSEG0.\n");
 
-    /* Build the loader parameter block */
+    /* Build the loader parameter block (must be before PTE zeroing,
+     * since the zeroing iterates the memory descriptor list) */
     print("\nBuilding LOADER_PARAMETER_BLOCK...\n");
     build_loader_block(mbi);
+
+    /*
+     * NSUnmapFreeDescriptors equivalent: zero KSEG0 PTEs for free pages.
+     * MmInitSystem uses PTE valid bits to determine which pages are free.
+     * Without this, ALL pages have valid PTEs and the MM sees zero free pages.
+     * Must run AFTER build_loader_block (which creates the descriptor list).
+     */
+    print("  Unmapping free pages from KSEG0...\n");
+    {
+        int i;
+        for (i = 0; i < NumMemDescriptors; i++) {
+            if (MemDescriptors[i].MemoryType == LoaderFree) {
+                ULONG page;
+                for (page = MemDescriptors[i].BasePage;
+                     page < MemDescriptors[i].BasePage + MemDescriptors[i].PageCount;
+                     page++) {
+                    ULONG kseg0_va = KSEG0_BASE | (page << PAGE_SHIFT);
+                    ULONG pde_idx = kseg0_va >> 22;
+                    ULONG pte_idx = (kseg0_va >> 12) & 0x3FF;
+                    ULONG pde = PageDirectory[pde_idx];
+                    if (pde & PAGE_PRESENT) {
+                        ULONG *pt = (ULONG *)(pde & ~0xFFF);
+                        pt[pte_idx] = 0;
+                    }
+                }
+            }
+        }
+        /* Flush TLB */
+        ULONG cr3;
+        __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+        __asm__ volatile("mov %0, %%cr3" : : "r"(cr3));
+    }
 
     /*
      * Fix up all LoaderBlock pointers to KSEG0 addresses.
