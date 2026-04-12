@@ -41,13 +41,16 @@ static LDR_DATA_TABLE_ENTRY HalModule;
 static MEMORY_ALLOCATION_DESCRIPTOR MemDescriptors[32];
 static int NumMemDescriptors;
 
-/* Dummy NLS code page data (minimal - just enough to not crash) */
-static UCHAR DummyAnsiNls[8192];
-static UCHAR DummyOemNls[8192];
-static UCHAR DummyUnicaseNls[8192];
+/* NLS data — contiguous buffer with page-aligned sections, matching OSLOADER layout.
+ * The kernel expects all three NLS files in one contiguous block typed LoaderNlsData. */
+#define NLS_BUFFER_SIZE (256 * 1024)  /* 256KB should be plenty */
+static UCHAR NlsBuffer[NLS_BUFFER_SIZE] __attribute__((aligned(4096)));
+static ULONG NlsTotalSize;
+static ULONG NlsAnsiPadded, NlsOemPadded;
 
-/* Dummy registry hive (empty) */
-static UCHAR DummyRegistry[4096];
+/* Registry hive pointer (set from multiboot module, converted to KSEG0) */
+static PVOID RegistryBase;
+static ULONG RegistryLength;
 
 /*
  * Page directory and page tables.
@@ -550,24 +553,19 @@ static void build_loader_block(multiboot_info_t *mbi) {
     LoaderBlock.NtHalPathName     = NtHalPath;
     LoaderBlock.LoadOptions       = LoadOptions;
 
-    /* NLS data (dummy code page tables) */
-    /* Initialize minimal ANSI code page header */
-    memset(DummyAnsiNls, 0, sizeof(DummyAnsiNls));
-    memset(DummyOemNls, 0, sizeof(DummyOemNls));
-    memset(DummyUnicaseNls, 0, sizeof(DummyUnicaseNls));
-    /* The first USHORT of each is the codepage ID */
-    *(USHORT *)DummyAnsiNls = 1252;  /* Windows-1252 */
-    *(USHORT *)DummyOemNls  = 437;   /* OEM 437 */
-
-    NlsData.AnsiCodePageData     = DummyAnsiNls;
-    NlsData.OemCodePageData      = DummyOemNls;
-    NlsData.UnicodeCaseTableData = DummyUnicaseNls;
+    /* NLS data — contiguous buffer with real code page files.
+     * Point into the KSEG0-mapped NlsBuffer with page-aligned offsets. */
+    {
+        ULONG nls_kseg0 = KSEG0_BASE | (ULONG)NlsBuffer;
+        NlsData.AnsiCodePageData     = (PVOID)nls_kseg0;
+        NlsData.OemCodePageData      = (PVOID)(nls_kseg0 + NlsAnsiPadded);
+        NlsData.UnicodeCaseTableData = (PVOID)(nls_kseg0 + NlsAnsiPadded + NlsOemPadded);
+    }
     LoaderBlock.NlsData = &NlsData;
 
-    /* Registry (empty for now — will crash in config init) */
-    memset(DummyRegistry, 0, sizeof(DummyRegistry));
-    LoaderBlock.RegistryBase   = DummyRegistry;
-    LoaderBlock.RegistryLength = sizeof(DummyRegistry);
+    /* Registry SYSTEM hive — loaded from multiboot module 5 */
+    LoaderBlock.RegistryBase   = RegistryBase;
+    LoaderBlock.RegistryLength = RegistryLength;
 
     /* ARC disk info */
     InitializeListHead(&ArcDiskInfo.DiskSignatures);
@@ -601,6 +599,12 @@ static void build_loader_block(multiboot_info_t *mbi) {
     add_memory_descriptor(LoaderHalCode,      0x400, 0x100);   /* 4-5MB */
     add_memory_descriptor(LoaderOsloaderHeap, 0x500, 0x100);   /* 5-6MB */
     add_memory_descriptor(LoaderFree,         0x600, 0x3A00);  /* 6-64MB */
+
+    /* NLS data descriptor — the kernel walks memory descriptors to find
+     * LoaderNlsData and sums up the page count for InitNlsTableSize */
+    add_memory_descriptor(LoaderNlsData,
+                          (ULONG)NlsBuffer >> PAGE_SHIFT,
+                          (NlsTotalSize + PAGE_SIZE - 1) >> PAGE_SHIFT);
 
     /* If multiboot gave us better memory info, use it */
     if (mbi && (mbi->flags & 0x01)) {
@@ -686,10 +690,16 @@ ULONG loader_main(multiboot_info_t *mbi) {
         print("\n");
     }
 
-    /* We expect two multiboot modules: ntoskrnl.exe and hal.dll */
-    if (!mbi || mbi->mods_count < 2) {
-        halt("Need 2 modules: ntoskrnl.exe and hal.dll\n"
-             "Usage: qemu-system-i386 -kernel boot.elf -initrd \"ntoskrnl.exe,hal.dll\"");
+    /* We expect 6 multiboot modules:
+     *   0: ntoskrnl.exe
+     *   1: hal.dll
+     *   2: c_1252.nls (ANSI code page)
+     *   3: c_437.nls  (OEM code page)
+     *   4: l_intl.nls (Unicode case table)
+     *   5: SYSTEM     (registry hive)
+     */
+    if (!mbi || mbi->mods_count < 6) {
+        halt("Need 6 modules: ntoskrnl.exe,hal.dll,c_1252.nls,c_437.nls,l_intl.nls,SYSTEM");
     }
 
     multiboot_module_t *mods = (multiboot_module_t *)mbi->mods_addr;
@@ -713,6 +723,48 @@ ULONG loader_main(multiboot_info_t *mbi) {
     print(" size ");
     print_hex(hal_size);
     print("\n");
+
+    /* Modules 2-4: NLS code page files.
+     * The kernel expects all three in a single contiguous block with page-aligned
+     * boundaries between them (matching OSLOADER's BlLoadNLSData layout).
+     * Copy them into NlsBuffer. */
+    {
+        ULONG ansi_size = mods[2].mod_end - mods[2].mod_start;
+        ULONG oem_size  = mods[3].mod_end - mods[3].mod_start;
+        ULONG lang_size = mods[4].mod_end - mods[4].mod_start;
+        NlsAnsiPadded = (ansi_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+        NlsOemPadded  = (oem_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+        ULONG lang_padded = (lang_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+        NlsTotalSize = NlsAnsiPadded + NlsOemPadded + lang_padded;
+        if (NlsTotalSize > NLS_BUFFER_SIZE) {
+            halt("NLS data too large for buffer");
+        }
+
+        memset(NlsBuffer, 0, NlsTotalSize);
+        memcpy(NlsBuffer, (void *)mods[2].mod_start, ansi_size);
+        memcpy(NlsBuffer + NlsAnsiPadded, (void *)mods[3].mod_start, oem_size);
+        memcpy(NlsBuffer + NlsAnsiPadded + NlsOemPadded, (void *)mods[4].mod_start, lang_size);
+
+        print("  NLS: ANSI=");
+        print_hex(ansi_size);
+        print(" OEM=");
+        print_hex(oem_size);
+        print(" UniCS=");
+        print_hex(lang_size);
+        print(" total=");
+        print_hex(NlsTotalSize);
+        print("\n");
+    }
+
+    /* Module 5: SYSTEM registry hive */
+    RegistryBase   = (PVOID)(KSEG0_BASE | mods[5].mod_start);
+    RegistryLength = mods[5].mod_end - mods[5].mod_start;
+    print("  Registry: ");
+    print_hex((ULONG)RegistryBase);
+    print(" (");
+    print_hex(RegistryLength);
+    print(" bytes)\n");
 
     /* Parse PE headers to get load addresses */
     IMAGE_DOS_HEADER *kern_dos = (IMAGE_DOS_HEADER *)kern_file;
