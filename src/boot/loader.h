@@ -86,7 +86,18 @@ typedef struct _NLS_DATA_BLOCK {
     PVOID UnicodeCaseTableData;
 } NLS_DATA_BLOCK, *PNLS_DATA_BLOCK;
 
-/* ARC disk information (minimal) */
+/* ARC disk signature — one per disk the loader knows about.
+ * IopCreateArcNames reads each disk's MBR, computes sum of its 128 DWORDs,
+ * and matches (entry.CheckSum + computed_sum == 0) + signature + valid PT.
+ * On match, creates \ArcName\<ArcName>partition(N) -> \Device\HarddiskN\PartitionN. */
+typedef struct _ARC_DISK_SIGNATURE {
+    LIST_ENTRY ListEntry;
+    ULONG   Signature;
+    PCHAR   ArcName;
+    ULONG   CheckSum;
+    BOOLEAN ValidPartitionTable;
+} ARC_DISK_SIGNATURE, *PARC_DISK_SIGNATURE;
+
 typedef struct _ARC_DISK_INFORMATION {
     LIST_ENTRY DiskSignatures;
 } ARC_DISK_INFORMATION, *PARC_DISK_INFORMATION;
