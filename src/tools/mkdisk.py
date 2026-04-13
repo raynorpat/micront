@@ -158,7 +158,7 @@ class DiskImage:
                 d = existing
         return d
 
-    def add_file(self, dest_path: str, src_path: str | os.PathLike) -> Entry:
+    def add_file(self, dest_path: str, src_path: str | os.PathLike[str]) -> Entry:
         """Copy `src_path` contents into the image at `dest_path`.
         Intermediate directories in dest_path are created automatically."""
         parts = [p for p in dest_path.replace("\\", "/").split("/") if p]
@@ -195,7 +195,7 @@ class DiskImage:
 
     # --- Layout + write ---------------------------------------------------
 
-    def write(self, out_path: str | os.PathLike) -> None:
+    def write(self, out_path: str | os.PathLike[str]) -> None:
         """Compute cluster layout, then write the full raw image."""
         img = bytearray(self.size_bytes)
 
@@ -409,7 +409,7 @@ class DiskImage:
               f"  ({free_clusters * spc * SECTOR_SIZE // 1024} KB free)")
         print(f"  MBR checksum for ARC_DISK_SIGNATURE.CheckSum: 0x{arc_checksum:08X}")
 
-    def write_header(self, out_path: str | os.PathLike) -> None:
+    def write_header(self, out_path: str | os.PathLike[str]) -> None:
         """Emit a tiny C header with the disk signature and MBR checksum,
         for the boot loader to #include. Must be called after write()."""
         if not hasattr(self, "_mbr_checksum"):
@@ -448,81 +448,56 @@ def _dir_entry(name11: bytes, attr: int, first_cluster: int,
 # Default MicroNT boot disk
 # ---------------------------------------------------------------------------
 
-def build_micront_boot_disk(
-    ntoskrnl_path: str,
-    hal_path: str,
-    hive_path: str,
-    nls_ansi_path: str,
-    nls_oem_path: str,
-    nls_lang_path: str,
-    ntdll_path: str | None = None,
-    smss_path: str | None = None,
-    hello_path: str | None = None,
-) -> DiskImage:
-    """Populate a disk image with the files NT expects on the boot volume.
+# ---------------------------------------------------------------------------
+# MicroNT boot disk — fixed layout, no command-line flexibility
+# ---------------------------------------------------------------------------
+#
+# Every file listed here MUST exist at build time; the layout is frozen
+# and the build system is responsible for producing each input. Adding
+# / removing entries is a code change.
+#
+# Paths are relative to the repo's `src/` directory.
 
-    Layout:
-      \\System32\\ntoskrnl.exe
-      \\System32\\hal.dll
-      \\System32\\c_1252.nls
-      \\System32\\c_437.nls
-      \\System32\\l_intl.nls
-      \\System32\\config\\SYSTEM
-    """
-    # Fixed signature so the LoaderBlock.ArcDiskInformation entry can match
+REPO_ROOT = Path(__file__).resolve().parent.parent    # src/
+DISK_OUT  = REPO_ROOT / "boot/data/disk.raw"
+DISK_HDR  = REPO_ROOT / "boot/data/disk.h"
+
+# (dest-on-disk, source-path). Order is the filesystem order in the root dir.
+DISK_FILES: list[tuple[str, Path]] = [
+    ("System32/ntoskrnl.exe",       REPO_ROOT / "NT/PRIVATE/NTOS/INIT/UP/obj/i386/ntoskrnl.exe"),
+    ("System32/hal.dll",            REPO_ROOT / "NT/PRIVATE/NTOS/NTHALS/HAL/obj/i386/hal.dll"),
+    ("System32/c_1252.nls",         REPO_ROOT / "boot/data/C_1252.NLS"),
+    ("System32/c_437.nls",          REPO_ROOT / "boot/data/C_437.NLS"),
+    ("System32/l_intl.nls",         REPO_ROOT / "boot/data/L_INTL.NLS"),
+    ("System32/config/SYSTEM",      REPO_ROOT / "boot/data/SYSTEM"),
+    ("System32/ntdll.dll",          REPO_ROOT / "NT/PUBLIC/SDK/LIB/I386/ntdll.dll"),
+    ("System32/kernel32.dll",       REPO_ROOT / "NT/PUBLIC/SDK/LIB/I386/kernel32.dll"),
+    ("System32/smss.exe",           REPO_ROOT / "NT/PRIVATE/SM/SERVER/obj/i386/smss.exe"),
+    ("System32/Drivers/hello.sys",  REPO_ROOT / "NT/PUBLIC/SDK/LIB/I386/hello.sys"),
+]
+
+
+def main() -> None:
+    # Fixed signature so the LoaderBlock.ArcDiskInformation entry matches
     # deterministically across builds. Change only if you understand the
     # IopCreateArcNames matching logic.
     img = DiskImage(size_mb=16, signature=0x4E544653, volume_label="NT")
 
-    img.add_file("System32/ntoskrnl.exe", ntoskrnl_path)
-    img.add_file("System32/hal.dll",      hal_path)
-    img.add_file("System32/c_1252.nls",   nls_ansi_path)
-    img.add_file("System32/c_437.nls",    nls_oem_path)
-    img.add_file("System32/l_intl.nls",   nls_lang_path)
-    img.add_file("System32/config/SYSTEM", hive_path)
+    missing = [str(src) for _, src in DISK_FILES if not src.exists()]
+    if missing:
+        print("ERROR: required disk inputs are missing:", file=__import__("sys").stderr)
+        for m in missing:
+            print(f"  - {m}", file=__import__("sys").stderr)
+        print("Run the appropriate build.sh targets first.", file=__import__("sys").stderr)
+        raise SystemExit(1)
 
-    if ntdll_path:
-        img.add_file("System32/ntdll.dll", ntdll_path)
-    if smss_path:
-        img.add_file("System32/smss.exe", smss_path)
-    if hello_path:
-        img.add_file("System32/Drivers/hello.sys", hello_path)
+    for dest, src in DISK_FILES:
+        img.add_file(dest, src)
 
-    return img
-
-
-def main() -> None:
-    import argparse
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--out", default="boot/data/disk.raw",
-                    help="Output path (default: boot/data/disk.raw)")
-    ap.add_argument("--kernel", default="NT/PRIVATE/NTOS/INIT/UP/obj/i386/ntoskrnl.exe")
-    ap.add_argument("--hal",    default="NT/PRIVATE/NTOS/NTHALS/HAL/obj/i386/hal.dll")
-    ap.add_argument("--hive",   default="boot/data/SYSTEM")
-    ap.add_argument("--nls-ansi", default="boot/data/C_1252.NLS")
-    ap.add_argument("--nls-oem",  default="boot/data/C_437.NLS")
-    ap.add_argument("--nls-lang", default="boot/data/L_INTL.NLS")
-    ap.add_argument("--ntdll", default="NT/PUBLIC/SDK/LIB/I386/ntdll.dll")
-    ap.add_argument("--smss",  default="NT/PRIVATE/SM/SERVER/obj/i386/smss.exe")
-    ap.add_argument("--hello", default="NT/PUBLIC/SDK/LIB/I386/hello.sys")
-    args = ap.parse_args()
-
-    def _opt(p): return p if Path(p).exists() else None
-
-    img = build_micront_boot_disk(
-        args.kernel, args.hal, args.hive,
-        args.nls_ansi, args.nls_oem, args.nls_lang,
-        ntdll_path=_opt(args.ntdll),
-        smss_path=_opt(args.smss),
-        hello_path=_opt(args.hello),
-    )
-    img.write(args.out)
-    # Emit companion C header next to the .raw (same stem, .h extension)
-    hdr = Path(args.out).with_suffix(".h")
-    img.write_header(hdr)
-    print(f"Boot disk: {args.out}")
-    print(f"Boot disk header: {hdr}")
+    img.write(DISK_OUT)
+    img.write_header(DISK_HDR)
+    print(f"Boot disk: {DISK_OUT}")
+    print(f"Boot disk header: {DISK_HDR}")
 
 
 if __name__ == "__main__":

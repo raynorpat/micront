@@ -41,6 +41,18 @@ src/NT/PUBLIC/SDK/LIB/I386/ntdll.exp
 # nt.lib (URTL) + smdll.lib (SM/CLIENT) — built from source
 src/NT/PUBLIC/SDK/LIB/I386/nt.lib
 src/NT/PUBLIC/SDK/LIB/I386/smdll.lib
+# kernel32.dll is built from source — keep .lib import lib, ignore outputs
+src/NT/PUBLIC/SDK/LIB/I386/kernel32.dll
+src/NT/PUBLIC/SDK/LIB/I386/kernel32.exp
+
+# mc.exe-generated message resources. WINERROR.MC is the source;
+# winerror.h / winerror.rc / MSG00001.bin are rebuilt each time.
+src/NT/PRIVATE/WINDOWS/NLSMSG/winerror.h
+src/NT/PRIVATE/WINDOWS/NLSMSG/winerror.rc
+src/NT/PRIVATE/WINDOWS/NLSMSG/MSG00001.bin
+# Kernel32's MAKEFILE.INC copies the NLSMSG outputs here during build.
+src/NT/PRIVATE/WINDOWS/BASE/CLIENT/winerror.rc
+src/NT/PRIVATE/WINDOWS/BASE/CLIENT/DAYTONA/MSG00001.bin
 
 # Generated boot disk
 src/boot/data/disk.raw

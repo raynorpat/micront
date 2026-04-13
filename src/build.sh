@@ -59,7 +59,7 @@ run_nmake() {
     mkdir -p "$NTOS/obj/i386"
 
     # Always regenerate _objects.mac to stay in sync with SOURCES
-    "$SCRIPT_DIR/gen_objects.sh" "$linux_dir"
+    python3 "$SCRIPT_DIR/tools/gen_objects.py" "$linux_dir"
 
     # Convert Linux path to D:\ path
     local rel_path="${linux_dir#$NT_ROOT}"
@@ -189,6 +189,51 @@ build_smss()   {
     NT_ENV="$NT_ENV_SAVED"
 }
 
+# --- Win32 user-mode libraries (kernel32.dll chain) ---
+#
+# Dependency order: baselib <- nlslib <- conlib <- kernel32.dll
+#   baselib   = BASE/RTL    (atom.c, handle.c)  -> baselib.lib
+#   nlslib    = WINNLS                          -> nlslib.lib
+#   conlib    = WINCON/CLIENT (console client)  -> conlib.lib
+#   kernel32  = BASE/CLIENT (DAYTONA)           -> kernel32.dll
+build_baselib() {
+    # TARGETPATH=..\obj -> baselib.lib lands at BASE/obj/i386/
+    mkdir -p "$NT_ROOT/PRIVATE/WINDOWS/BASE/obj/i386"
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/BASE/RTL" "BASELIB - kernel32 support lib"
+}
+build_nlslib() {
+    # TARGETPATH=..\obj -> nlslib.lib lands at WINDOWS/obj/i386/
+    mkdir -p "$NT_ROOT/PRIVATE/WINDOWS/obj/i386"
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/WINNLS" "NLSLIB - NLS/codepage lib for kernel32"
+}
+build_conlib() {
+    # TARGETPATH=..\..\obj -> conlib.lib lands at WINDOWS/obj/i386/
+    mkdir -p "$NT_ROOT/PRIVATE/WINDOWS/obj/i386"
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/WINCON/CLIENT" "CONLIB - console client lib for kernel32"
+}
+build_nlsmsg() {
+    # mc.exe compiles WINERROR.MC -> winerror.h, winerror.rc, msg00001.bin.
+    # kernel32's MAKEFILE.INC copies these from WINDOWS/NLSMSG/ into
+    # BASE/CLIENT/ at build time.
+    local dir="$NT_ROOT/PRIVATE/WINDOWS/NLSMSG"
+    echo "========================================"
+    echo "Building: NLSMSG - Win32 error messages (mc)"
+    echo "========================================"
+    run_wine_cmd "NLSMSG mc" \
+        "D:&& cd \\PRIVATE\\WINDOWS\\NLSMSG&& mc -s winerror.mc"
+    echo ">>> NLSMSG: WINERROR.MC -> winerror.h / winerror.rc / MSG00001.bin"
+    ls -la "$dir/winerror.h" "$dir/winerror.rc" "$dir/MSG00001.bin" 2>/dev/null || true
+}
+build_kernel32() {
+    # kernel32 uses DAYTONA-style build dir (like ntdll).
+    mkdir -p "$NT_ROOT/PRIVATE/WINDOWS/BASE/CLIENT/DAYTONA/i386"
+    # Ensure NLSMSG outputs exist (mc.exe writes MSG00001.bin in uppercase).
+    if [ ! -f "$NT_ROOT/PRIVATE/WINDOWS/NLSMSG/MSG00001.bin" ]; then
+        build_nlsmsg
+    fi
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/BASE/CLIENT/DAYTONA" "KERNEL32 - Win32 base DLL" makedll=1
+}
+
 # --- INIT: links all libs into NTOSKRNL.EXE ---
 
 build_init() {
@@ -202,7 +247,7 @@ build_init() {
     echo "========================================"
 
     mkdir -p "$linux_dir/obj/i386"
-    "$SCRIPT_DIR/gen_objects.sh" "$linux_dir"
+    python3 "$SCRIPT_DIR/tools/gen_objects.py" "$linux_dir"
 
     local rel_path="${linux_dir#$NT_ROOT}"
     local win_dir="D:$(echo "$rel_path" | sed 's|/|\\|g')"
@@ -266,82 +311,102 @@ if [ $# -gt 1 ]; then
     exit 0
 fi
 
+# --- Group targets -----------------------------------------------------------
+#
+# Adding a new component: add its build_foo function above, then add it to
+# exactly one of the arrays below. `all` is just the union.
+#
+# Order matters within each array (deps build first).
+
+NTOSKRNL_TARGETS=(
+    geni386
+    ke rtl ex ob se ps mm cache config lpc dbgk io kd fsrtl raw vdm
+    init
+    hal
+)
+
+DRIVER_TARGETS=(
+    atdisk null fastfat hello
+)
+
+USERLAND_TARGETS=(
+    gensrv
+    rtl_user
+    ntdll
+    urtl
+    smlib
+    smss
+    baselib nlslib conlib nlsmsg
+    kernel32
+)
+
+build_group() {
+    local group_name="$1"; shift
+    echo ""
+    echo "########################################"
+    echo "# Group: $group_name"
+    echo "########################################"
+    for t in "$@"; do
+        "build_$t"
+    done
+}
+
+build_ntoskrnl() { build_group ntoskrnl "${NTOSKRNL_TARGETS[@]}"; }
+build_drivers()  { build_group drivers  "${DRIVER_TARGETS[@]}"; }
+build_userland() { build_group userland "${USERLAND_TARGETS[@]}"; }
+
+build_disk() {
+    echo ""
+    echo "========================================"
+    echo "Building boot disk image"
+    echo "========================================"
+    python3 "$SCRIPT_DIR/tools/mkhive.py" "$SCRIPT_DIR/boot/data/SYSTEM"
+    python3 "$SCRIPT_DIR/tools/mkdisk.py"
+}
+
+build_all() {
+    build_ntoskrnl
+    build_drivers
+    build_userland
+    build_disk
+    echo ""
+    echo "========================================"
+    echo "Build complete."
+    echo "  NTOSKRNL: $NTOS/INIT/UP/obj/i386/ntoskrnl.exe"
+    echo "  HAL:      $NTOS/NTHALS/HAL/obj/i386/hal.dll"
+    echo "  KERNEL32: $NT_ROOT/PUBLIC/SDK/LIB/I386/kernel32.dll"
+    echo "  NTDLL:    $NT_ROOT/PUBLIC/SDK/LIB/I386/ntdll.dll"
+    echo "  SMSS:     $NT_ROOT/PRIVATE/SM/SERVER/obj/i386/smss.exe"
+    echo "  DRIVERS:  atdisk null fastfat hello"
+    echo "  DISK:     $SCRIPT_DIR/boot/data/disk.raw"
+    echo "========================================"
+}
+
+# --- Main dispatch -----------------------------------------------------------
+
 COMPONENT="${1:-all}"
 
+# Everything callable: individual component functions + group targets + all/disk.
+# If a matching build_<name> function exists, invoke it. Otherwise complain.
 case "$COMPONENT" in
-    ke)     build_ke ;;
-    rtl)    build_rtl ;;
-    ex)     build_ex ;;
-    ob)     build_ob ;;
-    se)     build_se ;;
-    ps)     build_ps ;;
-    mm)     build_mm ;;
-    cache)  build_cache ;;
-    config) build_config ;;
-    lpc)    build_lpc ;;
-    dbgk)   build_dbgk ;;
-    io)     build_io ;;
-    kd)     build_kd ;;
-    fsrtl)  build_fsrtl ;;
-    raw)    build_raw ;;
-    vdm)    build_vdm ;;
-    init)   build_init ;;
-    hal)    build_hal ;;
-    atdisk) build_atdisk ;;
-    null)   build_null ;;
-    fastfat) build_fastfat ;;
-    hello)  build_hello ;;
-    gensrv) build_gensrv ;;
-    rtl_user) build_rtl_user ;;
-    ntdll)  build_ntdll ;;
-    urtl)   build_urtl ;;
-    smlib)  build_smlib ;;
-    smss)   build_smss ;;
-    geni386) build_geni386 ;;
-    all)
-        build_geni386
-        build_ke
-        build_rtl
-        build_ex
-        build_ob
-        build_se
-        build_ps
-        build_mm
-        build_cache
-        build_config
-        build_lpc
-        build_dbgk
-        build_io
-        build_kd
-        build_fsrtl
-        build_raw
-        build_vdm
-        build_init
-        build_hal
-        build_atdisk
-        build_null
-        build_fastfat
-        build_hello
-        echo ""
-        echo "========================================"
-        echo "Building boot disk image"
-        echo "========================================"
-        python3 "$SCRIPT_DIR/tools/mkhive.py" "$SCRIPT_DIR/boot/data/SYSTEM"
-        python3 "$SCRIPT_DIR/tools/mkdisk.py"
-        echo ""
-        echo "========================================"
-        echo "Build complete."
-        echo "  NTOSKRNL: $NTOS/INIT/UP/obj/i386/ntoskrnl.exe"
-        echo "  HAL:      $NTOS/NTHALS/HAL/obj/i386/hal.dll"
-        echo "  ATDISK:   $NT_ROOT/PUBLIC/SDK/LIB/I386/atdisk.sys"
-        echo "  NULL:     $NT_ROOT/PUBLIC/SDK/LIB/I386/null.sys"
-        echo "  FASTFAT:  $NT_ROOT/PUBLIC/SDK/LIB/I386/fastfat.sys"
-        echo "  DISK:     $SCRIPT_DIR/boot/data/disk.raw"
-        echo "========================================"
-        ;;
+    all)      build_all ;;
+    ntoskrnl) build_ntoskrnl ;;
+    drivers)  build_drivers ;;
+    userland) build_userland ;;
+    disk)     build_disk ;;
     *)
-        echo "Unknown component: $COMPONENT"
-        echo "Usage: $0 [ke|rtl|ex|ob|se|ps|mm|cache|config|lpc|dbgk|io|kd|fsrtl|raw|vdm|init|hal|atdisk|null|fastfat|all]"
-        exit 1
+        if declare -F "build_$COMPONENT" > /dev/null; then
+            "build_$COMPONENT"
+        else
+            echo "Unknown component: $COMPONENT"
+            echo ""
+            echo "Group targets: all, ntoskrnl, drivers, userland, disk"
+            echo ""
+            echo "Individual components (in build order):"
+            echo "  ntoskrnl:  ${NTOSKRNL_TARGETS[*]}"
+            echo "  drivers:   ${DRIVER_TARGETS[*]}"
+            echo "  userland:  ${USERLAND_TARGETS[*]}"
+            exit 1
+        fi
         ;;
 esac
