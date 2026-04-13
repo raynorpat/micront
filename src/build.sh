@@ -178,6 +178,7 @@ build_ntdll()  {
     # makedll=1 tells MAKEFILE.DEF to actually link the DLL (not just import lib)
     run_nmake "$NTOS/DLL/DAYTONA" "NTDLL - user-mode runtime library" makedll=1
 }
+build_urtl()   { run_nmake "$NT_ROOT/PRIVATE/URTL" "URTL - native-app startup library (nt.lib)"; }
 build_smlib()  { run_nmake "$NT_ROOT/PRIVATE/SM/CLIENT" "SM client library"; }
 build_smss()   { KEEP_UMAPPL=1 run_nmake "$NT_ROOT/PRIVATE/SM/SERVER" "SMSS - Session Manager"; }
 
@@ -277,6 +278,7 @@ case "$COMPONENT" in
     gensrv) build_gensrv ;;
     rtl_user) build_rtl_user ;;
     ntdll)  build_ntdll ;;
+    urtl)   build_urtl ;;
     smlib)  build_smlib ;;
     smss)   build_smss ;;
     geni386) build_geni386 ;;

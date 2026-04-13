@@ -225,6 +225,8 @@ Return Value:
     CCHAR badWriteDisks[][40] = {"T 6D8C X 0","DTC6X80"};
     ULONG numberOfBadWriteDisks = sizeof(badWriteDisks)/sizeof(badWriteDisks[0]);
 
+    HalDisplayString("ATDCFG: enter\n");
+
     //
     // Get the temporary configuration manager information.
     //
@@ -250,6 +252,7 @@ Return Value:
     defaultInterfaceType = Isa;
     defaultBusNumber = 0;
 
+    HalDisplayString("ATDCFG: IoQueryDeviceDescription Isa\n");
     IoQueryDeviceDescription(
         &defaultInterfaceType,
         &defaultBusNumber,
@@ -260,6 +263,7 @@ Return Value:
         AtConfigCallBack,
         &foundIt
         );
+    HalDisplayString("ATDCFG: Isa query done\n");
 
     if (!foundIt) {
 
@@ -321,6 +325,7 @@ Return Value:
         defaultPortAddress.LowPart = 0x3f6;
         defaultPortAddress.HighPart = 0;
         defaultIrql = 14;
+        HalDisplayString("ATDCFG: AtDiskControllerInfo\n");
         AtDiskControllerInfo(
             DriverObject,
             RegistryPath,
@@ -334,13 +339,16 @@ Return Value:
             TRUE
             );
 
+        HalDisplayString("ATDCFG: AtDiskTestPci\n");
         AtDiskTestPci(&ConfigData->Controller[0]);
 
         //
         // Check if controller active at primary address.
         //
 
+        HalDisplayString("ATDCFG: AtControllerPresent\n");
         if (AtControllerPresent(&ConfigData->Controller[0])) {
+            HalDisplayString("ATDCFG: controller present\n");
 
             //
             // Claim ATDISK primary IO address range.
@@ -370,6 +378,7 @@ Return Value:
             registryTable[0].Name = L"Identifier";
             registryTable[0].EntryContext = &ps1Data;
 
+            HalDisplayString("ATDCFG: RtlQueryRegistryValues Identifier\n");
             if (!NT_SUCCESS(RtlQueryRegistryValues(
                                 RTL_REGISTRY_ABSOLUTE | RTL_REGISTRY_OPTIONAL,
                                 L"\\REGISTRY\\MACHINE\\HARDWARE\\DESCRIPTION\\SYSTEM",
@@ -377,6 +386,7 @@ Return Value:
                                 NULL,
                                 NULL
                                 ))) {
+                HalDisplayString("ATDCFG: Identifier query failed\n");
 
                 //
                 // How odd, no identifer string! We'll it's probably not a ps1.
@@ -430,6 +440,7 @@ Return Value:
                 }
             }
 
+            HalDisplayString("ATDCFG: ps1 check done\n");
             if (ps1Detected) {
 
                 ConfigData->Controller[0].Disk[0].DriveType = 0;
@@ -437,27 +448,34 @@ Return Value:
 
             } else {
 
+                HalDisplayString("ATDCFG: reading CMOS drive types\n");
                 //
                 // Check CMOS for drive types for first and second disk.
                 //
 
+                HalDisplayString("ATDCFG: cmos A\n");
                 WRITE_PORT_UCHAR(CFGMEM_QUERY_PORT, CFGMEM_FIRST_CONTROLLER_DRIVE_TYPES);
+                HalDisplayString("ATDCFG: cmos B\n");
 
                 KeStallExecutionProcessor( 1L );
 
+                HalDisplayString("ATDCFG: cmos C\n");
                 driveTypes = READ_PORT_UCHAR( CFGMEM_DATA_PORT );
+                HalDisplayString("ATDCFG: cmos D\n");
 
                 ConfigData->Controller[0].Disk[0].DriveType = (UCHAR)
                     ( driveTypes & CFGMEM_DRIVES_FIRST_DRIVE_MASK );
 
                 if ( ConfigData->Controller[0].Disk[0].DriveType == 0xf0 ) {
 
+                    HalDisplayString("ATDCFG: cmos E\n");
                     WRITE_PORT_UCHAR( CFGMEM_QUERY_PORT, CFGMEM_HARD_DRIVE_TYPE_ONE );
 
                     KeStallExecutionProcessor( 1L );
 
                     ConfigData->Controller[0].Disk[0].DriveType =
                         READ_PORT_UCHAR( CFGMEM_DATA_PORT );
+                    HalDisplayString("ATDCFG: cmos F\n");
                 }
 
                 ConfigData->Controller[0].Disk[1].DriveType = (UCHAR)
@@ -465,16 +483,19 @@ Return Value:
 
                 if ( ConfigData->Controller[0].Disk[1].DriveType == 0x0f ) {
 
+                    HalDisplayString("ATDCFG: cmos G\n");
                     WRITE_PORT_UCHAR( CFGMEM_QUERY_PORT, CFGMEM_HARD_DRIVE_TYPE_TWO );
 
                     KeStallExecutionProcessor( 1L );
 
                     ConfigData->Controller[0].Disk[1].DriveType =
                         READ_PORT_UCHAR( CFGMEM_DATA_PORT );
+                    HalDisplayString("ATDCFG: cmos H\n");
                 }
 
             }
 
+            HalDisplayString("ATDCFG: CMOS done, checking drive0 type\n");
             if (ConfigData->Controller[0].Disk[0].DriveType) {
 
                 //
@@ -482,6 +503,7 @@ Return Value:
                 //
 
                 diskCount++;
+                HalDisplayString("ATDCFG: drive0 present, MmMapIoSpace BIOS\n");
 
                 //
                 // Map BIOS vector 41 for first disk.
@@ -497,8 +519,10 @@ Return Value:
                 // Map drive parameter table for first disk.
                 //
 
+                HalDisplayString("ATDCFG: checking paramVector\n");
                 if (*paramVector) {
 
+                    HalDisplayString("ATDCFG: UpdateGeometryFromParameterTable\n");
                     UpdateGeometryFromParameterTable(&ConfigData->Controller[0],
                                                      &ConfigData->Controller[0].ControlFlags,
                                                      ((*(paramVector + 1)) << 4 ) + *paramVector,
@@ -516,12 +540,14 @@ Return Value:
                     // Check BIOS information passed in from NTDETECT.
                     //
 
+                    HalDisplayString("ATDCFG: UpdateGeometryFromBios\n");
                     if (UpdateGeometryFromBios(DriverObject,
                                            &ConfigData->Controller[0],
                                            0,
                                            TRUE)) {
                         ConfigData->Controller[0].Disk[0].DriveType = 0xFF;
                     }
+                    HalDisplayString("ATDCFG: UpdateGeometryFromBios done\n");
                 }
 
                 MmUnmapIoSpace( paramVector, sizeof( ULONG ) );

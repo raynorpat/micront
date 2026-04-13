@@ -6,6 +6,8 @@
  */
 
 #include "halp.h"
+#include "ntdddisk.h"
+#include "ntddft.h"
 
 /* ===== Stall / Performance ===== */
 
@@ -14,7 +16,7 @@ KeStallExecutionProcessor(
     IN ULONG Microseconds
     )
 {
-    ULONG i;
+    volatile ULONG i;
     for (i = 0; i < Microseconds; i++) {
         HalpReadPort(0x80);     /* ~1us per port read */
     }
@@ -326,10 +328,211 @@ IoReadPartitionTable(
     IN PDEVICE_OBJECT DeviceObject,
     IN ULONG SectorSize,
     IN BOOLEAN ReturnRecognizedPartitions,
-    OUT PVOID *PartitionBuffer
+    OUT PDRIVE_LAYOUT_INFORMATION *PartitionBuffer
     )
 {
-    return 0xC0000001;
+#define GET_STARTING_SECTOR( p ) (                  \
+    RtlConvertUlongToLargeInteger(                  \
+        (ULONG) (p->StartingSectorLsb0) +           \
+        (ULONG) (p->StartingSectorLsb1 << 8) +      \
+        (ULONG) (p->StartingSectorMsb0 << 16) +     \
+        (ULONG) (p->StartingSectorMsb1 << 24) ) )
+
+#define GET_PARTITION_LENGTH( p ) (                 \
+    RtlConvertUlongToLargeInteger(                  \
+        (ULONG) (p->PartitionLengthLsb0) +          \
+        (ULONG) (p->PartitionLengthLsb1 << 8) +     \
+        (ULONG) (p->PartitionLengthMsb0 << 16) +    \
+        (ULONG) (p->PartitionLengthMsb1 << 24) ) )
+
+#define ADD( a, b ) ( RtlLargeIntegerAdd( a, b ) )
+#define SUBTRACT( a, b ) ( RtlLargeIntegerSubtract( a, b ) )
+#define MULTIPLY( a, b ) ( RtlExtendedIntegerMultiply( a, (LONG) b ) )
+
+    ULONG partitionBufferSize = PARTITION_BUFFER_SIZE;
+    PDRIVE_LAYOUT_INFORMATION newPartitionBuffer = NULL;
+    LARGE_INTEGER partitionTableOffset;
+    LARGE_INTEGER volumeStartOffset;
+    LARGE_INTEGER tempSize;
+    BOOLEAN primaryPartitionTable;
+    LONG partitionNumber;
+    PUCHAR readBuffer = (PUCHAR) NULL;
+    KEVENT event;
+    IO_STATUS_BLOCK ioStatus;
+    PIRP irp;
+    PPARTITION_DESCRIPTOR partitionTableEntry;
+    CCHAR partitionEntry;
+    NTSTATUS status = STATUS_SUCCESS;
+    ULONG readSize;
+    PPARTITION_INFORMATION partitionInfo;
+
+    *PartitionBuffer = ExAllocatePool( NonPagedPool, partitionBufferSize );
+    if (*PartitionBuffer == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    readSize = (SectorSize >= 512) ? SectorSize : 512;
+    partitionTableOffset = RtlConvertUlongToLargeInteger( 0 );
+    primaryPartitionTable = TRUE;
+    volumeStartOffset = partitionTableOffset;
+    partitionNumber = -1;
+
+    readBuffer = ExAllocatePool( NonPagedPoolCacheAligned, PAGE_SIZE );
+    if (readBuffer == NULL) {
+        ExFreePool( *PartitionBuffer );
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    do {
+        DbgPrint("IoReadPartitionTable: read offset=0x%x\n",
+                 partitionTableOffset.LowPart);
+        KeInitializeEvent( &event, NotificationEvent, FALSE );
+
+        irp = IoBuildSynchronousFsdRequest( IRP_MJ_READ,
+                                            DeviceObject,
+                                            readBuffer,
+                                            readSize,
+                                            &partitionTableOffset,
+                                            &event,
+                                            &ioStatus );
+
+        status = IoCallDriver( DeviceObject, irp );
+        DbgPrint("IoReadPartitionTable: IoCallDriver rs=0x%x\n", status);
+
+        if (status == STATUS_PENDING) {
+            (VOID) KeWaitForSingleObject( &event, Executive, KernelMode,
+                                          FALSE, (PLARGE_INTEGER) NULL );
+            status = ioStatus.Status;
+            DbgPrint("IoReadPartitionTable: wait done rs=0x%x\n", status);
+        }
+
+        if (!NT_SUCCESS( status )) {
+            break;
+        }
+
+        if (((PUSHORT) readBuffer)[BOOT_SIGNATURE_OFFSET] != BOOT_RECORD_SIGNATURE) {
+            break;
+        }
+
+        if (RtlLargeIntegerEqualToZero( partitionTableOffset )) {
+            (*PartitionBuffer)->Signature =
+                ((PULONG) readBuffer)[PARTITION_TABLE_OFFSET/2-1];
+        }
+
+        partitionTableEntry = (PPARTITION_DESCRIPTOR)
+            &(((PUSHORT) readBuffer)[PARTITION_TABLE_OFFSET]);
+
+        for (partitionEntry = 1;
+             partitionEntry <= NUM_PARTITION_TABLE_ENTRIES;
+             partitionEntry++, partitionTableEntry++) {
+
+            if (ReturnRecognizedPartitions) {
+                if ((partitionTableEntry->PartitionType == PARTITION_ENTRY_UNUSED) ||
+                    (partitionTableEntry->PartitionType == PARTITION_EXTENDED)) {
+                    continue;
+                }
+            }
+
+            partitionNumber++;
+
+            if (((partitionNumber * sizeof( PARTITION_INFORMATION )) +
+                 sizeof( DRIVE_LAYOUT_INFORMATION )) > (ULONG) partitionBufferSize) {
+                newPartitionBuffer = ExAllocatePool( NonPagedPool,
+                                                     partitionBufferSize << 1 );
+                if (newPartitionBuffer == NULL) {
+                    --partitionNumber;
+                    status = STATUS_INSUFFICIENT_RESOURCES;
+                    break;
+                }
+                RtlCopyMemory( newPartitionBuffer, *PartitionBuffer,
+                               partitionBufferSize );
+                ExFreePool( *PartitionBuffer );
+                *PartitionBuffer = newPartitionBuffer;
+                partitionBufferSize <<= 1;
+            }
+
+            partitionInfo = &(*PartitionBuffer)->PartitionEntry[partitionNumber];
+            partitionInfo->PartitionType = partitionTableEntry->PartitionType;
+            partitionInfo->RewritePartition = FALSE;
+
+            if (partitionTableEntry->PartitionType != PARTITION_ENTRY_UNUSED) {
+                partitionInfo->BootIndicator =
+                    partitionTableEntry->ActiveFlag & PARTITION_ACTIVE_FLAG ?
+                        (BOOLEAN) TRUE : (BOOLEAN) FALSE;
+
+                if (partitionTableEntry->PartitionType == PARTITION_EXTENDED) {
+                    partitionInfo->RecognizedPartition = FALSE;
+                } else {
+                    partitionInfo->RecognizedPartition = TRUE;
+                }
+
+                tempSize = ADD( MULTIPLY( GET_STARTING_SECTOR( partitionTableEntry ),
+                                          SectorSize ),
+                                partitionTableOffset );
+                partitionInfo->StartingOffset = tempSize;
+
+                tempSize = MULTIPLY( GET_PARTITION_LENGTH( partitionTableEntry ),
+                                     SectorSize );
+                partitionInfo->PartitionLength = tempSize;
+
+                tempSize = SUBTRACT( partitionInfo->StartingOffset,
+                                     partitionTableOffset );
+                partitionInfo->HiddenSectors =
+                    LiDiv( tempSize, LiFromUlong( SectorSize ) ).LowPart;
+            } else {
+                partitionInfo->BootIndicator = FALSE;
+                partitionInfo->RecognizedPartition = FALSE;
+                partitionInfo->StartingOffset = RtlConvertLongToLargeInteger( 0 );
+                partitionInfo->PartitionLength = RtlConvertLongToLargeInteger( 0 );
+                partitionInfo->HiddenSectors = 0;
+            }
+        }
+
+        if (!NT_SUCCESS( status )) {
+            break;
+        }
+
+        partitionTableEntry = (PPARTITION_DESCRIPTOR)
+            &(((PUSHORT) readBuffer)[PARTITION_TABLE_OFFSET]);
+        partitionTableOffset = RtlConvertUlongToLargeInteger( 0 );
+
+        for (partitionEntry = 1;
+             partitionEntry <= NUM_PARTITION_TABLE_ENTRIES;
+             partitionEntry++, partitionTableEntry++) {
+
+            if (partitionTableEntry->PartitionType == PARTITION_EXTENDED) {
+                partitionTableOffset = ADD( volumeStartOffset,
+                    MULTIPLY( GET_STARTING_SECTOR( partitionTableEntry ),
+                              SectorSize ) );
+                if (primaryPartitionTable) {
+                    volumeStartOffset = partitionTableOffset;
+                }
+                break;
+            }
+        }
+
+        primaryPartitionTable = FALSE;
+
+    } while (partitionTableOffset.HighPart | partitionTableOffset.LowPart);
+
+    DbgPrint("IoReadPartitionTable: loop exit, partitions=%d\n", partitionNumber + 1);
+    (*PartitionBuffer)->PartitionCount = ++partitionNumber;
+
+    if (!partitionNumber) {
+        (*PartitionBuffer)->Signature = 0;
+    }
+
+    if (readBuffer != NULL) {
+        ExFreePool( readBuffer );
+    }
+
+    return status;
+
+#undef GET_STARTING_SECTOR
+#undef GET_PARTITION_LENGTH
+#undef ADD
+#undef SUBTRACT
+#undef MULTIPLY
 }
 
 NTSTATUS

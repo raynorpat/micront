@@ -47,6 +47,17 @@ HalpSerialPrint(PCHAR s)
     }
 }
 
+VOID
+HalpSerialHex(ULONG v)
+{
+    ULONG i;
+    for (i = 0; i < 8; i++) {
+        UCHAR n = (UCHAR)((v >> (28 - i*4)) & 0xF);
+        HalpSerialPutChar((CHAR)(n < 10 ? '0' + n : 'a' + n - 10));
+    }
+    HalpSerialPutChar(']');
+}
+
 /*
  * HalDisplayString - kernel calls this for early boot messages and BSODs
  */

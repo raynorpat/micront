@@ -12,17 +12,19 @@ SECTIONS
         *(.rodata.*)
     }
 
-    _edata = .;
-
     .data : {
         *(.data)
         *(.data.*)
     }
 
+    _edata = .;
+
     .bss : {
+        _bss_start = .;
         *(COMMON)
         *(.bss)
         *(.bss.*)
+        _bss_end = .;
     }
 
     _end = .;

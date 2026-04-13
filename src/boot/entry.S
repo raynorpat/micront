@@ -63,6 +63,18 @@ _start:
     /* Set up our own stack */
     movl $boot_stack_top, %esp
 
+    /* Zero the BSS. Multiboot spec says BSS isn't guaranteed zero; without
+     * this, statically-allocated buffers (e.g. BootPcrPages) contain
+     * whatever the low-memory BIOS left behind — 0xFF in many slots —
+     * which propagates into the kernel's PCR and breaks Pcr->IRR (0x26)
+     * reading the wrong upper bytes. */
+    cld
+    movl $_bss_start, %edi
+    movl $_bss_end, %ecx
+    subl %edi, %ecx
+    xorl %eax, %eax
+    rep stosb
+
     /* Install the NT-compatible GDT */
     movb $'G', %al
     outb %al, %dx

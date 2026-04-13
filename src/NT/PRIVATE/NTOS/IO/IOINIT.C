@@ -257,6 +257,8 @@ Return Value:
     // lock.
     //
 
+    HalDisplayString("IO: IoInitSystem enter\n");
+
     ntDeviceName.Buffer = deviceNameBuffer;
     ntDeviceName.MaximumLength = sizeof(deviceNameBuffer);
     ntDeviceName.Length = 0;
@@ -415,6 +417,7 @@ Return Value:
     // Create all of the objects for the I/O system.
     //
 
+    HalDisplayString("IO: IopCreateObjectTypes\n");
     if (!IopCreateObjectTypes()) {
 #if DBG
         DbgPrint( "IOINIT: IopCreateObjectTypes failed\n" );
@@ -426,6 +429,7 @@ Return Value:
     // Create the root directories for the I/O system.
     //
 
+    HalDisplayString("IO: IopCreateRootDirectories\n");
     if (!IopCreateRootDirectories()) {
 #if DBG
         DbgPrint( "IOINIT: IopCreateRootDirectories failed\n" );
@@ -437,12 +441,14 @@ Return Value:
     // Initialize the resource map
     //
 
+    HalDisplayString("IO: IopInitializeResourceMap\n");
     IopInitializeResourceMap (LoaderBlock);
 
     //
     // Initialize the drivers loaded by the boot loader (OSLOADER)
     //
 
+    HalDisplayString("IO: IopInitializeBootDrivers\n");
     nextDriverObject = &driverObject;
     if (!IopInitializeBootDrivers( LoaderBlock,
                                    nextDriverObject,
@@ -470,6 +476,7 @@ Return Value:
     // Initialize the device drivers for the system.
     //
 
+    HalDisplayString("IO: IopInitializeSystemDrivers\n");
     if (!IopInitializeSystemDrivers()) {
 #if DBG
         DbgPrint( "IOINIT: Initializing system drivers failed\n" );
@@ -509,6 +516,7 @@ Return Value:
     // Reassign \SystemRoot to NT device name path.
     //
 
+    HalDisplayString("IO: IopReassignSystemRoot\n");
     if (!IopReassignSystemRoot( LoaderBlock, &ntDeviceName )) {
         return FALSE;
     }
@@ -525,10 +533,12 @@ Return Value:
     // Assign DOS drive letters to disks and cdroms and define \SystemRoot.
     //
 
+    HalDisplayString("IO: IoAssignDriveLetters\n");
     IoAssignDriveLetters( LoaderBlock,
                           &ntDeviceName,
                           NtSystemPath,
                           &NtSystemPathString );
+    HalDisplayString("IO: IoInitSystem done\n");
 
     //
     // Assign DOS drive letters to DoubleSpace volumes
@@ -1170,6 +1180,7 @@ Return Value:
          diskNumber < IoGetConfigurationInformation()->DiskCount;
          diskNumber++) {
 
+        DbgPrint("IopCreateArcNames: scanning disk %u\n", diskNumber);
         sprintf( deviceNameBuffer,
                  "\\Device\\Harddisk%x\\Partition0",
                  diskNumber );
@@ -1196,6 +1207,8 @@ Return Value:
         RtlFreeUnicodeString( &deviceNameUnicodeString );
 
         if (!NT_SUCCESS( status )) {
+            DbgPrint("IopCreateArcNames: IoGetDeviceObjectPointer(%s) failed 0x%08x\n",
+                     deviceNameBuffer, status);
             continue;
         }
 
@@ -1214,6 +1227,7 @@ Return Value:
                                              &ioStatusBlock );
 
         if (!irp) {
+            DbgPrint("IopCreateArcNames: IoBuildDeviceIoControlRequest(GET_GEOMETRY) failed\n");
             continue;
         }
 
@@ -1235,6 +1249,8 @@ Return Value:
         }
 
         if (!NT_SUCCESS( status )) {
+            DbgPrint("IopCreateArcNames: GET_DRIVE_GEOMETRY disk%u failed 0x%08x\n",
+                     diskNumber, status);
             continue;
         }
 
@@ -1250,6 +1266,8 @@ Return Value:
         ObDereferenceObject( fileObject );
 
         if (!NT_SUCCESS( status )) {
+            DbgPrint("IopCreateArcNames: IoReadPartitionTable disk%u failed 0x%08x\n",
+                     diskNumber, status);
             continue;
         }
 
@@ -1287,6 +1305,7 @@ Return Value:
                                             &ioStatusBlock );
 
         if (!irp) {
+            DbgPrint("IopCreateArcNames: IoBuildSynchronousFsdRequest(READ MBR) failed\n");
             continue;
         }
 
@@ -1308,6 +1327,8 @@ Return Value:
         }
 
         if (!NT_SUCCESS( status )) {
+            DbgPrint("IopCreateArcNames: MBR read disk%u failed 0x%08x\n",
+                     diskNumber, status);
             continue;
         }
 
@@ -1351,9 +1372,16 @@ Return Value:
             // Compare disk signatures.
             //
 
+            DbgPrint("IopCreateArcNames: disk%u mbr_sum=0x%08x signature=0x%08x vs"
+                     " block.sig=0x%08x block.ck=0x%08x valid=%u\n",
+                     diskNumber, checkSum, driveLayout->Signature,
+                     diskBlock->Signature, diskBlock->CheckSum,
+                     diskBlock->ValidPartitionTable);
             if (diskBlock->Signature == driveLayout->Signature &&
                 !(diskBlock->CheckSum + checkSum) &&
                 diskBlock->ValidPartitionTable) {
+                DbgPrint("IopCreateArcNames: MATCH disk%u arc=%s\n",
+                         diskNumber, diskBlock->ArcName);
 
                 //
                 // Get ARC name for this disk.
@@ -2095,6 +2123,7 @@ Return Value:
     // Initialize the built-in RAW file system driver.
     //
 
+    HalDisplayString("IOBOOT: init RAW fs\n");
     RtlInitUnicodeString( &rawFsName, L"\\FileSystem\\RAW" );
     RtlInitUnicodeString( &completeName, L"" );
     if (!IopInitializeBuiltinDriver( &rawFsName,
@@ -2113,6 +2142,7 @@ Return Value:
     // Walk the list of boot drivers and initialize each.
     //
 
+    HalDisplayString("IOBOOT: walking BootDriverListHead\n");
     nextEntry = LoaderBlock->BootDriverListHead.Flink;
 
     while (nextEntry != &LoaderBlock->BootDriverListHead) {
@@ -2125,6 +2155,21 @@ Return Value:
                                         BOOT_DRIVER_LIST_ENTRY,
                                         Link );
         driverEntry = bootDriver->LdrEntry;
+        HalDisplayString("IOBOOT: boot driver entry\n");
+        {
+            CHAR _dbg[128];
+            ULONG _n = bootDriver->RegistryPath.Length / sizeof(WCHAR);
+            ULONG _i;
+            if (_n > sizeof(_dbg) - 16) _n = sizeof(_dbg) - 16;
+            for (_i = 0; _i < _n; _i++) {
+                _dbg[_i] = (CHAR)bootDriver->RegistryPath.Buffer[_i];
+            }
+            _dbg[_n] = '\n';
+            _dbg[_n + 1] = 0;
+            HalDisplayString("IOBOOT: regpath=");
+            HalDisplayString(_dbg);
+        }
+        HalDisplayString("IOBOOT: IopOpenRegistryKey\n");
 
         //
         // Open the driver's registry key to find out if this is a
@@ -2158,6 +2203,7 @@ Return Value:
         // overrides the default ("\Driver" or "\FileSystem").
         //
 
+        HalDisplayString("IOBOOT: IopGetDriverNameFromKeyNode\n");
         status = IopGetDriverNameFromKeyNode( keyHandle,
                                               &completeName );
         if (!NT_SUCCESS( status )) {
@@ -2186,10 +2232,12 @@ Return Value:
                 treeEntry = (PTREE_ENTRY) NULL;
             }
 
+            HalDisplayString("IOBOOT: IopCheckDependencies + IopInitializeBuiltinDriver\n");
             if (IopCheckDependencies( keyHandle ) &&
                 IopInitializeBuiltinDriver( &completeName,
                                             &bootDriver->RegistryPath,
                                             (PDRIVER_INITIALIZE) driverEntry->EntryPoint )) {
+                HalDisplayString("IOBOOT: driver initialized OK\n");
                 if (treeEntry) {
                     treeEntry->DriversLoaded++;
                 }
@@ -2228,6 +2276,7 @@ Return Value:
     // double space partition and modifing the loader block.
     //
 
+    HalDisplayString("IOBOOT: IopInitializeDoubleSpace\n");
     if (!IopInitializeDoubleSpace( LoaderBlock )) {
         return FALSE;
     }
@@ -2237,7 +2286,26 @@ Return Value:
     // have intialized.
     //
 
+    HalDisplayString("IOBOOT: IopCreateArcNames\n");
+    {
+        CHAR _dbg[80];
+        ULONG _dc = IoGetConfigurationInformation()->DiskCount;
+        _dbg[0] = 'I'; _dbg[1] = 'O'; _dbg[2] = 'B'; _dbg[3] = 'O'; _dbg[4] = 'O'; _dbg[5] = 'T';
+        _dbg[6] = ':'; _dbg[7] = ' '; _dbg[8] = 'D'; _dbg[9] = 'i'; _dbg[10] = 's'; _dbg[11] = 'k';
+        _dbg[12] = 'C'; _dbg[13] = 'o'; _dbg[14] = 'u'; _dbg[15] = 'n'; _dbg[16] = 't'; _dbg[17] = '=';
+        _dbg[18] = (CHAR)('0' + (_dc & 0xF));
+        _dbg[19] = '\n'; _dbg[20] = 0;
+        HalDisplayString(_dbg);
+        if (LoaderBlock->ArcBootDeviceName) {
+            HalDisplayString("IOBOOT: ArcBootDeviceName=");
+            HalDisplayString(LoaderBlock->ArcBootDeviceName);
+            HalDisplayString("\n");
+        } else {
+            HalDisplayString("IOBOOT: ArcBootDeviceName=NULL\n");
+        }
+    }
     IopCreateArcNames( LoaderBlock );
+    HalDisplayString("IOBOOT: IopCreateArcNames done\n");
 
     //
     // Find and mark the boot partition device object so that if a subsequent
@@ -2248,9 +2316,11 @@ Return Value:
     // cannot mount the device for some other reason.
     //
 
+    HalDisplayString("IOBOOT: IopMarkBootPartition\n");
     if (!IopMarkBootPartition( LoaderBlock )) {
         return FALSE;
     }
+    HalDisplayString("IOBOOT: IopMarkBootPartition done\n");
 
     //
     // Open the base directory where drivers are located
@@ -2323,10 +2393,12 @@ Return Value:
     // Begin by creating the driver object.
     //
 
+    HalDisplayString("  IIBD: IopInitializeAttributesAndCreateObject\n");
     status = IopInitializeAttributesAndCreateObject( DriverName,
                                                      &objectAttributes,
                                                      &driverObject );
     if (!NT_SUCCESS( status )) {
+        HalDisplayString("  IIBD: create object FAILED\n");
         return FALSE;
     }
 
@@ -2341,6 +2413,7 @@ Return Value:
     // Insert the driver object into the object table.
     //
 
+    HalDisplayString("  IIBD: ObInsertObject\n");
     status = ObInsertObject( driverObject,
                              NULL,
                              FILE_READ_DATA,
@@ -2349,6 +2422,7 @@ Return Value:
                              &handle );
 
     if (!NT_SUCCESS( status )) {
+        HalDisplayString("  IIBD: ObInsertObject FAILED\n");
         return FALSE;
     }
 
@@ -2381,7 +2455,9 @@ Return Value:
     // Now invoke the driver's initialization routine to initialize itself.
     //
 
+    HalDisplayString("  IIBD: calling DriverInit\n");
     status = driverObject->DriverInit( driverObject, RegistryPath );
+    HalDisplayString("  IIBD: DriverInit returned\n");
     NtClose( handle );
 
     if (NT_SUCCESS( status )) {

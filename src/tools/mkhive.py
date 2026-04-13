@@ -436,6 +436,13 @@ def build_micront_system_hive() -> Hive:
         .set_dword("Type",         2) \
         .set_dword("Start",        0) \
         .set_dword("ErrorControl", 1)
+    # hello.sys — loaded from disk at Phase 1 (SERVICE_SYSTEM_START) as a
+    # visibility test that the kernel is driving the filesystem correctly.
+    services["hello"] \
+        .set_dword("Type",         1) \
+        .set_dword("Start",        1) \
+        .set_dword("ErrorControl", 1) \
+        .set_sz("ImagePath", "System32\\Drivers\\hello.sys")
 
     return h
 

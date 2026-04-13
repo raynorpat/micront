@@ -19,9 +19,9 @@ src/NT/PRIVATE/NTOS/RTL/GENERR.EXE
 src/NT/PRIVATE/NTOS/RTL/GENERR.obj
 src/NT/PRIVATE/NTOS/INIT/bugcodes.rc
 
-# RC temp files
-RC*00*
-RD*00*
+# RC temp files (rc.exe leaves these; exactly 5 digits after letter)
+RC[a-z][0-9][0-9][0-9][0-9][0-9]
+RD[a-z][0-9][0-9][0-9][0-9][0-9]
 
 # Boot stub build artifacts
 src/boot/*.o
@@ -38,6 +38,9 @@ src/NT/PUBLIC/SDK/LIB/I386/tmp.exp
 # ntdll is built from our sources — keep .lib tracked, ignore .dll/.exp
 src/NT/PUBLIC/SDK/LIB/I386/ntdll.dll
 src/NT/PUBLIC/SDK/LIB/I386/ntdll.exp
+# nt.lib (URTL) + smdll.lib (SM/CLIENT) — built from source
+src/NT/PUBLIC/SDK/LIB/I386/nt.lib
+src/NT/PUBLIC/SDK/LIB/I386/smdll.lib
 
 # Generated boot disk
 src/boot/data/disk.raw
@@ -59,5 +62,8 @@ src/ntoskrnl.gdb
 # Old HAL (preserved for reference, not built)
 src/NT/PRIVATE/NTOS/NTHALS.old/
 
+TODO.md
+
 # QEMU/test artifacts
 *.log
+*.gdb

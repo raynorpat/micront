@@ -624,6 +624,8 @@ Return Value:
     ULONG shouldBreak = 0;
     PWCHAR path;
 
+    HalDisplayString("ATDISK: DriverEntry\n");
+
     //
     // Since the registry path parameter is a "counted" UNICODE string, it
     // might not be zero terminated.  For a very short time allocate memory
@@ -722,7 +724,9 @@ Return Value:
     // Get information on the hardware that we're supposed to support.
     //
 
+    HalDisplayString("ATDISK: AtGetConfigInfo\n");
     ntStatus = AtGetConfigInfo( DriverObject, RegistryPath, configData );
+    HalDisplayString("ATDISK: AtGetConfigInfo returned\n");
 
     //
     // If AtGetConfigInfo() failed, just exit and propogate the error.
@@ -769,15 +773,18 @@ Return Value:
                 // controller.
                 //
 
+                HalDisplayString("ATDISK: AtReportUsage\n");
                 if (AtReportUsage(
                         configData,
                         (UCHAR)i,
                         DriverObject)) {
 
+                    HalDisplayString("ATDISK: AtInitializeController\n");
                     ntStatus = AtInitializeController(
                         configData,
                         i,
                         DriverObject );
+                    HalDisplayString("ATDISK: AtInitializeController returned\n");
 
                 } else {
 
@@ -1003,19 +1010,23 @@ Return Value:
     // Well wait up to 2 seconds for the controller to accept the reset.
     //
 
+    HalDisplayString("ATDISK: reset controller\n");
     WRITE_CONTROLLER(
         controllerExtension->ControlPortAddress,
         RESET_CONTROLLER );
 
+    HalDisplayString("ATDISK: wait controller busy\n");
     AtWaitControllerBusy(
         controllerExtension->ControllerAddress + STATUS_REGISTER,
         20,
         75000
         );
 
+    HalDisplayString("ATDISK: enable interrupts\n");
     WRITE_CONTROLLER(
         controllerExtension->ControlPortAddress,
         ( ENABLE_INTERRUPTS | controllerExtension->ControlFlags ) );
+    HalDisplayString("ATDISK: entering disk init loop\n");
 
     //
     // For every disk on the controller, call AtInitializeDisk().  Note
@@ -1361,6 +1372,7 @@ Return Value:
         IoStartTimer( deviceObject );
 
         timerWasStarted = TRUE;
+        HalDisplayString("ATDISK: IoStartTimer done\n");
 
     } else {
 
@@ -1503,7 +1515,9 @@ Return Value:
     // IoReadPartitionTable() and deal with it then.
     //
 
+    HalDisplayString("ATDISK: wait ready post-reset\n");
     ntStatus = AtWaitControllerReady( ControllerExtension, 20, 150000 );
+    HalDisplayString("ATDISK: wait ready post-reset done\n");
 
     if (!NT_SUCCESS(ntStatus)) {
 
@@ -1703,7 +1717,9 @@ Return Value:
     // some controllers we HAVE to, and this is just init time.
     //
 
+    HalDisplayString("ATDISK: wait ready post-set-params\n");
     ntStatus = AtWaitControllerReady( ControllerExtension, 20, 150000 );
+    HalDisplayString("ATDISK: wait ready post-set-params done\n");
 
     if (!NT_SUCCESS(ntStatus)) {
 
@@ -1742,7 +1758,9 @@ Return Value:
             RECALIBRATE_COMMAND );
     }
 
+    HalDisplayString("ATDISK: wait ready post-recal\n");
     ntStatus = AtWaitControllerReady( ControllerExtension, 20, 150000 );
+    HalDisplayString("ATDISK: wait ready post-recal done\n");
 
     if (!NT_SUCCESS(ntStatus)) {
 
@@ -1765,11 +1783,13 @@ Return Value:
     // Read partition table
     //
 
+    HalDisplayString("ATDISK: IoReadPartitionTable\n");
     ntStatus = IoReadPartitionTable(
         diskExtension->DeviceObject,
         ConfigData->Controller[ControllerNum].Disk[DiskNum].BytesPerSector,
         TRUE,
         &partitionList );
+    HalDisplayString("ATDISK: IoReadPartitionTable returned\n");
 
     //
     // For each partition other than partition 0, create and initialize a
@@ -2578,6 +2598,7 @@ Return Value:
     // location to the device extension.
     //
 
+    HalDisplayString("ATDISK: StartIo\n");
     diskExtension->OperationType = irpSp->MajorFunction;
     diskExtension->RemainingRequestLength = irpSp->Parameters.Read.Length;
 
@@ -3132,6 +3153,7 @@ Return Value:
 
     UNREFERENCED_PARAMETER( Interrupt );
 
+    HalDisplayString("ATDISK: ISR\n");
     controllerExtension = Context;
 
     //
@@ -3360,6 +3382,7 @@ Return Value:
 
     UNREFERENCED_PARAMETER( Dpc );
     UNREFERENCED_PARAMETER( SystemArgument1 );
+    HalDisplayString("ATDISK: DPC\n");
 
     deviceObject = DeferredContext;
     diskExtension = deviceObject->DeviceExtension;
@@ -4498,9 +4521,14 @@ ResetCodePath:;
     // reentry to this routine.
     //
 
+    DbgPrint("ATDISK: DPC state rs=%x expectIRQ=%u remReq=%x remXfer=%x\n",
+             returnStatus, expectingAnInterrupt,
+             diskExtension->RemainingRequestLength,
+             diskExtension->RemainingTransferLength);
     if ( ( returnStatus == STATUS_SUCCESS ) &&
         ( !expectingAnInterrupt ) &&
         ( diskExtension->RemainingRequestLength != 0 ) ) {
+        HalDisplayString("ATDISK: DPC programming next transfer\n");
 
         //
         // First calculate starting sector and length of the new transfer.
@@ -4570,6 +4598,7 @@ ResetCodePath:;
     if ( ( returnStatus == STATUS_DISK_OPERATION_FAILED ) ||
         ( !expectingAnInterrupt ) &&
         ( diskExtension->RemainingRequestLength == 0 ) ) {
+        HalDisplayString("ATDISK: DPC completing IRP\n");
 
         if ( returnStatus == STATUS_SUCCESS ) {
 
@@ -4615,7 +4644,9 @@ ResetCodePath:;
 
         IoFreeController( controllerExtension->ControllerObject );
 
+        HalDisplayString("ATDISK: DPC AtFinishPacket\n");
         AtFinishPacket( diskExtension, returnStatus );
+        HalDisplayString("ATDISK: DPC AtFinishPacket done\n");
     }                                       // request done or error encountered
 }
 

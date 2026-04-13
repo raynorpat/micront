@@ -455,6 +455,9 @@ def build_micront_boot_disk(
     nls_ansi_path: str,
     nls_oem_path: str,
     nls_lang_path: str,
+    ntdll_path: str | None = None,
+    smss_path: str | None = None,
+    hello_path: str | None = None,
 ) -> DiskImage:
     """Populate a disk image with the files NT expects on the boot volume.
 
@@ -478,6 +481,13 @@ def build_micront_boot_disk(
     img.add_file("System32/l_intl.nls",   nls_lang_path)
     img.add_file("System32/config/SYSTEM", hive_path)
 
+    if ntdll_path:
+        img.add_file("System32/ntdll.dll", ntdll_path)
+    if smss_path:
+        img.add_file("System32/smss.exe", smss_path)
+    if hello_path:
+        img.add_file("System32/Drivers/hello.sys", hello_path)
+
     return img
 
 
@@ -493,11 +503,19 @@ def main() -> None:
     ap.add_argument("--nls-ansi", default="boot/data/C_1252.NLS")
     ap.add_argument("--nls-oem",  default="boot/data/C_437.NLS")
     ap.add_argument("--nls-lang", default="boot/data/L_INTL.NLS")
+    ap.add_argument("--ntdll", default="NT/PUBLIC/SDK/LIB/I386/ntdll.dll")
+    ap.add_argument("--smss",  default="NT/PRIVATE/SM/SERVER/obj/i386/smss.exe")
+    ap.add_argument("--hello", default="NT/PUBLIC/SDK/LIB/I386/hello.sys")
     args = ap.parse_args()
+
+    def _opt(p): return p if Path(p).exists() else None
 
     img = build_micront_boot_disk(
         args.kernel, args.hal, args.hive,
         args.nls_ansi, args.nls_oem, args.nls_lang,
+        ntdll_path=_opt(args.ntdll),
+        smss_path=_opt(args.smss),
+        hello_path=_opt(args.hello),
     )
     img.write(args.out)
     # Emit companion C header next to the .raw (same stem, .h extension)
