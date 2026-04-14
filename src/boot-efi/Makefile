@@ -111,6 +111,7 @@ esp.img: BOOTIA32.EFI $(SYSTEM_SRCS)
 
 clean:
 	rm -f $(OBJS) loader.so BOOTIA32.EFI esp.img SYSTEM
+	rm -f *.out *.log *.fd
 
 # Inspect the built ESP: FAT variant + recursive directory listing.
 info: esp.img

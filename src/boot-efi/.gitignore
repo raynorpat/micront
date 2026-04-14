@@ -5,3 +5,4 @@
 *.fd
 *.log
 SYSTEM
+*.out

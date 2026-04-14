@@ -1,0 +1,55 @@
+# MicroNT UEFI loader — gdb stub helpers.
+#
+# Use:
+#   shell 1: GDB=1 ./boot.sh
+#   shell 2: gdb -x gdb.init
+#
+# QEMU on i386 advertises x86_64 register layout; tell gdb we're 32-bit.
+set architecture i386
+set disassembly-flavor intel
+
+target remote :1234
+
+# Useful breakpoints to find what jumps into the LoaderBlock arena.
+# The arena lives somewhere around 0x856370xx; the kernel triple-faults
+# after reaching some byte inside it. Hardware breakpoints (hbreak) work
+# on emulated guests where the page might not yet be writable.
+#
+# Adjust these addresses to whatever boot.sh prints for the LPB arena.
+# Example (from a recent run):
+#   [main] LPB kseg0=0x85637000  kernel_entry=0x80112ff6
+#
+# Set a watchpoint on the arena's first 0x200 bytes — fires when kernel
+# writes there. Or break at the suspected fault EIP:
+#   hbreak *0x856370f1
+#
+# To inspect kernel image memory by file offset:
+#   add-symbol-file ../NT/PRIVATE/NTOS/INIT/UP/obj/i386/ntoskrnl.exe 0x80100000
+
+define jb
+  # "jump back" — show the call stack guess by walking saved EBPs.
+  printf "EBP chain (manual unwind):\n"
+  set $bp = $ebp
+  set $i = 0
+  while $bp != 0 && $i < 16
+    printf "  #%d  ebp=%p  saved-eip=%p\n", $i, $bp, *(unsigned int*)($bp + 4)
+    set $bp = *(unsigned int*)$bp
+    set $i = $i + 1
+  end
+end
+
+define stk
+  # "stack" — dump 32 dwords from current ESP.
+  x/32xw $esp
+end
+
+define regs
+  # "registers" — quick essential dump.
+  printf "EIP=%08x  ESP=%08x  EBP=%08x  CR2=%08x\n", $eip, $esp, $ebp, $cr2
+  printf "EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", $eax, $ebx, $ecx, $edx
+  printf "ESI=%08x  EDI=%08x  CS=%04x SS=%04x DS=%04x FS=%04x\n", $esi, $edi, $cs, $ss, $ds, $fs
+end
+
+# Continue boot until the kernel handoff prints 'K' (or arrange a useful
+# break with `hbreak <addr>` before continuing).
+echo \nGdb attached. Useful: regs / stk / jb / continue\n

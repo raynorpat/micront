@@ -13,6 +13,14 @@ if [ ! -f OVMF32_VARS_4M.fd ]; then
     cp /usr/share/OVMF/OVMF32_VARS_4M.fd OVMF32_VARS_4M.fd
 fi
 
+# GDB=1 enables QEMU's gdb-stub on :1234 and freezes CPU until gdb attaches.
+# Connect with `gdb -x gdb.init` from a second shell.
+GDB_FLAGS=""
+if [ "${GDB:-0}" = "1" ]; then
+    GDB_FLAGS="-s -S"
+    echo "[boot.sh] gdb-stub on :1234, CPU frozen — attach with: gdb -x gdb.init"
+fi
+
 #
 # Serial: COM1 (loader) + COM2 (kernel debug) both multiplexed to stdio.
 # QEMU chardev mux-on merges both streams to the same terminal — output
@@ -24,6 +32,6 @@ exec qemu-system-i386 -machine q35 \
     -chardev stdio,id=serialmux,mux=on \
     -serial chardev:serialmux \
     -serial chardev:serialmux \
-    -d int,cpu_reset -D qemu.log \
+    -d int,cpu_reset,in_asm -D qemu.log \
     -no-reboot \
-    -display none
+    -display none $GDB_FLAGS

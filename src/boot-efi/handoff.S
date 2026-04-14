@@ -37,10 +37,14 @@ handoff:
     fninit
     fnclex
 
-    /* Diagnostic: poke 'K' to COM1 (0x3F8) so we know we reached the jump. */
+    /* Diagnostic: poke 'K' to COM1 (0x3F8) so we know we reached the jump.
+     * Save/restore eax around it — `mov $'K', %al` clobbers the low byte
+     * of eax, which holds the kernel entry pointer. Learned the hard way. */
+    pushl   %eax
     movw    $0x3F8, %dx
     movb    $'K', %al
     outb    %al, %dx
+    popl    %eax
 
     /* Push loader_block as KiSystemStartup's argument, then call via eax.
      * KiSystemStartup never returns. */

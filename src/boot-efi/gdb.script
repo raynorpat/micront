@@ -1,0 +1,28 @@
+set pagination off
+set confirm off
+set architecture i386
+set disassembly-flavor intel
+target remote :1234
+source ../ntoskrnl.gdb
+source ../hal.gdb
+
+# Only 4 HW breakpoints available on x86. Use SOFTWARE breakpoints and
+# let gdb write INT3s on demand — they persist across paging changes
+# because they're memory bytes. At virtual KSEG0 addresses the kernel
+# will eventually execute them.
+# PE entry thunk, real KiSystemStartup, RtlSetBits, HalInitSystem,
+# KeBugCheckEx — first one to be reached tells us how far kernel got.
+break *0x80112ff6
+break *0x801b1128
+break *$RtlSetBits
+break *$HalInitSystem
+break *$KeBugCheckEx
+
+printf "\nBreakpoints armed. Continuing...\n"
+continue
+
+printf "\n\n=== HIT BREAKPOINT ===\n"
+info registers
+printf "\n--- 8 dwords from ESP ---\n"
+x/8xw $esp
+quit

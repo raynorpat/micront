@@ -102,7 +102,11 @@ EFI_STATUS mmu_alloc_at(UINTN pages, PageKind kind,
  *===========================================================================*/
 
 #define IDENTITY_MB       256
-#define PTS_FOR_RANGE     (IDENTITY_MB / 4)   /* each PT = 4 MB */
+#define PTS_PER_ALIAS     (IDENTITY_MB / 4)   /* each PT = 4 MB, per alias */
+/* Two aliases (identity + KSEG0) get their OWN PT pages. Matches the
+ * multiboot loader; prevents kernel self-map edits on KSEG0 PTs from
+ * bleeding into identity view. +1 for the HAL PT at PDE[1023]. */
+#define PTS_TOTAL         (PTS_PER_ALIAS * 2 + 1)
 #define PAGE_PRESENT      0x001u
 #define PAGE_RW           0x002u
 #define PAGE_USER         0x004u
@@ -152,7 +156,7 @@ EFI_STATUS mmu_alloc_reserved(void) {
     s = mmu_alloc(4, PK_MEMORY_DATA, &g_phys_idlestack);    if (EFI_ERROR(s)) return s;
     s = mmu_alloc(1, PK_MEMORY_DATA, &g_phys_gdt);          if (EFI_ERROR(s)) return s;
     s = mmu_alloc(1, PK_MEMORY_DATA, &g_phys_idt);          if (EFI_ERROR(s)) return s;
-    s = mmu_alloc(PTS_FOR_RANGE + 1, PK_MEMORY_DATA, &g_phys_pts);
+    s = mmu_alloc(PTS_TOTAL, PK_MEMORY_DATA, &g_phys_pts);
     if (EFI_ERROR(s)) return s;
 
     com1_puts("[mmu] reserved core pages\n");
@@ -228,39 +232,50 @@ static void build_tss(void *tss) {
 static void build_page_tables(void) {
     UINT32 *pd  = (UINT32 *)(UINTN)g_phys_pd;
     UINT32 *pts = (UINT32 *)(UINTN)g_phys_pts;
-    UINT32 *hal_pt;
+    UINT32 *id_pts   = pts;                            /* identity PTs */
+    UINT32 *kseg_pts = pts + PTS_PER_ALIAS * 1024;     /* KSEG0 PTs */
+    UINT32 *hal_pt   = pts + 2 * PTS_PER_ALIAS * 1024; /* HAL PT */
+    int kseg0_pd_idx = (int)(KSEG0_BASE >> 22);
 
-    /* Zero PD + all PTs (shared pool). */
+    /* Zero PD + full PT pool. */
     for (int i = 0; i < 1024; i++) pd[i] = 0;
-    for (int i = 0; i < (PTS_FOR_RANGE + 1) * 1024; i++) pts[i] = 0;
+    for (int i = 0; i < PTS_TOTAL * 1024; i++) pts[i] = 0;
 
-    /* Fill the identity-range PTs: phys P at PT[P >> 12]. */
-    for (int pt_idx = 0; pt_idx < PTS_FOR_RANGE; pt_idx++) {
-        UINT32 *pt = pts + pt_idx * 1024;
+    /* Fill identity and KSEG0 PTs with the same phys-mapping, but using
+     * SEPARATE PT pages. Skip page 0 in both to preserve NULL-pointer
+     * detection and keep the BIOS/UEFI reserved region off our radar. */
+    for (int pt_idx = 0; pt_idx < PTS_PER_ALIAS; pt_idx++) {
+        UINT32 *id_pt   = id_pts   + pt_idx * 1024;
+        UINT32 *kseg_pt = kseg_pts + pt_idx * 1024;
         for (int j = 0; j < 1024; j++) {
             UINT32 page_phys = ((UINT32)pt_idx << 22) | ((UINT32)j << 12);
-            pt[j] = page_phys | PAGE_PRESENT | PAGE_RW;
+            if (pt_idx == 0 && j == 0) {
+                id_pt[j]   = 0;   /* phys page 0 unmapped */
+                kseg_pt[j] = 0;
+            } else {
+                id_pt[j]   = page_phys | PAGE_PRESENT | PAGE_RW;
+                kseg_pt[j] = page_phys | PAGE_PRESENT | PAGE_RW;
+            }
         }
     }
 
-    /* PDEs 0..PTS_FOR_RANGE-1: identity mapping. */
-    for (int i = 0; i < PTS_FOR_RANGE; i++) {
-        UINT32 pt_phys = (UINT32)(UINTN)(pts + i * 1024);
+    /* PDEs 0..PTS_PER_ALIAS-1: identity mapping (lives only long enough
+     * for us to survive the CR3 load + jmp into KSEG0). */
+    for (int i = 0; i < PTS_PER_ALIAS; i++) {
+        UINT32 pt_phys = (UINT32)(UINTN)(id_pts + i * 1024);
         pd[i] = pt_phys | PAGE_PRESENT | PAGE_RW;
     }
 
-    /* PDEs 512..512+PTS_FOR_RANGE-1: KSEG0 mirror, same PTs as identity. */
-    int kseg0_pd_idx = (int)(KSEG0_BASE >> 22);
-    for (int i = 0; i < PTS_FOR_RANGE; i++) {
-        UINT32 pt_phys = (UINT32)(UINTN)(pts + i * 1024);
+    /* PDEs KSEG0..KSEG0+PTS_PER_ALIAS-1: permanent KSEG0 mirror. */
+    for (int i = 0; i < PTS_PER_ALIAS; i++) {
+        UINT32 pt_phys = (UINT32)(UINTN)(kseg_pts + i * 1024);
         pd[kseg0_pd_idx + i] = pt_phys | PAGE_PRESENT | PAGE_RW;
     }
 
     /* Self-map PDE[768] — kernel's MiGetPteAddress walks here. */
     pd[768] = (UINT32)(UINTN)g_phys_pd | PAGE_PRESENT | PAGE_RW;
 
-    /* HAL page table at PDE[1023]; uses the extra PT we reserved. */
-    hal_pt = pts + PTS_FOR_RANGE * 1024;
+    /* HAL page table at PDE[1023]; uses the dedicated PT we reserved. */
     pd[1023] = (UINT32)(UINTN)hal_pt | PAGE_PRESENT | PAGE_RW;
 
     /* HAL PT: PCR at VA 0xFFDFF000 (PTE 511), SharedUserData at 0xFFDF0000
