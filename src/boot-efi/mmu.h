@@ -1,0 +1,81 @@
+/*
+ * Page-table construction + physical page allocator with NT-type intent.
+ *
+ *   KSEG0 plan: 0x80000000 → phys 0x00000000, 1-to-1 for the first
+ *   KSEG0_SIZE bytes. Every page we AllocatePages from UEFI at phys P
+ *   becomes KSEG0_BASE|P at handoff; internal pointers in NT structures
+ *   are written in KSEG0 space directly — no fixup pass needed.
+ *
+ *   All reserved-page allocation funnels through mmu_alloc() so the
+ *   registry captures every allocation's intended NT memory type.
+ *   memmap.c consults the registry to emit accurate NT descriptors.
+ */
+#ifndef _BOOT_EFI_MMU_H_
+#define _BOOT_EFI_MMU_H_
+
+#include <efi.h>
+
+#define KSEG0_BASE 0x80000000UL
+#define KSEG0(phys) ((void *)(unsigned long)((unsigned long)(phys) | KSEG0_BASE))
+
+/*
+ * NT memory type intent for each allocation we make.  Maps 1:1 to
+ * MEMORY_TYPE values (defined in ARC loader headers); we keep a local
+ * enum so mmu/fs code doesn't have to drag NT headers in.  The mapping
+ * is applied in loaderblock.c when it emits MEMORY_ALLOCATION_DESCRIPTORs.
+ */
+typedef enum {
+    PK_FREE,                /* LoaderFree — unused, caller shouldn't use this */
+    PK_KERNEL_IMAGE,        /* LoaderSystemCode — ntoskrnl.exe */
+    PK_HAL_IMAGE,           /* LoaderHalCode — hal.dll */
+    PK_BOOT_DRIVER,         /* LoaderBootDriver — *.sys */
+    PK_REGISTRY,            /* LoaderRegistryData — hive */
+    PK_NLS,                 /* LoaderNlsData — c_*.nls, l_*.nls */
+    PK_PCR,                 /* LoaderStartupPcrPage — PCR + shared user data */
+    PK_MEMORY_DATA,         /* LoaderMemoryData — PD/PT/TSS/LoaderBlock/stacks */
+    PK_FIRMWARE_PERM,       /* LoaderFirmwarePermanent — ACPI/runtime svc/MMIO */
+    PK_FIRMWARE_TEMP,       /* LoaderFirmwareTemporary — reclaimable */
+} PageKind;
+
+typedef struct {
+    EFI_PHYSICAL_ADDRESS phys;
+    UINTN                pages;
+    PageKind             kind;
+} AllocEntry;
+
+/* Allocate `pages` contiguous pages; records the allocation in the
+ * registry. phys is returned; page contents are NOT zeroed — caller
+ * owns that. Fails if pages can't be allocated OR registry is full. */
+EFI_STATUS mmu_alloc(UINTN pages, PageKind kind,
+                     EFI_PHYSICAL_ADDRESS *out_phys);
+
+/* Allocate at a specific physical address (UEFI AllocateAddress mode).
+ * Required for /FIXED PE images that can't be rebased (e.g. ntoskrnl).
+ * Returns EFI_NOT_FOUND if the range is occupied. */
+EFI_STATUS mmu_alloc_at(UINTN pages, PageKind kind,
+                        EFI_PHYSICAL_ADDRESS preferred,
+                        EFI_PHYSICAL_ADDRESS *out_phys);
+
+/* Read-only registry access for memmap.c. */
+UINTN             mmu_registry_count(void);
+const AllocEntry *mmu_registry_entry(UINTN i);
+
+/* Pre-exit: reserve pages for PD, PTs, PCR, TSS, idle stack, loader block.
+ * Each page is tracked in the registry with the right NT type. */
+EFI_STATUS mmu_alloc_reserved(void);
+
+/* Post-exit: build page-table content + activate paging. Runs with no
+ * UEFI services available. */
+void mmu_build_and_activate(void);
+
+/* Accessors for loaderblock.c so it can write KSEG0 pointers into
+ * LoaderBlock.KernelStack, .Thread, etc. */
+EFI_PHYSICAL_ADDRESS mmu_idle_stack_base(void);
+EFI_PHYSICAL_ADDRESS mmu_tss_base(void);
+EFI_PHYSICAL_ADDRESS mmu_pd_base(void);
+
+/* Top of the idle stack as a KSEG0 virtual address — used by handoff.S
+ * so the kernel runs on a stack that survives the low-2GB unmap. */
+unsigned long mmu_handoff_stack_top(void);
+
+#endif

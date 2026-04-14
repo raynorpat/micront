@@ -1,0 +1,7 @@
+*.EFI
+*.o
+*.so
+*.img
+*.fd
+*.log
+SYSTEM
