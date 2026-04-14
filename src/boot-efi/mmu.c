@@ -152,7 +152,14 @@ EFI_STATUS mmu_alloc_reserved(void) {
     s = mmu_alloc(1, PK_MEMORY_DATA, &g_phys_pd);           if (EFI_ERROR(s)) return s;
     s = mmu_alloc(1, PK_PCR,          &g_phys_pcr);          if (EFI_ERROR(s)) return s;
     s = mmu_alloc(1, PK_PCR,          &g_phys_sud);          if (EFI_ERROR(s)) return s;
-    s = mmu_alloc(2, PK_MEMORY_DATA, &g_phys_tss);          if (EFI_ERROR(s)) return s;
+    /* KTSS is ~8364 bytes: 0x68 header + KIIO_ACCESS_MAP (32-byte
+     * DirectionMap + 8196-byte IoMap) + 32-byte IntDirectionMap. Kernel's
+     * KiInitializeTSS (ntoskrnl .text ~0x801b2279) fills the bitmap with
+     * `rep stos` of 0x801 dwords starting at TSS+0x88, which overflows
+     * any allocation smaller than 3 pages. 2 pages = silent corruption
+     * of whatever is in phys-adjacent memory (fastfat headers, in our case,
+     * which then makes PsLoadedModule scan STOP 0x1E on the driver). */
+    s = mmu_alloc(3, PK_MEMORY_DATA, &g_phys_tss);          if (EFI_ERROR(s)) return s;
     s = mmu_alloc(4, PK_MEMORY_DATA, &g_phys_idlestack);    if (EFI_ERROR(s)) return s;
     s = mmu_alloc(1, PK_MEMORY_DATA, &g_phys_gdt);          if (EFI_ERROR(s)) return s;
     s = mmu_alloc(1, PK_MEMORY_DATA, &g_phys_idt);          if (EFI_ERROR(s)) return s;
@@ -216,7 +223,7 @@ static void build_gdt(gdt_entry_t *gdt, UINT32 gdt_kseg0,
 
 static void build_tss(void *tss) {
     UINT8 *p = (UINT8 *)tss;
-    for (unsigned i = 0; i < 2 * 4096; i++) p[i] = 0;
+    for (unsigned i = 0; i < 3 * 4096; i++) p[i] = 0;
     /* Classic KTSS: 104 bytes + optional I/O bitmap. I/O map base = size
      * of TSS => no I/O bitmap present. */
     *(UINT16 *)(p + 0x66) = 0x68;   /* IoMapBase = 104 */
@@ -241,21 +248,38 @@ static void build_page_tables(void) {
     for (int i = 0; i < 1024; i++) pd[i] = 0;
     for (int i = 0; i < PTS_TOTAL * 1024; i++) pts[i] = 0;
 
-    /* Fill identity and KSEG0 PTs with the same phys-mapping, but using
-     * SEPARATE PT pages. Skip page 0 in both to preserve NULL-pointer
-     * detection and keep the BIOS/UEFI reserved region off our radar. */
+    /* Identity PTs: blanket-map 0..IDENTITY_MB (minus page 0). Only needed
+     * briefly so we survive the CR3 swap; kernel tears these PDEs down in
+     * MiInitMachineDependent. */
     for (int pt_idx = 0; pt_idx < PTS_PER_ALIAS; pt_idx++) {
-        UINT32 *id_pt   = id_pts   + pt_idx * 1024;
-        UINT32 *kseg_pt = kseg_pts + pt_idx * 1024;
+        UINT32 *id_pt = id_pts + pt_idx * 1024;
         for (int j = 0; j < 1024; j++) {
             UINT32 page_phys = ((UINT32)pt_idx << 22) | ((UINT32)j << 12);
             if (pt_idx == 0 && j == 0) {
-                id_pt[j]   = 0;   /* phys page 0 unmapped */
-                kseg_pt[j] = 0;
+                id_pt[j] = 0;  /* NULL-pointer detection */
             } else {
-                id_pt[j]   = page_phys | PAGE_PRESENT | PAGE_RW;
-                kseg_pt[j] = page_phys | PAGE_PRESENT | PAGE_RW;
+                id_pt[j] = page_phys | PAGE_PRESENT | PAGE_RW;
             }
+        }
+    }
+
+    /* KSEG0 PTs: map ONLY pages we registered (kernel, HAL, drivers, PCR,
+     * TSS, stacks, GDT, IDT, LPB arena, PT pool itself, registry, NLS).
+     * Every other phys page stays unmapped in KSEG0 so the kernel's PDE
+     * walk (NT MM/I386/INIT386.C:457-498) does NOT set RefCount=1 on free
+     * RAM — leaving those PFN entries at 0 so the descriptor walk (:572)
+     * adds LoaderFree/LoaderFirmwareTemporary pages to the free list.
+     * Blanket-mapping here was the PFN_LIST_CORRUPT root cause. */
+    for (UINTN r = 0; r < g_reg_n; r++) {
+        UINT32 base = (UINT32)g_reg[r].phys;
+        UINT32 pages = (UINT32)g_reg[r].pages;
+        for (UINT32 p = 0; p < pages; p++) {
+            UINT32 page_phys = base + (p << 12);
+            UINT32 pt_idx = page_phys >> 22;
+            UINT32 pte_idx = (page_phys >> 12) & 0x3FF;
+            if (pt_idx >= PTS_PER_ALIAS) continue;   /* out of KSEG0 window */
+            kseg_pts[pt_idx * 1024 + pte_idx] =
+                page_phys | PAGE_PRESENT | PAGE_RW;
         }
     }
 
@@ -309,8 +333,9 @@ void mmu_build_and_activate(void) {
     UINT32 gdt_kseg0 = (UINT32)(KSEG0_BASE | g_phys_gdt);
     UINT32 idt_kseg0 = (UINT32)(KSEG0_BASE | g_phys_idt);
     UINT32 tss_kseg0 = (UINT32)(KSEG0_BASE | g_phys_tss);
-    /* TSS limit covers the full 2-page allocation; I/O bitmap unused. */
-    UINT32 tss_limit = 2 * 4096 - 1;
+    /* TSS limit covers the full 3-page allocation (enough for NT's KTSS
+     * with its I/O bitmap and interrupt redirection map). */
+    UINT32 tss_limit = 3 * 4096 - 1;
 
     /* UEFI leaves interrupts enabled. Our IDT will be all zeros (non-
      * present gates) post-lidt, so any interrupt would triple-fault us.

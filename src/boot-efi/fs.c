@@ -152,3 +152,88 @@ close_err:
     uefi_call_wrapper(file->Close, 1, file);
     return status;
 }
+
+EFI_STATUS fs_file_size(const CHAR16 *path, UINTN *out_size) {
+    EFI_FILE_PROTOCOL *file;
+    EFI_FILE_INFO     *info = NULL;
+    UINTN              info_size = 0;
+    EFI_STATUS         status;
+
+    if (!g_root) return EFI_NOT_READY;
+
+    status = uefi_call_wrapper(g_root->Open, 5, g_root, &file,
+                               (CHAR16 *)path, EFI_FILE_MODE_READ, 0);
+    if (EFI_ERROR(status)) return status;
+
+    status = uefi_call_wrapper(file->GetInfo, 4, file,
+                               (EFI_GUID *)&g_file_info_guid,
+                               &info_size, NULL);
+    if (status != EFI_BUFFER_TOO_SMALL) goto done;
+
+    status = uefi_call_wrapper(BS->AllocatePool, 3,
+                               EfiLoaderData, info_size, (void **)&info);
+    if (EFI_ERROR(status)) goto done;
+
+    status = uefi_call_wrapper(file->GetInfo, 4, file,
+                               (EFI_GUID *)&g_file_info_guid,
+                               &info_size, info);
+    if (!EFI_ERROR(status)) *out_size = (UINTN)info->FileSize;
+
+    uefi_call_wrapper(BS->FreePool, 1, info);
+done:
+    uefi_call_wrapper(file->Close, 1, file);
+    return status;
+}
+
+EFI_STATUS fs_read_into(const CHAR16 *path, void *buf, UINTN buf_size,
+                        UINTN *out_size) {
+    EFI_FILE_PROTOCOL *file;
+    EFI_FILE_INFO     *info = NULL;
+    UINTN              info_size = 0;
+    UINTN              size;
+    EFI_STATUS         status;
+
+    if (!g_root) return EFI_NOT_READY;
+
+    com1_puts("[fs] read_into ");
+    put_utf16(path);
+
+    status = uefi_call_wrapper(g_root->Open, 5, g_root, &file,
+                               (CHAR16 *)path, EFI_FILE_MODE_READ, 0);
+    if (EFI_ERROR(status)) { com1_puts(" - open failed\n"); return status; }
+
+    status = uefi_call_wrapper(file->GetInfo, 4, file,
+                               (EFI_GUID *)&g_file_info_guid,
+                               &info_size, NULL);
+    if (status != EFI_BUFFER_TOO_SMALL) goto close_err2;
+
+    status = uefi_call_wrapper(BS->AllocatePool, 3,
+                               EfiLoaderData, info_size, (void **)&info);
+    if (EFI_ERROR(status)) goto close_err2;
+
+    status = uefi_call_wrapper(file->GetInfo, 4, file,
+                               (EFI_GUID *)&g_file_info_guid,
+                               &info_size, info);
+    if (EFI_ERROR(status)) goto free_info2;
+
+    size = (UINTN)info->FileSize;
+    if (size > buf_size) {
+        com1_puts(" - buffer too small\n");
+        status = EFI_BUFFER_TOO_SMALL;
+        goto free_info2;
+    }
+
+    status = uefi_call_wrapper(file->Read, 3, file, &size, buf);
+    if (EFI_ERROR(status)) { com1_puts(" - read failed\n"); goto free_info2; }
+
+    *out_size = size;
+    com1_puts(" -> ");
+    com1_put_dec((unsigned long)size);
+    com1_puts(" bytes\n");
+
+free_info2:
+    uefi_call_wrapper(BS->FreePool, 1, info);
+close_err2:
+    uefi_call_wrapper(file->Close, 1, file);
+    return status;
+}

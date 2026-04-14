@@ -63,10 +63,48 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
         fs_read(L"\\System32\\Drivers\\atdisk.sys",    PK_FIRMWARE_TEMP, &blob_atdisk,  &sz_atdisk);
         fs_read(L"\\System32\\Drivers\\fastfat.sys",   PK_FIRMWARE_TEMP, &blob_fastfat, &sz_fastfat);
         fs_read(L"\\System32\\config\\SYSTEM",         PK_REGISTRY,     &buf, &size); (void)size;
-        fs_read(L"\\System32\\c_1252.nls",             PK_NLS,          &buf, &sz_dummy);
-        fs_read(L"\\System32\\c_437.nls",              PK_NLS,          &buf, &sz_dummy);
-        fs_read(L"\\System32\\l_intl.nls",             PK_NLS,          &buf, &sz_dummy);
-        (void)buf;
+        (void)buf; (void)sz_dummy;
+    }
+
+    /* NLS: NT's Phase1Initialization (NTOS/INIT/INIT.C:392) computes
+     * UnicodeCaseTableData and OemCodePageData as BYTE OFFSETS from
+     * AnsiCodePageData, so the three tables MUST live in one contiguous
+     * block. Probe each file's size, lay them out page-aligned back-to-
+     * back, alloc once, read each into its slot. */
+    {
+        struct { const CHAR16 *path; UINTN size, off; } nls[] = {
+            /* Order matches NLS_DATA_BLOCK: Ansi, Oem, UnicodeCase */
+            { L"\\System32\\c_1252.nls", 0, 0 },
+            { L"\\System32\\c_437.nls",  0, 0 },
+            { L"\\System32\\l_intl.nls", 0, 0 },
+        };
+        const UINTN N = sizeof(nls)/sizeof(nls[0]);
+        UINTN total = 0;
+        for (UINTN i = 0; i < N; i++) {
+            if (fs_file_size(nls[i].path, &nls[i].size) != EFI_SUCCESS) {
+                com1_puts("[main] NLS size probe failed\n"); goto halt;
+            }
+            nls[i].off = total;
+            total += (nls[i].size + 0xFFF) & ~0xFFFu;  /* page-align slab */
+        }
+
+        EFI_PHYSICAL_ADDRESS nls_phys;
+        if (mmu_alloc((total + 0xFFF) >> 12, PK_NLS, &nls_phys) != EFI_SUCCESS) {
+            com1_puts("[main] NLS alloc failed\n"); goto halt;
+        }
+        {
+            UINT8 *p = (UINT8 *)(UINTN)nls_phys;
+            for (UINTN i = 0; i < total; i++) p[i] = 0;
+        }
+
+        UINTN nread;
+        for (UINTN i = 0; i < N; i++) {
+            fs_read_into(nls[i].path,
+                         (UINT8 *)(UINTN)nls_phys + nls[i].off,
+                         nls[i].size, &nread);
+        }
+
+        loaderblock_set_nls(nls_phys, nls[0].off, nls[1].off, nls[2].off);
     }
 
     /* Stage kernel + HAL + boot drivers via the PE loader: sections to

@@ -58,6 +58,13 @@ EFI_STATUS loaderblock_stage_pe(const void *file_blob, UINTN file_size,
                                 UINTN *out_size,
                                 UINT32 *out_entry_offset);
 
+/* Must be called before loaderblock_build() so NlsData pointers can be
+ * written. The three code-page tables MUST live in one contiguous block
+ * (NT's Phase1Initialization computes UnicodeCaseTableData as an offset
+ * from AnsiCodePageData — see NTOS/INIT/INIT.C:392). */
+void loaderblock_set_nls(EFI_PHYSICAL_ADDRESS base_phys,
+                         UINTN ansi_off, UINTN oem_off, UINTN uni_off);
+
 EFI_STATUS loaderblock_build(void);
 
 /* After build() + all images staged, wire LoadOrderList and BootDriverList

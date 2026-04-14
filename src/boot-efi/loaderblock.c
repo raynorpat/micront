@@ -147,6 +147,23 @@ static void init_list_head_kseg0(NT_LIST_ENTRY *head_phys) {
 static LOADER_PARAMETER_BLOCK *g_lpb_phys        = 0;
 static UINT32                  g_kernel_entry_v  = 0;
 
+/* NLS: main.c reads all three code-page files into one contiguous block
+ * and hands us the base phys + per-file offsets. NT's Phase1Initialization
+ * computes UnicodeCaseTableData as (base + offset), so the three pointers
+ * MUST describe one contiguous mapping. */
+static EFI_PHYSICAL_ADDRESS g_nls_base_phys = 0;
+static UINTN                g_nls_ansi_off  = 0;
+static UINTN                g_nls_oem_off   = 0;
+static UINTN                g_nls_uni_off   = 0;
+
+void loaderblock_set_nls(EFI_PHYSICAL_ADDRESS base_phys,
+                         UINTN ansi_off, UINTN oem_off, UINTN uni_off) {
+    g_nls_base_phys = base_phys;
+    g_nls_ansi_off  = ansi_off;
+    g_nls_oem_off   = oem_off;
+    g_nls_uni_off   = uni_off;
+}
+
 unsigned long loaderblock_handoff_ptr(void) {
     return g_lpb_phys ? (unsigned long)kseg0_of(g_lpb_phys) : 0;
 }
@@ -171,26 +188,28 @@ EFI_STATUS loaderblock_build(void) {
      * AFTER memmap_capture — see note on MapKey invalidation. The list
      * is initialized empty here; linking happens post-capture. */
 
-    /* --- NLS / Registry: find the registry entries and build the NLS block */
+    /* --- Registry hive pointer (single PK_REGISTRY entry) */
     {
-        NLS_DATA_BLOCK *nls = arena_alloc(sizeof *nls, 4);
         UINTN n = mmu_registry_count();
-        UINTN nls_seen = 0;
         for (UINTN i = 0; i < n; i++) {
             const AllocEntry *e = mmu_registry_entry(i);
-            void *kseg0 = (void *)(UINTN)(KSEG0_BASE | (UINT32)e->phys);
-            if (e->kind == PK_NLS) {
-                /* Order: c_1252 -> Ansi, c_437 -> Oem, l_intl -> UnicodeCase
-                 * main.c loads them in this order; we tag by appearance. */
-                if      (nls_seen == 0) nls->AnsiCodePageData     = kseg0;
-                else if (nls_seen == 1) nls->OemCodePageData      = kseg0;
-                else                    nls->UnicodeCaseTableData = kseg0;
-                nls_seen++;
-            } else if (e->kind == PK_REGISTRY) {
-                lpb->RegistryBase   = kseg0;
+            if (e->kind == PK_REGISTRY) {
+                lpb->RegistryBase   = (void *)(UINTN)(KSEG0_BASE | (UINT32)e->phys);
                 lpb->RegistryLength = (ULONG)(e->pages << 12);
+                break;
             }
         }
+    }
+
+    /* --- NLS: main.c allocated one contiguous block via loaderblock_set_nls.
+     * Three KSEG0 pointers into that block — offsets match the concatenated
+     * layout the kernel's Phase1Initialization expects. */
+    {
+        NLS_DATA_BLOCK *nls = arena_alloc(sizeof *nls, 4);
+        UINT32 base_kseg0 = KSEG0_BASE | (UINT32)g_nls_base_phys;
+        nls->AnsiCodePageData     = (void *)(UINTN)(base_kseg0 + g_nls_ansi_off);
+        nls->OemCodePageData      = (void *)(UINTN)(base_kseg0 + g_nls_oem_off);
+        nls->UnicodeCaseTableData = (void *)(UINTN)(base_kseg0 + g_nls_uni_off);
         lpb->NlsData = kseg0_of(nls);
     }
 

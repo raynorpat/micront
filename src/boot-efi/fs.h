@@ -27,4 +27,16 @@ EFI_STATUS fs_init(EFI_HANDLE ImageHandle);
 EFI_STATUS fs_read(const CHAR16 *path, PageKind kind,
                    void **out_buf, UINTN *out_size);
 
+/*
+ * Read `path` into a caller-provided buffer of at least `buf_size` bytes.
+ * Does NOT allocate or register anything — the buffer must already exist
+ * (e.g. a slab inside a larger contiguous allocation). On success,
+ * *out_size is the actual byte count read.
+ */
+EFI_STATUS fs_read_into(const CHAR16 *path, void *buf, UINTN buf_size,
+                        UINTN *out_size);
+
+/* Return the byte size of `path` without reading its contents. */
+EFI_STATUS fs_file_size(const CHAR16 *path, UINTN *out_size);
+
 #endif
