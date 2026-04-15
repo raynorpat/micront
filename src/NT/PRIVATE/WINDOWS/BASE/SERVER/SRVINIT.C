@@ -23,6 +23,15 @@ Revision History:
 #include <vdmapi.h>
 #include "srvvdm.h"
 #include <stdio.h>
+#include <ntverp.h>
+
+//
+// Widen a narrow string literal at preprocessor time so the registry
+// default tracks VER_PRODUCTVERSION_STR from NTVERP.H — no more hand-
+// edited "3.50" drifting out of sync with the resource tuple.
+//
+#define BASESRV_WIDEN2(x) L ## x
+#define BASESRV_WIDEN(x)  BASESRV_WIDEN2(x)
 
 UNICODE_STRING BaseSrvVersionString;
 UNICODE_STRING BaseSrvBuildString;
@@ -32,7 +41,7 @@ UNICODE_STRING BaseSrvCSDString;
 RTL_QUERY_REGISTRY_TABLE BaseServerRegistryConfigurationTable[] = {
     {NULL,                      RTL_QUERY_REGISTRY_DIRECT,
      L"CurrentVersion",         &BaseSrvVersionString,
-     REG_SZ, L"3.50", 0},
+     REG_SZ, BASESRV_WIDEN(VER_PRODUCTVERSION_STR), 0},
 
     {NULL,                      RTL_QUERY_REGISTRY_DIRECT,
      L"CurrentBuildNumber",           &BaseSrvBuildString,

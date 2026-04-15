@@ -557,12 +557,29 @@ def build_micront_system_hive(profile: str = "headless") -> Hive:
 
 def main() -> None:
     import argparse
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import libversion as lv
+
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("output", nargs="?", default="SYSTEM",
                     help="path to write the hive to")
     ap.add_argument("--profile", choices=PROFILES, default="headless",
                     help="which registry layout to emit (default: headless)")
     args = ap.parse_args()
+
+    # Banner the stamp we're building against so CI logs pin hive <-> binary
+    # pairing. When the SOFTWARE hive lands, populate CurrentVersion /
+    # CurrentBuildNumber / CSDVersion from `stamp` so SRVINIT's registry
+    # read hits live values instead of the NTVERP-derived fallback.
+    try:
+        stamp = lv.parse_ntverp()
+        print(f"build stamp: NT {stamp.version_str} "
+              f"{stamp.current_build_number} {stamp.channel} {stamp.sha}")
+    except Exception as e:
+        print(f"build stamp: unavailable ({e})")
+
     h = build_micront_system_hive(profile=args.profile)
     size = h.write(args.output)
     print(f"SYSTEM hive ({args.profile}): {size} bytes -> {args.output}")
