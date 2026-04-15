@@ -100,6 +100,11 @@ src/NT/PRIVATE/RPC/RUNTIME/MTRT/mgmt_s.c
 # NDRMEM build copies linklist.cxx from MTRT (per its MAKEFILE.INC).
 src/NT/PRIVATE/RPC/NDRMEM/LINKLIST.CXX
 
+# advapi32 backing-stack midl-generated stubs.
+src/NT/PRIVATE/WINDOWS/SCREG/WINREG/regrpc.h
+src/NT/PRIVATE/WINDOWS/SCREG/WINREG/regrpc_c.c
+src/NT/PRIVATE/WINDOWS/SCREG/WINREG/regrpc_s.c
+
 # MIDL host-tool bootstrap outputs (built by build.sh sdktools phase).
 src/NT/PUBLIC/OAK/BIN/I386/midleb.exe
 src/NT/PUBLIC/OAK/BIN/I386/midlyacc.exe

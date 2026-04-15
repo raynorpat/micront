@@ -198,6 +198,31 @@ build_rpcrt4()  {
     run_nmake "$NT_ROOT/PRIVATE/RPC/RUNTIME/MTRT" "RPC/RUNTIME/MTRT - rpcrt4.dll (main RPC runtime)" makedll=1
 }
 
+# --- advapi32 stack ----------------------------------------------------------
+# advapi32.dll is a façade over four subsystems:
+#   - LSA (lsacomm, lsaudll, sys003)
+#   - EventLog (elfapi)
+#   - SCM (sclib, svcctrl)
+#   - Registry (winreg, wrlib, perflib, localreg)
+# Built bottom-up: each piece is a static .lib that advapi32 then aggregates.
+# Shared MIDL invocation for advapi32-stack interfaces. /D _M_IX86 /D _X86_
+# is needed so winnt.h's CONTEXT block becomes visible during midl pass
+# (same MIDL_PASS gate as MTRT/RTIFS).
+_midl_advapi_idl() {
+    local dir="$1"; shift
+    local extra_inc="${1:-}"; shift
+    local oak="D:\\PUBLIC\\OAK\\BIN\\I386"
+    local env="set PATH=$oak&& set INCLUDE=D:\\PUBLIC\\SDK\\INC;D:\\PUBLIC\\OAK\\INC;D:\\PUBLIC\\SDK\\INC\\CRT"
+    (
+        cd "$dir" || exit 1
+        for idl in "$@"; do
+            wine cmd /c "$env&& midl /ms_ext /c_ext /app_config /D MIDL_PASS /D _M_IX86 /D _X86_ $extra_inc $idl.idl" || exit 1
+        done
+    )
+}
+build_winreg_idl(){ _midl_advapi_idl "$NT_ROOT/PRIVATE/WINDOWS/SCREG/WINREG" "" regrpc; }
+build_wrlib()    { build_winreg_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SCREG/WINREG/LIB"  "WINREG/LIB - wrlib.lib"; }
+
 # --- Host tools (sdktools bootstrap phase) -----------------------------------
 # These are wine-executable host tools consumed by later build steps — not
 # targets shipped in the disk image. They land in PUBLIC/OAK/BIN/I386 so
