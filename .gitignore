@@ -72,6 +72,20 @@ src/NT/PUBLIC/SDK/LIB/I386/videoprt.exp
 src/NT/PUBLIC/SDK/LIB/I386/RpcNdrp.lib
 src/NT/PUBLIC/SDK/LIB/I386/rpcndr20.lib
 
+# MIDL host-tool bootstrap outputs (built by build.sh sdktools phase).
+src/NT/PUBLIC/OAK/BIN/I386/midleb.exe
+src/NT/PUBLIC/OAK/BIN/I386/midlyacc.exe
+src/NT/PUBLIC/OAK/BIN/I386/midlpg.exe
+src/NT/PUBLIC/OAK/BIN/I386/midl.exe
+# MIDL20 static libs (intermediate link inputs for midl.exe).
+src/NT/PRIVATE/RPC/MIDL20/lib/
+# Prebuilt .exe shipped in stuff/ — we bootstrap everything from source,
+# so reject any .exe under the MIDL tree (build outputs live elsewhere).
+src/NT/PRIVATE/RPC/MIDL20/**/*.exe
+src/NT/PRIVATE/RPC/MIDLNEW/**/*.exe
+src/NT/PRIVATE/RPC/MIDL20/**/*.EXE
+src/NT/PRIVATE/RPC/MIDLNEW/**/*.EXE
+
 # mc.exe-generated message resources. WINERROR.MC is the source;
 # winerror.h / winerror.rc / MSG00001.bin are rebuilt each time.
 src/NT/PRIVATE/WINDOWS/NLSMSG/winerror.h

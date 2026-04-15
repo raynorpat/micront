@@ -169,6 +169,49 @@ build_rpcndrp() { run_nmake "$NT_ROOT/PRIVATE/RPC/NDRLIB" "RPC/NDRLIB - NDR mars
 build_rpcndr20(){ run_nmake "$NT_ROOT/PRIVATE/RPC/NDR20"  "RPC/NDR20 - NDR 2.0 client/server support"; }
 build_rpcrt4()  { run_nmake "$NT_ROOT/PRIVATE/RPC/RUNTIME/MTRT" "RPC/RUNTIME/MTRT - rpcrt4.dll (main RPC runtime)" makedll=1; }
 
+# --- Host tools (sdktools bootstrap phase) -----------------------------------
+# These are wine-executable host tools consumed by later build steps — not
+# targets shipped in the disk image. They land in PUBLIC/OAK/BIN/I386 so
+# nmake rules can invoke them by bare name, same pattern as gensrv.
+#
+# MIDL bootstrap chain (for generating RPC stubs from IDL):
+#   midleb    — error-recovery DB generator (MIDLNEW/EREC)
+#   midlyacc  — custom yacc (MIDLNEW/YACC, bootstraps via shipped YACCP.EXE)
+#   midlpg    — parser post-generator (MIDLNEW/PG)
+#   midl      — the MIDL compiler itself (MIDL20/FRONT, links support+expr+
+#               analysis+codegen libs). Invoked on RUNTIME/RTIFS/*.idl to
+#               generate conv.h / epmp.h / mgmt.h / nbase.h.
+install_host_tool() {
+    local built="$1"
+    local name="$2"
+    if [ -f "$built" ]; then
+        cp "$built" "$NT_ROOT/PUBLIC/OAK/BIN/I386/$name"
+        echo ">>> installed $name into PUBLIC/OAK/BIN/I386/"
+    else
+        echo "!!! $name: expected output $built not found" >&2
+        return 1
+    fi
+}
+build_midleb() {
+    run_nmake "$NT_ROOT/PRIVATE/RPC/MIDLNEW/EREC" "MIDL/EREC - error-recovery DB generator (midleb.exe)"
+    install_host_tool "$NT_ROOT/PRIVATE/RPC/MIDLNEW/EREC/obj/i386/midleb.exe" "midleb.exe"
+}
+build_midlyacc() {
+    run_nmake "$NT_ROOT/PRIVATE/RPC/MIDLNEW/YACC" "MIDL/YACC - custom yacc (midlyacc.exe)"
+    install_host_tool "$NT_ROOT/PRIVATE/RPC/MIDLNEW/YACC/obj/i386/midlyacc.exe" "midlyacc.exe"
+}
+build_midlpg() {
+    run_nmake "$NT_ROOT/PRIVATE/RPC/MIDLNEW/PG" "MIDL/PG - parser post-generator (midlpg.exe)"
+    install_host_tool "$NT_ROOT/PRIVATE/RPC/MIDLNEW/PG/obj/i386/midlpg.exe" "midlpg.exe"
+}
+# MIDL20 static libs (link-time deps of midl.exe). Each has TARGETPATH=..\lib
+# so outputs land at MIDL20/lib/i386/{support,exprlib,analysis,codegen}.lib.
+_midl20_lib_prep() { mkdir -p "$NT_ROOT/PRIVATE/RPC/MIDL20/lib/i386"; }
+build_midl_support() { _midl20_lib_prep; run_nmake "$NT_ROOT/PRIVATE/RPC/MIDL20/SUPPORT"  "MIDL20/SUPPORT - support.lib"; }
+build_midl_expr()    { _midl20_lib_prep; run_nmake "$NT_ROOT/PRIVATE/RPC/MIDL20/EXPR"     "MIDL20/EXPR - exprlib.lib"; }
+build_midl_analysis(){ _midl20_lib_prep; run_nmake "$NT_ROOT/PRIVATE/RPC/MIDL20/ANALYSIS" "MIDL20/ANALYSIS - analysis.lib"; }
+build_midl_codegen() { _midl20_lib_prep; run_nmake "$NT_ROOT/PRIVATE/RPC/MIDL20/CODEGEN"  "MIDL20/CODEGEN - codegen.lib"; }
+
 # --- GUI-side drivers (input + video) ----------------------------------------
 # Input: PS/2 port driver (i8042prt) sits under the class drivers
 # (kbdclass + mouclass). kbdclass/mouclass are the public NT driver
