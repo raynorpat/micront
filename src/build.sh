@@ -222,6 +222,39 @@ _midl_advapi_idl() {
 }
 build_winreg_idl(){ _midl_advapi_idl "$NT_ROOT/PRIVATE/WINDOWS/SCREG/WINREG" "" regrpc; }
 build_wrlib()    { build_winreg_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SCREG/WINREG/LIB"  "WINREG/LIB - wrlib.lib"; }
+build_perflib()  { run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SCREG/WINREG/PERFLIB" "WINREG/PERFLIB - perflib.lib"; }
+build_localreg() { build_winreg_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SCREG/WINREG/LOCAL"    "WINREG/LOCAL - localreg.lib"; }
+build_winreg()   { build_winreg_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SCREG/WINREG/CLIENT"   "WINREG/CLIENT - winreg.lib"; }
+build_sc_idl()   {
+    _midl_advapi_idl "$NT_ROOT/PRIVATE/WINDOWS/SCREG/SC" "/I inc" svcctl || return 1
+    # sclib + svcctrl #include <svcctl.h>; their INCLUDES point at SC/INC but
+    # midl emits into SC/ — copy the header over.
+    cp -f "$NT_ROOT/PRIVATE/WINDOWS/SCREG/SC/svcctl.h" "$NT_ROOT/PRIVATE/WINDOWS/SCREG/SC/INC/"
+}
+build_sclib()    { build_sc_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SCREG/SC/LIB"    "SC/LIB - sclib.lib"; }
+build_svcctrl()  { build_sc_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SCREG/SC/CLIENT" "SC/CLIENT - svcctrl.lib"; }
+build_elf_idl()  { _midl_advapi_idl "$NT_ROOT/PRIVATE/EVENTLOG" "" elf; }
+build_elfapi()   { build_elf_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/EVENTLOG/ELFCLNT" "EVENTLOG/ELFCLNT - elfapi.lib"; }
+build_lsa_idl()  {
+    # lsaimp.idl does `#include <lsaimp.h>` inside its interface body; the
+    # hand-written lsaimp.h lives in PRIVATE/INC (pulls in ntlsa.h/lsaicli.h
+    # with PVOID-typed prototypes). Use DCE-compat mode (-mode c_port) to
+    # relax MIDL's "no PVOID in RPC parameters" check — matches what
+    # LSA/MAKEFIL0 sets in the original NT 3.5 build. Separate client/server
+    # passes with their own ACFs.
+    local dir="$NT_ROOT/PRIVATE/LSA"
+    local oak="D:\\PUBLIC\\OAK\\BIN\\I386"
+    local env="set PATH=$oak&& set INCLUDE=D:\\PUBLIC\\SDK\\INC;D:\\PUBLIC\\OAK\\INC;D:\\PUBLIC\\SDK\\INC\\CRT"
+    local flags="/D MIDL_PASS /D _M_IX86 /D _X86_ /D _WCHAR_T_DEFINED -mode c_port -oldnames -error allocation -error ref /I inc /I ..\\inc"
+    (
+        cd "$dir" || exit 1
+        wine cmd /c "$env&& midl $flags -acf lsacli.acf -header lsarpc_c.h lsarpc.idl" || exit 1
+        wine cmd /c "$env&& midl $flags -acf lsasrv.acf -header lsarpc.h   lsarpc.idl" || exit 1
+        wine cmd /c "$env&& midl $flags lsaimp.idl" || exit 1
+    )
+}
+build_lsacomm()  { build_lsa_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/LSA/COMMON" "LSA/COMMON - lsacomm.lib"; }
+build_lsaudll()  { build_lsa_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/LSA/UCLIENT" "LSA/UCLIENT - lsaudll.lib"; }
 
 # --- Host tools (sdktools bootstrap phase) -----------------------------------
 # These are wine-executable host tools consumed by later build steps — not
