@@ -158,6 +158,17 @@ build_null()   { run_nmake "$NTOS/DD/NULL"     "NULL - null device driver"; }
 build_fastfat(){ run_nmake "$NTOS/FASTFAT"     "FASTFAT - FAT filesystem driver"; }
 build_hello()  { run_nmake "$NTOS/DD/HELLO"    "HELLO - MicroNT visibility driver"; }
 
+# --- RPC stack ---------------------------------------------------------------
+# NT 3.5's RPC runtime is 180k LoC across NDRLIB + NDR20 + RUNTIME.
+# Builds in dependency order: NDRLIB (NDR marshaling primitives, the
+# smallest piece) → NDR20 (NDR 2.0 client/server stub support) →
+# RUNTIME (full rpcrt4.dll with transports + endpoint mapper).
+#
+# rpcndrp.lib is the "ndr private" lib linked into rpcrt4.dll itself.
+build_rpcndrp() { run_nmake "$NT_ROOT/PRIVATE/RPC/NDRLIB" "RPC/NDRLIB - NDR marshaling primitives"; }
+build_rpcndr20(){ run_nmake "$NT_ROOT/PRIVATE/RPC/NDR20"  "RPC/NDR20 - NDR 2.0 client/server support"; }
+build_rpcrt4()  { run_nmake "$NT_ROOT/PRIVATE/RPC/RUNTIME/MTRT" "RPC/RUNTIME/MTRT - rpcrt4.dll (main RPC runtime)" makedll=1; }
+
 # --- GUI-side drivers (input + video) ----------------------------------------
 # Input: PS/2 port driver (i8042prt) sits under the class drivers
 # (kbdclass + mouclass). kbdclass/mouclass are the public NT driver

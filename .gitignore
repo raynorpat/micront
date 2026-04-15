@@ -68,6 +68,10 @@ src/NT/PUBLIC/SDK/LIB/I386/videoprt.sys
 src/NT/PUBLIC/SDK/LIB/I386/videoprt.lib
 src/NT/PUBLIC/SDK/LIB/I386/videoprt.exp
 
+# RPC runtime static libs — built from RPC/NDRLIB and RPC/NDR20.
+src/NT/PUBLIC/SDK/LIB/I386/RpcNdrp.lib
+src/NT/PUBLIC/SDK/LIB/I386/rpcndr20.lib
+
 # mc.exe-generated message resources. WINERROR.MC is the source;
 # winerror.h / winerror.rc / MSG00001.bin are rebuilt each time.
 src/NT/PRIVATE/WINDOWS/NLSMSG/winerror.h
