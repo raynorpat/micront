@@ -466,6 +466,27 @@ SemError(
 	Ctxt.FindImportantPosition(Posn);
 	Posn.GetLineInfo( pFile, Line);
 
+	// MicroNT: NT 3.5 IDL files commonly include public C headers
+	// (ntlsa.h, ntregapi.h, …) inside `interface { ... }` blocks so
+	// their typedefs are in scope. Those headers contain C function
+	// prototypes with bare HANDLE/PVOID/callback parameters that our
+	// semantic checks flag as non-RPCable, but lsarpc.idl documents
+	// that the original NT MIDL "ignores function prototypes contained
+	// therein". Match that behavior: suppress semantic errors whose
+	// reported source file is a C header, not the top-level .idl.
+	if ( pFile )
+		{
+		int fl = strlen( pFile );
+		if ( fl >= 2
+		     && ( pFile[ fl - 1 ] == 'h' || pFile[ fl - 1 ] == 'H' )
+		     && pFile[ fl - 2 ] == '.' )
+			{
+			if ( pSuffix != Suffix )
+				delete pSuffix;
+			return;
+			}
+		}
+
 	RpcError(	pFile,
 				Line,
 				ErrNum,

@@ -236,12 +236,14 @@ build_svcctrl()  { build_sc_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/WINDOWS
 build_elf_idl()  { _midl_advapi_idl "$NT_ROOT/PRIVATE/EVENTLOG" "" elf; }
 build_elfapi()   { build_elf_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/EVENTLOG/ELFCLNT" "EVENTLOG/ELFCLNT - elfapi.lib"; }
 build_lsa_idl()  {
-    # lsaimp.idl does `#include <lsaimp.h>` inside its interface body; the
-    # hand-written lsaimp.h lives in PRIVATE/INC (pulls in ntlsa.h/lsaicli.h
-    # with PVOID-typed prototypes). Use DCE-compat mode (-mode c_port) to
-    # relax MIDL's "no PVOID in RPC parameters" check — matches what
-    # LSA/MAKEFIL0 sets in the original NT 3.5 build. Separate client/server
-    # passes with their own ACFs.
+    # lsarpc.idl imports lsaimp.idl, which #include's <lsaimp.h> — the
+    # shipped header in PRIVATE/INC that pulls in the full NT SDK for
+    # its typedefs. Those SDK headers contain C function prototypes with
+    # PVOID/HANDLE params; stock MIDL 2.00.71 rejected them, but our
+    # patched MIDL silently skips the NON_RPC_PARAM_VOID check when the
+    # proc came from an imported file (FRONT/SEMANTIC.CXX). So we can
+    # just drive MIDL the way LSA/MAKEFIL0 intended — separate client
+    # and server passes with their own ACFs.
     local dir="$NT_ROOT/PRIVATE/LSA"
     local oak="D:\\PUBLIC\\OAK\\BIN\\I386"
     local env="set PATH=$oak&& set INCLUDE=D:\\PUBLIC\\SDK\\INC;D:\\PUBLIC\\OAK\\INC;D:\\PUBLIC\\SDK\\INC\\CRT"
@@ -250,8 +252,11 @@ build_lsa_idl()  {
         cd "$dir" || exit 1
         wine cmd /c "$env&& midl $flags -acf lsacli.acf -header lsarpc_c.h lsarpc.idl" || exit 1
         wine cmd /c "$env&& midl $flags -acf lsasrv.acf -header lsarpc.h   lsarpc.idl" || exit 1
-        wine cmd /c "$env&& midl $flags lsaimp.idl" || exit 1
-    )
+    ) || return 1
+    # Client stub header is consumed by UCLIENT and SERVER via #include
+    # "lsarpc_c.h" — copy into LSA/INC (both dirs have /I ..\inc in their
+    # SOURCES) alongside the hand-written headers there.
+    cp -f "$NT_ROOT/PRIVATE/LSA/lsarpc_c.h" "$NT_ROOT/PRIVATE/LSA/INC/"
 }
 build_lsacomm()  { build_lsa_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/LSA/COMMON" "LSA/COMMON - lsacomm.lib"; }
 build_lsaudll()  { build_lsa_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/LSA/UCLIENT" "LSA/UCLIENT - lsaudll.lib"; }
