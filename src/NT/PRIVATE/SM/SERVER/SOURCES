@@ -31,6 +31,12 @@ TARGETTYPE=LIBRARY
 
 INCLUDES=..\inc
 
+# MicroNT: SMP_SHOW_REGISTRY_DATA enables the DbgPrints in SmpInit that
+# trace BootExecute/Execute/InitialCommand/subsystem-load progress.
+# Critical for bring-up — without it smss is silent between main() and
+# the kernel `SMSS: Started and didn't die` signal.
+C_DEFINES=-DSMP_SHOW_REGISTRY_DATA
+
 SOURCES=sminit.c   \
         smloop.c   \
         smsbapi.c  \

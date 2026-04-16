@@ -373,7 +373,10 @@ build_lsasrv() {
     # Break the samsrv<->lsasrv circular import by generating both .lib
     # import stubs from .def first.
     build_lsasrv_imports || return 1
-    run_nmake "$NT_ROOT/PRIVATE/LSA/SERVER" "LSA/SERVER - lsasrv.dll + lsass.exe" makedll=1
+    # KEEP_UMAPPL=1 preserves UMAPPL=lsass so the same SOURCES produces
+    # both lsasrv.dll (DYNLINK) and lsass.exe (native UMAPPL using
+    # lsasrv.dll's entry).
+    KEEP_UMAPPL=1 run_nmake "$NT_ROOT/PRIVATE/LSA/SERVER" "LSA/SERVER - lsasrv.dll + lsass.exe" makedll=1
 }
 build_advapi32() { build_rpcutil || return 1; run_nmake "$NT_ROOT/PRIVATE/WINDOWS/BASE/ADVAPI" "advapi32.dll" makedll=1; }
 
@@ -795,6 +798,11 @@ build_disk() {
     echo "========================================"
     python3 "$SCRIPT_DIR/tools/mkhive.py" "$SCRIPT_DIR/boot/data/SYSTEM"
     python3 "$SCRIPT_DIR/tools/mkdisk.py"
+    # UEFI boot path: boot-efi/boot.sh uses esp.img, which has its own
+    # SYSTEM_FILES list in boot-efi/Makefile. Keep it in sync with every
+    # disk rebuild — otherwise esp.img lags behind whatever we just
+    # staged into disk.raw.
+    make -C "$SCRIPT_DIR/boot-efi" PROFILE=${PROFILE:-headless}
 }
 
 #

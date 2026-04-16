@@ -435,6 +435,16 @@ def build_micront_system_hive(profile: str = "headless") -> Hive:
     # Empty BootExecute — skip autocheck.
     sm.set_multi_sz("BootExecute", [])
 
+    # Session Manager\Execute: smss reads this as REG_MULTI_SZ and the
+    # LAST entry becomes InitialCommand (see SMINIT.C:718-726). If empty,
+    # smss defaults to "winlogon.exe" (line 753) which we don't have yet.
+    # For headless/gui we launch lsass.exe as InitialCommand — gets the
+    # security subsystem up without needing winlogon.
+    if profile == "micront":
+        sm.set_multi_sz("Execute", [])
+    else:
+        sm.set_multi_sz("Execute", ["lsass.exe"])
+
     # SystemDrive gets set by the full NTLDR/OSLOADER at boot time from
     # the ARC boot device — under our UEFI loader it stays unset, so we
     # hardcode it here matching the DOS Devices C: symlink below.

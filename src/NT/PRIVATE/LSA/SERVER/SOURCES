@@ -91,7 +91,7 @@ SOURCES= adtinit.c   \
 # MAKEFILE.DEF
 #
 
-NTTARGETFILE0=lsapmsgs.h msg00001.bin
+NTTARGETFILE0=lsapmsgs.h msg00001.bin obj\$(TARGET_DIRECTORY)\lsa_rev.res
 
 UMTYPE=windows
 UMRES=obj\*\lsa_rev.res

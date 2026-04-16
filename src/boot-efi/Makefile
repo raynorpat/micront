@@ -85,7 +85,14 @@ SYSTEM_FILES_HEADLESS_EXTRA := \
     System32/kernel32.dll:$(NT_ROOT)/PUBLIC/SDK/LIB/I386/kernel32.dll \
     System32/csrss.exe:$(NT_ROOT)/PRIVATE/CSR/SERVER/obj/i386/csrss.exe \
     System32/csrsrv.dll:$(NT_ROOT)/PUBLIC/SDK/LIB/I386/csrsrv.dll \
-    System32/basesrv.dll:$(NT_ROOT)/PUBLIC/SDK/LIB/I386/basesrv.dll
+    System32/basesrv.dll:$(NT_ROOT)/PUBLIC/SDK/LIB/I386/basesrv.dll \
+    System32/rpcrt4.dll:$(NT_ROOT)/PUBLIC/SDK/LIB/I386/rpcrt4.dll \
+    System32/advapi32.dll:$(NT_ROOT)/PUBLIC/SDK/LIB/I386/advapi32.dll \
+    System32/crtdll.dll:$(NT_ROOT)/PUBLIC/SDK/LIB/I386/CRTDLL.DLL \
+    System32/lsasrv.dll:$(NT_ROOT)/PUBLIC/SDK/LIB/I386/lsasrv.dll \
+    System32/samsrv.dll:$(NT_ROOT)/PUBLIC/SDK/LIB/I386/samsrv.dll \
+    System32/samlib.dll:$(NT_ROOT)/PUBLIC/SDK/LIB/I386/samlib.dll \
+    System32/lsass.exe:$(NT_ROOT)/PRIVATE/LSA/SERVER/obj/i386/lsass.exe
 
 # Additional files for GUI — not wired up yet (user32/gdi32/winsrv/
 # winlogon not ported). Placeholder for the future extension point:

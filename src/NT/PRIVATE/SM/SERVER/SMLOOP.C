@@ -249,6 +249,11 @@ Return Value:
 
     ConnectInfo = &Message->ConnectionRequest;
     KnownSubSys = SmpLocateKnownSubSysByCid(&Message->h.ClientId);
+    DbgPrint("SMSS: ConnReq from CID %lx.%lx known=%p Port='%S'\n",
+             Message->h.ClientId.UniqueProcess,
+             Message->h.ClientId.UniqueThread,
+             KnownSubSys,
+             ConnectInfo->EmulationSubSystemPortName);
 
     if ( KnownSubSys ) {
 
@@ -317,11 +322,14 @@ Return Value:
                     NULL
                     );
             if ( !NT_SUCCESS(st) ) {
-                KdPrint(("SMSS: Connect back to Sb %wZ failed %lx\n",&SubSystemPort,st));
+                DbgPrint("SMSS: Connect back to Sb '%wZ' failed %08lx\n",&SubSystemPort,st);
+            } else {
+                DbgPrint("SMSS: Connected back to Sb '%wZ'\n",&SubSystemPort);
             }
 
             RtlFreeUnicodeString( &SubSystemPort );
             NtSetEvent(KnownSubSys->Active,NULL);
+            DbgPrint("SMSS: Active event set for known subsys\n");
         }
     }
 

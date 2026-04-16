@@ -122,15 +122,26 @@ HalInitSystem(
         }
 
         /*
-         * Connect the clock interrupt
-         * The kernel's IDT entry for CLOCK_VECTOR (0x30) should point to
-         * a KiUnexpectedInterrupt stub. We need to use HalpEnableInterruptHandler
-         * or KeConnectInterrupt to properly wire it up.
+         * Install HalpClockInterrupt (clock.asm) at IDT vector 0x30 so
+         * IRQ0 from the PIT dispatches to our clock ISR, which acks the
+         * PIC and tail-calls _KeUpdateSystemTime. Without this the IDT
+         * slot is KiUnexpectedInterrupt0 (from TRAP.ASM:DEFINE_EMPTY_
+         * VECTORS) and every tick bugchecks.
          *
-         * For now, unmask IRQ 0 (timer) on the PIC.
-         * The IDT entry for vector 0x30 should dispatch through the kernel's
-         * interrupt dispatch mechanism.
+         * Post-Phase-0 the IDT layout is the native i386 interrupt-gate
+         * format: { offset_lo, selector, access, offset_hi }.
+         *   selector = KGDT_R0_CODE (0x08)
+         *   access   = P=1, DPL=0, type=INT32 (0xE) → 0x8E00
          */
+        {
+            extern VOID HalpClockInterrupt(VOID);
+            PKIDTENTRY idt = KeGetPcr()->IDT;
+            ULONG addr = (ULONG)&HalpClockInterrupt;
+            idt[CLOCK_VECTOR].Offset         = (USHORT)(addr & 0xFFFF);
+            idt[CLOCK_VECTOR].Selector       = 0x08;   /* KGDT_R0_CODE */
+            idt[CLOCK_VECTOR].Access         = 0x8E00;
+            idt[CLOCK_VECTOR].ExtendedOffset = (USHORT)(addr >> 16);
+        }
 
         /* Unmask IRQ 0 (timer) and IRQ 2 (cascade) on master PIC */
         HalpWritePort(PIC1_DATA, 0xFA);  /* mask = 11111010 = all masked except IRQ0 + IRQ2 */
