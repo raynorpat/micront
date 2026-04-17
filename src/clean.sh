@@ -84,7 +84,7 @@ for f in ntoskrnl.lib ntoskrnl.exp hal.lib hal.exp tmp.lib tmp.exp \
          lsasrv.dll lsasrv.exp lsasrv.lib \
          csrsrv.dll csrsrv.exp csrsrv.lib \
          basesrv.dll basesrv.exp basesrv.lib \
-         atdisk.sys null.sys fastfat.sys hello.sys; do
+         atdisk.sys null.sys fastfat.sys; do
     if [ -f "$NT_ROOT/PUBLIC/SDK/LIB/I386/$f" ]; then
         rm -f "$NT_ROOT/PUBLIC/SDK/LIB/I386/$f"
         echo "  cleaned PUBLIC/SDK/LIB/I386/$f"
@@ -102,6 +102,12 @@ if [ -d "$SCRIPT_DIR/wibo-tools" ]; then
 fi
 
 # Generated boot disk image + EFI artifacts
-rm -f "$SCRIPT_DIR/boot/data/disk.raw" 2>/dev/null && echo "  cleaned boot/data/disk.raw"
+# Profile-specific disk images (under build/)
+for profile in micront headless gui; do
+    if [ -d "$(dirname "$SCRIPT_DIR")/build/$profile" ]; then
+        rm -rf "$(dirname "$SCRIPT_DIR")/build/$profile"
+        echo "  cleaned build/$profile/"
+    fi
+done
 
 echo "Clean complete."

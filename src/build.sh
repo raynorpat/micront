@@ -947,7 +947,7 @@ NTOSKRNL_TARGETS=(
 
 # Drivers needed regardless of mode — disk, FS, visibility/null stubs.
 DRIVER_TARGETS=(
-    atdisk null fastfat hello
+    atdisk null fastfat
 )
 
 # Drivers only useful with the GUI (input + video).
@@ -1045,18 +1045,33 @@ build_userland_micront() { build_group userland_micront "${MICRONT_USERLAND_TARG
 build_userland()         { build_group userland         "${USERLAND_TARGETS[@]}"; }
 build_userland_gui()     { build_group userland_gui     "${USERLAND_GUI_TARGETS[@]}"; }
 
-build_disk() {
+build_efi() {
     echo ""
     echo "========================================"
-    echo "Building boot disk image"
+    echo "Building: UEFI bootloader (BOOTIA32.EFI)"
     echo "========================================"
-    python3 "$SCRIPT_DIR/tools/mkhive.py" "$SCRIPT_DIR/boot/data/SYSTEM"
-    python3 "$SCRIPT_DIR/tools/mkdisk.py"
-    # UEFI boot path: boot-efi/boot.sh uses esp.img, which has its own
-    # SYSTEM_FILES list in boot-efi/Makefile. Keep it in sync with every
-    # disk rebuild — otherwise esp.img lags behind whatever we just
-    # staged into disk.raw.
-    make -C "$SCRIPT_DIR/boot-efi" PROFILE=${PROFILE:-headless}
+    make -C "$SCRIPT_DIR/boot-efi" BOOTIA32.EFI
+}
+
+build_disk() {
+    local profile="${PROFILE:-headless}"
+    local out_dir="$(dirname "$SCRIPT_DIR")/build/$profile"
+    local efi_bin="$SCRIPT_DIR/boot-efi/BOOTIA32.EFI"
+
+    echo ""
+    echo "========================================"
+    echo "Building boot disk image ($profile)"
+    echo "========================================"
+
+    # Build EFI loader if not already present.
+    if [ ! -f "$efi_bin" ]; then
+        build_efi
+    fi
+
+    mkdir -p "$out_dir"
+    python3 "$SCRIPT_DIR/tools/mkhive.py" --profile "$profile" "$out_dir/SYSTEM"
+    python3 "$SCRIPT_DIR/tools/mkdisk.py" --profile "$profile" \
+        --output-dir "$out_dir" --efi-binary "$efi_bin"
 }
 
 #
