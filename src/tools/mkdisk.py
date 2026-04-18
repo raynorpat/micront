@@ -468,6 +468,7 @@ _CORE_FILES: list[tuple[str, Path]] = [
 
 # Headless adds the Win32 subsystem base.
 _HEADLESS_FILES: list[tuple[str, Path]] = [
+    ("System32/CRTDLL.DLL",         SDK_LIB / "CRTDLL.DLL"),
     ("System32/kernel32.dll",       SDK_LIB / "kernel32.dll"),
     ("System32/advapi32.dll",       SDK_LIB / "advapi32.dll"),
     ("System32/rpcrt4.dll",         SDK_LIB / "rpcrt4.dll"),
@@ -482,7 +483,21 @@ _HEADLESS_FILES: list[tuple[str, Path]] = [
 
 # GUI adds the window/drawing stack.
 _GUI_FILES: list[tuple[str, Path]] = [
-    # TODO: user32.dll, gdi32.dll, winsrv.dll, consrv.dll, vga display
+    # Win32 subsystem DLLs
+    ("System32/user32.dll",         SDK_LIB / "user32.dll"),
+    ("System32/gdi32.dll",          SDK_LIB / "gdi32.dll"),
+    ("System32/winsrv.dll",         SDK_LIB / "winsrv.dll"),
+    # Video: port framework + Bochs VGA miniport + framebuffer display driver
+    ("System32/Drivers/videoprt.sys", SDK_LIB / "videoprt.sys"),
+    ("System32/Drivers/bochsvga.sys", SDK_LIB / "bochsvga.sys"),
+    ("System32/framebuf.dll",       SDK_LIB / "framebuf.dll"),
+    # Input drivers
+    ("System32/Drivers/i8042prt.sys", SDK_LIB / "i8042prt.sys"),
+    ("System32/Drivers/kbdclass.sys", SDK_LIB / "kbdclass.sys"),
+    ("System32/Drivers/mouclass.sys", SDK_LIB / "mouclass.sys"),
+    # Login
+    ("System32/winlogon.exe",       OBJ("WINDOWS/USER/WINLOGON/DAYTONA") / "winlogon.exe"),
+    ("System32/userinit.exe",       OBJ("WINDOWS/USER/USERINIT") / "userinit.exe"),
 ]
 
 

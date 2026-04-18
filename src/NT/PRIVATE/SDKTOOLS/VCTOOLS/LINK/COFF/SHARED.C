@@ -4763,54 +4763,93 @@ CheckDupFilename(PUCHAR szOutFilename, PARGUMENT_LIST parg)
     }
 }
 
-typedef PIMAGE_NT_HEADERS (WINAPI *PFNCSMF)(PVOID, ULONG, PULONG, PULONG);
-
-HANDLE hImagehlp;
-PFNCSMF pfnCheckSumMappedFile;
-
-VOID InitCheckSum(VOID)
+/*
+ * MicroNT: inline PE checksum — replaces dynamic LoadLibrary("imagehlp")
+ * which is unavailable under wibo. Algorithm from NT SDKTOOLS/IMAGEHLP.
+ */
+static USHORT
+InlineChkSum(ULONG PartialSum, PUSHORT Source, ULONG Length)
 {
-    if (hImagehlp == NULL) {
-        hImagehlp = LoadLibrary("imagehlp");
+    while (Length--) {
+        PartialSum += *Source++;
+        PartialSum = (PartialSum >> 16) + (PartialSum & 0xffff);
     }
-
-    if ((hImagehlp != NULL) && (pfnCheckSumMappedFile == NULL)) {
-        pfnCheckSumMappedFile = (PFNCSMF) GetProcAddress(hImagehlp, "CheckSumMappedFile");
-    }
+    return (USHORT)(((PartialSum >> 16) + PartialSum) & 0xffff);
 }
 
-VOID
-ChecksumImage(INT fh)
+static PIMAGE_NT_HEADERS
+InlineCheckSumMappedFile(PVOID BaseAddress, ULONG FileLength,
+                         PULONG HeaderSum, PULONG CheckSum)
 {
-    PIMAGE_NT_HEADERS pHdr = NULL;
-    ULONG sumHeader;
-    ULONG sumTotal;
+    PUSHORT AdjustSum;
+    PIMAGE_DOS_HEADER Dos;
+    PIMAGE_NT_HEADERS Nt;
+    USHORT PartialSum;
 
-    InitCheckSum();
+    *HeaderSum = 0;
+    PartialSum = InlineChkSum(0, (PUSHORT)BaseAddress, (FileLength + 1) >> 1);
 
-    if (pfnCheckSumMappedFile != NULL)
-    {
-        ULONG cbImageFile;
-        PUCHAR pbMap;
-
-        cbImageFile = FileLength(fh);
-
-        pbMap = PbMappedRegion(fh, 0, cbImageFile);
-
-        if (pbMap != NULL) {
-            pHdr = (*pfnCheckSumMappedFile)(pbMap, cbImageFile, &sumHeader, &sumTotal);
-            if (pHdr != NULL) {
-                pHdr->OptionalHeader.CheckSum = sumTotal;
-            } else {
-                Warning(NULL, UNABLETOCHECKSUM);
-            }
+    Dos = (PIMAGE_DOS_HEADER)BaseAddress;
+    Nt = NULL;
+    if (FileLength >= sizeof(IMAGE_DOS_HEADER) &&
+        Dos->e_magic == IMAGE_DOS_SIGNATURE) {
+        Nt = (PIMAGE_NT_HEADERS)((PUCHAR)BaseAddress + Dos->e_lfanew);
+        if ((PUCHAR)Nt >= (PUCHAR)BaseAddress &&
+            (PUCHAR)Nt < (PUCHAR)BaseAddress + FileLength &&
+            Nt->Signature == IMAGE_NT_SIGNATURE) {
+            *HeaderSum = Nt->OptionalHeader.CheckSum;
+            AdjustSum = (PUSHORT)&Nt->OptionalHeader.CheckSum;
+            PartialSum -= (PartialSum < AdjustSum[0]);
+            PartialSum -= AdjustSum[0];
+            PartialSum -= (PartialSum < AdjustSum[1]);
+            PartialSum -= AdjustSum[1];
         } else {
-            Warning(NULL, UNABLETOCHECKSUM);
+            Nt = NULL;
         }
-
-    } else {
-        Warning(NULL, NO_CHECKSUM);
     }
+    *CheckSum = (ULONG)PartialSum + FileLength;
+    return Nt;
+}
+
+/*
+ * MicroNT: ChecksumImage takes a filename (not a BUFIO handle) and runs
+ * after FileClose so all data is on disk. Uses plain Win32 I/O.
+ */
+VOID
+ChecksumImage(PUCHAR szFileName)
+{
+    HANDLE hFile;
+    ULONG cbFile, cbRead;
+    PUCHAR pbBuf;
+    PIMAGE_NT_HEADERS pHdr;
+    ULONG sumHeader, sumTotal;
+    ULONG cksumOffset;
+
+    hFile = CreateFileA(szFileName, GENERIC_READ | GENERIC_WRITE,
+                        0, NULL, OPEN_EXISTING, 0, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        Error(szFileName, UNABLETOCHECKSUM);
+        return;
+    }
+
+    cbFile = GetFileSize(hFile, NULL);
+    pbBuf = (PUCHAR)PvAlloc(cbFile);
+    ReadFile(hFile, pbBuf, cbFile, &cbRead, NULL);
+
+    pHdr = InlineCheckSumMappedFile(pbBuf, cbFile, &sumHeader, &sumTotal);
+    if (pHdr == NULL) {
+        FreePv(pbBuf);
+        CloseHandle(hFile);
+        Error(szFileName, UNABLETOCHECKSUM);
+        return;
+    }
+
+    cksumOffset = (ULONG)((PUCHAR)&pHdr->OptionalHeader.CheckSum - pbBuf);
+    FreePv(pbBuf);
+
+    SetFilePointer(hFile, cksumOffset, NULL, FILE_BEGIN);
+    WriteFile(hFile, &sumTotal, sizeof(ULONG), &cbRead, NULL);
+    CloseHandle(hFile);
 }
 
 

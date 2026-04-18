@@ -531,6 +531,22 @@ def build_micront_system_hive(profile: str = "headless") -> Hive:
         .set_multi_sz("PagingFiles", [])
     h["ControlSet001\\Control\\Session Manager\\FileRenameOperations"]
 
+    # ServiceGroupOrder controls the order system-start drivers are loaded.
+    # Video Init (port driver) must load before Video (miniports).
+    h["ControlSet001\\Control\\ServiceGroupOrder"] \
+        .set_multi_sz("List", [
+            "Base",
+            "Video Init",
+            "Video",
+            "Keyboard Class",
+            "Pointer Class",
+        ])
+
+    # GroupOrderList: CmpFindDrivers requires this key to exist under
+    # Control, even if no per-group tag ordering is needed. Each value
+    # is a REG_BINARY array of ULONGs (tag order); empty = no ordering.
+    h["ControlSet001\\Control\\GroupOrderList"]
+
     # Services keys for boot drivers. IopInitializeBootDrivers opens each
     # BOOT_DRIVER_LIST_ENTRY's RegistryPath; IopGetDriverNameFromKeyNode reads
     # Type to decide whether to put the driver under \Driver or \FileSystem.
@@ -561,6 +577,45 @@ def build_micront_system_hive(profile: str = "headless") -> Hive:
         .set_dword("Start",        1) \
         .set_dword("ErrorControl", 1) \
         .set_sz("ImagePath", "System32\\Drivers\\hello.sys")
+
+    if profile == "gui":
+        # Video: Bochs VGA miniport (QEMU stdvga, PCI 1234:1111).
+        # videoprt.sys is the video port framework loaded implicitly.
+        services["videoprt"] \
+            .set_dword("Type",         1) \
+            .set_dword("Start",        1) \
+            .set_dword("ErrorControl", 1) \
+            .set_sz("Group", "Video Init")
+        bochsvga = services["bochsvga"]
+        bochsvga \
+            .set_dword("Type",         1) \
+            .set_dword("Start",        1) \
+            .set_dword("ErrorControl", 1) \
+            .set_sz("Group", "Video") \
+            .set_sz("ImagePath", "System32\\Drivers\\bochsvga.sys")
+        # Device0 subkey tells USER server which display driver DLL to load.
+        bochsvga["Device0"] \
+            .set_multi_sz("InstalledDisplayDrivers", ["framebuf"]) \
+            .set_dword("DefaultSettings.XResolution", 1024) \
+            .set_dword("DefaultSettings.YResolution", 768) \
+            .set_dword("DefaultSettings.BitsPerPel", 32)
+
+        # Input: PS/2 keyboard + mouse
+        services["i8042prt"] \
+            .set_dword("Type",         1) \
+            .set_dword("Start",        1) \
+            .set_dword("ErrorControl", 1) \
+            .set_sz("Group", "Keyboard Class")
+        services["kbdclass"] \
+            .set_dword("Type",         1) \
+            .set_dword("Start",        1) \
+            .set_dword("ErrorControl", 1) \
+            .set_sz("Group", "Keyboard Class")
+        services["mouclass"] \
+            .set_dword("Type",         1) \
+            .set_dword("Start",        1) \
+            .set_dword("ErrorControl", 1) \
+            .set_sz("Group", "Pointer Class")
 
     return h
 

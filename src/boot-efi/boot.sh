@@ -1,13 +1,31 @@
 #!/bin/sh
 #
 # Boot MicroNT UEFI loader under OVMF32 in QEMU.
-# Expects BOOTIA32.EFI + esp.img built by `make`.
+# Usage: boot.sh [profile]   (default: headless)
+# Profiles: micront, headless, gui
 #
 # OVMF needs `-machine q35` — the secboot variant's SMM/PI code targets
 # the ICH9 chipset. Default i440fx machine hangs silently before firmware
 # ever initializes.
 #
 # Keep a per-checkout copy of NVRAM vars so /usr/share stays pristine.
+
+PROFILE="${1:-headless}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ESP_IMG="$REPO_ROOT/build/$PROFILE/esp.img"
+
+if [ ! -f "$ESP_IMG" ]; then
+    echo "ERROR: $ESP_IMG not found. Run: build.sh $PROFILE" >&2
+    exit 1
+fi
+
+# Display: GUI profile gets a window, others run headless.
+if [ "$PROFILE" = "gui" ]; then
+    DISPLAY_FLAGS="-display gtk -vga std"
+else
+    DISPLAY_FLAGS="-display none"
+fi
 
 cp /usr/share/OVMF/OVMF32_VARS_4M.fd OVMF32_VARS_4M.fd
 
@@ -31,11 +49,11 @@ exec qemu-system-i386 -machine q35 \
     -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF32_CODE_4M.secboot.fd \
     -drive if=pflash,format=raw,file=./OVMF32_VARS_4M.fd \
     -device piix3-ide,id=ide \
-    -drive id=disk0,file=esp.img,format=raw,if=none \
+    -drive id=disk0,file="$ESP_IMG",format=raw,if=none \
     -device ide-hd,bus=ide.0,drive=disk0 \
     -chardev stdio,id=serialmux,mux=on \
     -serial chardev:serialmux \
     -serial chardev:serialmux \
     -d int,cpu_reset,in_asm -D qemu.log \
     -no-reboot \
-    -display none $GDB_FLAGS
+    $DISPLAY_FLAGS $GDB_FLAGS

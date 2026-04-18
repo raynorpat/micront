@@ -2125,13 +2125,9 @@ Return Value:
                        &ObjectAttributes);
 
     if (!NT_SUCCESS(Status)) {
-        CMLOG(CML_BUGCHECK, CMS_INIT_ERROR) {
-            KdPrint(("CM: CmGetSystemDriverList couldn't open registry key %wZ\n",&Name));
-            KdPrint(("CM:     status %08lx\n", Status));
-        }
+        DbgPrint("CM: CmGetSystemDriverList couldn't open SYSTEM key, status=%08lx\n", Status);
         return(NULL);
     }
-
 
     Status = ObReferenceObjectByHandle( SystemHandle,
                                         KEY_QUERY_VALUE,
@@ -2140,10 +2136,7 @@ Return Value:
                                         (PVOID *)(&KeyBody),
                                         NULL );
     if (!NT_SUCCESS(Status)) {
-        CMLOG(CML_BUGCHECK, CMS_INIT_ERROR) {
-            KdPrint(("CM: CmGetSystemDriverList couldn't dereference Systemhandle\n"));
-            KdPrint(("CM:     status %08lx\n", Status));
-        }
+        DbgPrint("CM: CmGetSystemDriverList couldn't deref handle, status=%08lx\n", Status);
         return(NULL);
     }
 
@@ -2152,26 +2145,20 @@ Return Value:
     Hive = KeyBody->KeyControlBlock->KeyHive;
     RootCell = KeyBody->KeyControlBlock->KeyCell;
 
-    //
-    // Now we have found out the PHHIVE and HCELL_INDEX of the root of the
-    // SYSTEM hive, we can use all the same code that the OS Loader does.
-    //
-
     RtlInitUnicodeString(&Name, L"Current");
     ControlCell = CmpFindControlSet(Hive,
                                     RootCell,
                                     &Name,
                                     &AutoSelect);
     if (ControlCell == HCELL_NIL) {
-        CMLOG(CML_BUGCHECK, CMS_INIT_ERROR) {
-            KdPrint(("CM: CmGetSystemDriverList couldn't find control set\n"));
-        }
+        DbgPrint("CM: CmGetSystemDriverList couldn't find control set\n");
         CmpUnlockRegistry();
         ObDereferenceObject((PVOID)KeyBody);
         NtClose(SystemHandle);
         return(NULL);
     }
 
+    DbgPrint("CM: CmGetSystemDriverList found control set, calling CmpFindDrivers\n");
     Success = CmpFindDrivers(Hive,
                              ControlCell,
                              SystemLoad,
@@ -2179,10 +2166,15 @@ Return Value:
                              &DriverList);
 
 
+    {
+        PLIST_ENTRY p;
+        ULONG cnt = 0;
+        for (p = DriverList.Flink; p != &DriverList; p = p->Flink) cnt++;
+        DbgPrint("CM: CmpFindDrivers returned Success=%d, %d entries\n", Success, cnt);
+    }
+
     if (!Success) {
-        CMLOG(CML_BUGCHECK, CMS_INIT_ERROR) {
-            KdPrint(("CM: CmGetSystemDriverList couldn't find any valid drivers\n"));
-        }
+        DbgPrint("CM: CmpFindDrivers FAILED\n");
         CmpFreeDriverList(Hive, &DriverList);
         CmpUnlockRegistry();
         ObDereferenceObject((PVOID)KeyBody);
@@ -2193,9 +2185,7 @@ Return Value:
     if (!CmpSortDriverList(Hive,
                            ControlCell,
                            &DriverList)) {
-        CMLOG(CML_BUGCHECK, CMS_INIT_ERROR) {
-            KdPrint(("CM: CmGetSystemDriverList couldn't sort driver list\n"));
-        }
+        DbgPrint("CM: CmGetSystemDriverList couldn't sort driver list\n");
         CmpFreeDriverList(Hive, &DriverList);
         CmpUnlockRegistry();
         ObDereferenceObject((PVOID)KeyBody);

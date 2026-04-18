@@ -213,7 +213,7 @@ VOID    ApplyCommandLineSectionAttributes(PSEC, BOOL, IMAGET);
 VOID    BuildExternalSymbolTable(PIMAGE, PBOOL, PMOD, BOOL, USHORT, WORD);
 VOID    CalculateBaseForIdataRecords(VOID);
 VOID    CheckDupFilename(PUCHAR, PARGUMENT_LIST);
-VOID    ChecksumImage(INT);
+VOID    ChecksumImage(PUCHAR);
 VOID    CombineFilenames(PUCHAR, PUCHAR, PUCHAR);
 INT __cdecl Compare(void const *, void const *);
 VOID    DumpExternTable(PST);

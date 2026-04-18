@@ -715,10 +715,17 @@ build_mouclass() { run_nmake "$NTOS/DD/MOUCLASS" "MOUCLASS - mouse class driver"
 # Video: videoprt.sys is the common miniport framework that VGA.SYS
 # (and all other video drivers in real NT) links against. Build order
 # matters — videoprt first because vga imports videoprt.lib.
-build_videoprt()    { run_nmake "$NTOS/VIDEO/PORT" "VIDEOPRT - video miniport framework"; }
+build_videoprt()    { run_nmake "$NTOS/VIDEO/PORT" "VIDEOPRT - video miniport framework" makedll=1; }
 build_vga_miniport(){
     build_videoprt
     run_nmake "$NTOS/VIDEO/VGA" "VGA - VGA miniport driver"
+}
+build_bochsvga(){
+    build_videoprt
+    run_nmake "$NTOS/VIDEO/BOCHSVGA" "BOCHSVGA - Bochs VGA miniport (QEMU stdvga)"
+}
+build_framebuf(){
+    run_nmake "$GDI/DISPLAYS/FRAMEBUF" "FRAMEBUF - generic framebuffer display driver" makedll=1
 }
 # --- GUI userland (USER + GDI + console + winsrv + winlogon) ----------------
 #
@@ -1075,7 +1082,7 @@ DRIVER_TARGETS=(
 # Drivers only useful with the GUI (input + video).
 DRIVER_GUI_TARGETS=(
     i8042prt kbdclass mouclass
-    vga_miniport
+    vga_miniport bochsvga
 )
 
 # micront = minimum-viable NT kernel + smss only, NO Win32 subsystem.
@@ -1142,6 +1149,8 @@ USERLAND_GUI_TARGETS=(
     winsrv
     # LSA client stub + winreg server lib (winlogon links both)
     lsadll winregsrv
+    # Framebuffer display driver (pairs with bochsvga.sys miniport)
+    framebuf
     # Login + shell
     winlogon userinit
 )
@@ -1174,7 +1183,7 @@ build_efi() {
 }
 
 build_disk() {
-    local profile="${PROFILE:-headless}"
+    local profile="${1:-${PROFILE:-headless}}"
     local out_dir="$(dirname "$SCRIPT_DIR")/build/$profile"
     local efi_bin="$SCRIPT_DIR/boot-efi/BOOTIA32.EFI"
 
@@ -1261,6 +1270,9 @@ _dispatch_one() {
         userland)          build_userland ;;
         userland-gui)      build_userland_gui ;;
         disk)              build_disk ;;
+        disk-gui)          build_disk gui ;;
+        disk-headless)     build_disk headless ;;
+        disk-micront)      build_disk micront ;;
         *)
             if declare -F "build_$comp" > /dev/null; then
                 "build_$comp"

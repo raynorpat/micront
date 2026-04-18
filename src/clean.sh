@@ -74,10 +74,10 @@ for stub_dir in \
 done
 
 # Build products in PUBLIC/SDK/LIB/I386 that we generate
-for f in ntoskrnl.lib ntoskrnl.exp hal.lib hal.exp tmp.lib tmp.exp \
-         ntdll.dll ntdll.exp ntdll.lib \
-         kernel32.dll kernel32.exp kernel32.lib \
-         advapi32.dll advapi32.exp advapi32.lib \
+for f in ntoskrnl.lib ntoskrnl.exp hal.exp tmp.lib tmp.exp \
+         ntdll.dll ntdll.exp \
+         kernel32.dll kernel32.exp \
+         advapi32.dll advapi32.exp \
          rpcrt4.dll rpcrt4.exp rpcrt4.lib \
          samlib.dll samlib.exp samlib.lib \
          samsrv.dll samsrv.exp samsrv.lib \
@@ -86,7 +86,7 @@ for f in ntoskrnl.lib ntoskrnl.exp hal.lib hal.exp tmp.lib tmp.exp \
          basesrv.dll basesrv.exp basesrv.lib \
          atdisk.sys null.sys fastfat.sys \
          gdisrvl.lib efloat.lib fscaler.lib ttfd.lib bmfd.lib vtfd.lib halftone.lib \
-         gdi32.dll gdi32.exp gdi32.lib gdi32p.exp gdi32p.lib \
+         gdi32.dll gdi32.exp gdi32p.exp gdi32p.lib \
          usersrvl.lib \
          user32.dll user32.exp user32p.exp user32p.lib \
          userexts.dll userexts.exp userexts.lib \

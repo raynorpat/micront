@@ -326,13 +326,11 @@ Return Value:
 
         FreePv(rgsec);
 
-        if (pimage->ImgFileHdr.SizeOfOptionalHeader != 0) {
-            // Update checksum to reflect our changes.
-
-            ChecksumImage(FileWriteHandle);
-        }
-
         FileClose(FileWriteHandle, TRUE);
+
+        if (pimage->ImgFileHdr.SizeOfOptionalHeader != 0) {
+            ChecksumImage(OutFilename);
+        }
     }
 
     FileCloseAll();

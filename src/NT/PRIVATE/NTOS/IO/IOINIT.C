@@ -3656,7 +3656,15 @@ Return Value:
     //
 
     if (!(driverList = CmGetSystemDriverList())) {
+        DbgPrint("IOSYS: CmGetSystemDriverList returned NULL\n");
         return TRUE;
+    }
+
+    {
+        PHANDLE p;
+        ULONG cnt = 0;
+        for (p = driverList; *p; p++) cnt++;
+        DbgPrint("IOSYS: CmGetSystemDriverList returned %d drivers\n", cnt);
     }
 
     //
@@ -3683,7 +3691,18 @@ Return Value:
         }
 
         if (IopCheckDependencies( *driverList )) {
-            if (NT_SUCCESS( IopLoadDriver( *driverList ) )) {
+            PKEY_BASIC_INFORMATION _ki;
+            ULONG _rl;
+            _ki = (PKEY_BASIC_INFORMATION)ExAllocatePool(PagedPool, 256);
+            if (_ki && NT_SUCCESS(NtQueryKey(*driverList, KeyBasicInformation, _ki, 256, &_rl))) {
+                DbgPrint("IOSYS: loading '%.*ws'\n", _ki->NameLength/sizeof(WCHAR), _ki->Name);
+            } else {
+                DbgPrint("IOSYS: loading handle=%p\n", *driverList);
+            }
+            if (_ki) ExFreePool(_ki);
+            status = IopLoadDriver( *driverList );
+            DbgPrint("IOSYS: load status=%08lx\n", status);
+            if (NT_SUCCESS( status )) {
                 if (treeEntry) {
                     treeEntry->DriversLoaded++;
                 }

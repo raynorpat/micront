@@ -4282,14 +4282,6 @@ FpoWritten: ;
         Error(OutFilename, UNDEFINEDEXTERNALS, UndefinedSymbols);
     }
 
-    if (pimage->Switch.Link.fChecksum && !*pfNeedCvpack) {
-        // Calculate the image checksum, but only if we are not going to
-        // cvpack.  (If we are going to cvpack, we set the checksum to
-        // 0xffffffff above so that Cvpack will recalculate it.)
-
-        ChecksumImage(FileWriteHandle);
-    }
-
     // In the incremental build, restore ImageSymbol.Value fields for
     // weak, lazy & alias externs to not have rva included.
 
@@ -4301,6 +4293,10 @@ FpoWritten: ;
     }
 
     FileClose(FileWriteHandle, TRUE);
+
+    if (pimage->Switch.Link.fChecksum && !*pfNeedCvpack) {
+        ChecksumImage(OutFilename);
+    }
 
     return(0);
 }

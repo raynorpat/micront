@@ -1,0 +1,13 @@
+MAJORCOMP=ntos
+MINORCOMP=video
+
+TARGETNAME=bochsvga
+TARGETPATH=$(BASEDIR)\public\sdk\lib
+TARGETTYPE=MINIPORT
+
+TARGETLIBS=$(BASEDIR)\public\sdk\lib\*\videoprt.lib \
+            $(BASEDIR)\public\sdk\lib\*\ntoskrnl.lib
+
+INCLUDES=..\..\inc
+
+SOURCES=bochsvga.c

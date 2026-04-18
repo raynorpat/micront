@@ -1,6 +1,6 @@
 /* Resource file for frame buffer display driver */
 
-#include "windows.h"
+#include "winver.h"
 
 1 RCDATA
 BEGIN
