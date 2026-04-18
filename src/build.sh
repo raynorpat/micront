@@ -37,12 +37,12 @@ if [ ! -d "$WIBO_TOOLS" ]; then
     echo ">>> setting up $WIBO_TOOLS (first-time)"
     mkdir -p "$WIBO_TOOLS"
     for f in "$NT_ROOT"/PUBLIC/OAK/BIN/I386/*; do
-        ln -sf "$f" "$WIBO_TOOLS/$(basename "$f")"
+        ln -srf "$f" "$WIBO_TOOLS/$(basename "$f")"
     done
     # CRTDLL.DLL lives in the SDK LIB tree, not in OAK/BIN. NMAKE and most
     # MSVC-era tools import from it, so wibo needs to find it alongside
     # the host binaries (via WIBO_PATH or cwd).
-    ln -sf "$NT_ROOT/PUBLIC/SDK/LIB/I386/CRTDLL.DLL" "$WIBO_TOOLS/CRTDLL.DLL"
+    ln -srf "$NT_ROOT/PUBLIC/SDK/LIB/I386/CRTDLL.DLL" "$WIBO_TOOLS/CRTDLL.DLL"
 fi
 
 # Wibo only strips "Z:" and "C:" prefixes — everything is routed through Z: as
@@ -519,7 +519,7 @@ install_host_tool() {
         # Ensure wibo-tools has a symlink — the tool may not have existed
         # when wibo-tools was first provisioned (e.g. MC.EXE, midl, gensrv
         # are built from source and only appear after their build step).
-        ln -sf "$NT_ROOT/PUBLIC/OAK/BIN/I386/$name" "$WIBO_TOOLS/$name"
+        ln -srf "$NT_ROOT/PUBLIC/OAK/BIN/I386/$name" "$WIBO_TOOLS/$name"
         echo ">>> installed $name"
     else
         echo "!!! $name: expected output $built not found" >&2
@@ -547,7 +547,7 @@ build_link() {
     run_nmake "$link_dir/COFF"      "link/coff (link.exe)"  || return 1
     install_host_tool "$link_dir/COFF/obj/i386/link.exe" "LINK.EXE"
     # Refresh wibo-tools symlink.
-    ln -sf "$NT_ROOT/PUBLIC/OAK/BIN/I386/LINK.EXE" "$WIBO_TOOLS/LINK.EXE"
+    ln -srf "$NT_ROOT/PUBLIC/OAK/BIN/I386/LINK.EXE" "$WIBO_TOOLS/LINK.EXE"
     echo ">>> LINK.EXE rebuilt with error message resources"
 }
 
@@ -637,6 +637,17 @@ build_mc() {
     # wibo-tools/MC.EXE is a symlink into OAK/BIN/I386; the install above
     # overwrote the target, so the symlink now resolves to our build.
     echo ">>> $(basename "$obj_dir/mc.exe"): $(ls -l "$obj_dir/mc.exe" | awk '{print $5}') bytes"
+}
+build_rc() {
+    local rcdll_dir="$NT_ROOT/PRIVATE/SDKTOOLS/VCTOOLS/RCDLL"
+    local rc_dir="$NT_ROOT/PRIVATE/SDKTOOLS/VCTOOLS/RC"
+    echo "========================================"
+    echo "Building: RC.EXE + RCDLL.DLL (resource compiler from source)"
+    echo "========================================"
+    run_nmake "$rcdll_dir" "RCDLL - rcdll.dll" makedll=1 || return 1
+    KEEP_UMAPPL=1 run_nmake "$rc_dir" "RC - rc.exe" || return 1
+    install_host_tool "$rcdll_dir/obj/i386/rcdll.dll" "RCDLL.DLL"
+    install_host_tool "$rc_dir/obj/i386/rc.exe" "RC.EXE"
 }
 build_midlyacc() {
     run_nmake "$NT_ROOT/PRIVATE/RPC/MIDLNEW/YACC" "MIDL/YACC - custom yacc (midlyacc.exe)"
@@ -1042,6 +1053,7 @@ done
 TOOL_TARGETS=(
     link
     mc
+    rc
     listmung
     midleb midlyacc midlpg
     midl_support midl_expr midl_analysis midl_codegen midl

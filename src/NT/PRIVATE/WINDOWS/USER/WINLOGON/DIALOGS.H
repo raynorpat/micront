@@ -16,7 +16,9 @@
 #define IDD_USERNAME                        205
 #define IDD_DOMAIN                          206
 #define IDD_PASSWORD                        207
+#ifndef IDHELP
 #define IDHELP                              208
+#endif
 #define IDHELP2                             210
 #define IDOK2                               211
 #define IDCANCEL2                           212

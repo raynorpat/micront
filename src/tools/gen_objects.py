@@ -98,12 +98,15 @@ def extract_var(lines: list[str], varname: str) -> list[str]:
 
 
 def src_to_obj(src: str) -> str | None:
-    """`..\\i386\\foo.c` → `obj\\i386\\foo.obj`. Returns None for .rc/.res
-    (resource files, handled separately by MAKEFILE.DEF)."""
+    """`..\\i386\\foo.c` → `obj\\i386\\foo.obj`.
+    `.rc` → `.res` (resource files compiled by RC inference rules).
+    Returns None for .res/.mc (pre-built or message compiler inputs)."""
     base = os.path.basename(src.replace("\\", "/"))
     stem, _, ext = base.rpartition(".")
-    if ext.lower() in ("rc", "res", "mc"):
+    if ext.lower() in ("res", "mc"):
         return None
+    if ext.lower() == "rc":
+        return f"obj\\i386\\{stem}.res"
     return f"obj\\i386\\{stem}.obj"
 
 

@@ -9,16 +9,9 @@
 * 12-09-91 Davidc       Created.
 \***************************************************************************/
 
-
-#include "stringid.h"
+#include "winlogon.h"
 
 #include "strings.rc"
-
-#include "dialogs.dlg"
-
-#include "sysshut.dlg"
-
-#include "win31mig.dlg"
 
 #include "wlevents.rc"
 
@@ -35,4 +28,7 @@ IDD_SHUTDOWN_BITMAP ICON "shutdown.ico"
 #define VER_INTERNALNAME_STR        "winlogon\0"
 #define VER_ORIGINALFILENAME_STR    "WINLOGON.EXE"
 
+#include "dialogs.dlg"
+#include "sysshut.dlg"
+#include "win31mig.dlg"
 #include "common.ver"

@@ -38,12 +38,11 @@ src/NT/PUBLIC/SDK/LIB/I386/hal.exp
 src/NT/PUBLIC/SDK/LIB/I386/tmp.lib
 src/NT/PUBLIC/SDK/LIB/I386/tmp.exp
 # ntdll, kernel32, advapi32 DLLs + .exp are generated each build.
-# The .LIB import stubs (KERNEL32.LIB, ADVAPI32.LIB, HAL.LIB) are
+# The .LIB import stubs (KERNEL32.LIB, ADVAPI32.LIB, HAL.LIB, NTDLL.LIB) are
 # SEED files — tools link against them before we build the DLL.
 # They're tracked, not ignored. Build overwrites them; clean.sh restores.
 src/NT/PUBLIC/SDK/LIB/I386/ntdll.dll
 src/NT/PUBLIC/SDK/LIB/I386/ntdll.exp
-src/NT/PUBLIC/SDK/LIB/I386/ntdll.lib
 src/NT/PUBLIC/SDK/LIB/I386/kernel32.dll
 src/NT/PUBLIC/SDK/LIB/I386/kernel32.exp
 src/NT/PUBLIC/SDK/LIB/I386/advapi32.dll
@@ -289,3 +288,7 @@ README-UEFI.md
 /wibo-x86_64.stock
 /wibo-i686
 src/wibo-tools/
+
+
+.bash_history
+.python_history
