@@ -487,6 +487,7 @@ _GUI_FILES: list[tuple[str, Path]] = [
     ("System32/user32.dll",         SDK_LIB / "user32.dll"),
     ("System32/gdi32.dll",          SDK_LIB / "gdi32.dll"),
     ("System32/winsrv.dll",         SDK_LIB / "winsrv.dll"),
+    ("System32/WINSPOOL.DRV",       SDK_LIB / "WINSPOOL.DRV"),
     # Video: port framework + Bochs VGA miniport + framebuffer display driver
     ("System32/Drivers/videoprt.sys", SDK_LIB / "videoprt.sys"),
     ("System32/Drivers/bochsvga.sys", SDK_LIB / "bochsvga.sys"),
@@ -527,6 +528,8 @@ def _build_image(disk_files: list[tuple[str, Path]], size_mb: int = 16,
         print("Run the appropriate build.sh targets first.", file=sys.stderr)
         raise SystemExit(1)
     for dest, src in disk_files:
+        sz = src.stat().st_size
+        print(f"  {dest:<45s} {sz:>8,d}  ({src.name})")
         img.add_file(dest, src)
     return img
 

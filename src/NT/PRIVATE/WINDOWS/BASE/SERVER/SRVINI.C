@@ -118,7 +118,8 @@ BaseSrvInitializeIniFileMappings(
                       );
     if (!NT_SUCCESS( Status )) {
         KdPrint(( "BASESRV: Unable to open %wZ key - Status == %0x\n", &KeyName, Status ));
-        return Status;
+        // NOTE: don't demand the registry key exists for legacy ini file mappings!
+        return STATUS_SUCCESS;
         }
 
     KeyValueInformation = (PKEY_VALUE_PARTIAL_INFORMATION)Buffer;

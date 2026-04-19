@@ -257,9 +257,20 @@ ServerDllInitialization(
     SharedHeap = LoadedServerDll->SharedStaticServerData;
     StaticServerData = RtlAllocateHeap(SharedHeap, 0,sizeof(BASE_STATIC_SERVER_DATA));
     if ( !StaticServerData ) {
+        DbgPrint("BASESRV: StaticServerData alloc failed\n");
         return STATUS_NO_MEMORY;
         }
     LoadedServerDll->SharedStaticServerData = (PVOID)StaticServerData;
+    DbgPrint("BASESRV: sizeof=%d WinDir=%d SysDir=%d NamedObj=%d MajVer=%d BuildNum=%d CSDVer=%d SysInfo=%d TimeOfDay=%d\n",
+             sizeof(BASE_STATIC_SERVER_DATA),
+             (ULONG)((PUCHAR)&StaticServerData->WindowsDirectory - (PUCHAR)StaticServerData),
+             (ULONG)((PUCHAR)&StaticServerData->WindowsSystemDirectory - (PUCHAR)StaticServerData),
+             (ULONG)((PUCHAR)&StaticServerData->NamedObjectDirectory - (PUCHAR)StaticServerData),
+             (ULONG)((PUCHAR)&StaticServerData->WindowsMajorVersion - (PUCHAR)StaticServerData),
+             (ULONG)((PUCHAR)&StaticServerData->BuildNumber - (PUCHAR)StaticServerData),
+             (ULONG)((PUCHAR)&StaticServerData->CSDVersion - (PUCHAR)StaticServerData),
+             (ULONG)((PUCHAR)&StaticServerData->SysInfo - (PUCHAR)StaticServerData),
+             (ULONG)((PUCHAR)&StaticServerData->TimeOfDay - (PUCHAR)StaticServerData));
 
     Status = NtQuerySystemInformation(
                 SystemTimeOfDayInformation,
@@ -268,6 +279,9 @@ ServerDllInitialization(
                 NULL
                 );
     if ( !NT_SUCCESS( Status ) ) {
+        DbgPrint("BASESRV: TimeOfDay failed %08lx addr=%p off=%d\n",
+                 Status, &StaticServerData->TimeOfDay,
+                 (ULONG)((PUCHAR)&StaticServerData->TimeOfDay - (PUCHAR)StaticServerData));
         return Status;
         }
 
@@ -358,17 +372,23 @@ ServerDllInitialization(
         StaticServerData->CSDVersion[ 0 ] = UNICODE_NULL;
         }
 
+    DbgPrint("BASESRV: StaticServerData=%p SysInfo offset=%d addr=%p\n",
+             StaticServerData,
+             (ULONG)((PUCHAR)&StaticServerData->SysInfo - (PUCHAR)StaticServerData),
+             &StaticServerData->SysInfo);
     Status = NtQuerySystemInformation( SystemBasicInformation,
                                        (PVOID)&StaticServerData->SysInfo,
                                        sizeof( StaticServerData->SysInfo ),
                                        NULL
                                      );
     if (!NT_SUCCESS( Status )) {
+        DbgPrint("BASESRV: NtQuerySystemInformation(BasicInfo) failed %08lx\n", Status);
         return( Status );
         }
 
     Status = BaseSrvInitializeIniFileMappings( StaticServerData );
     if ( !NT_SUCCESS(Status) ){
+        DbgPrint("BASESRV: BaseSrvInitializeIniFileMappings failed %08lx\n", Status);
         return Status;
         }
 
@@ -386,6 +406,7 @@ ServerDllInitialization(
                  SECURITY_DESCRIPTOR_REVISION1
                  );
     if ( !NT_SUCCESS(Status) ){
+        DbgPrint("BASESRV: RtlCreateSecurityDescriptor failed %08lx\n", Status);
         return Status;
         }
     Status = RtlSetDaclSecurityDescriptor (
@@ -395,6 +416,7 @@ ServerDllInitialization(
                  FALSE                  //DaclDefaulted OPTIONAL
                  );
     if ( !NT_SUCCESS(Status) ){
+        DbgPrint("BASESRV: RtlSetDaclSecurityDescriptor failed %08lx\n", Status);
         return Status;
         }
 
@@ -409,6 +431,7 @@ ServerDllInitialization(
                                       &Obja
                                     );
     if ( !NT_SUCCESS(Status) ){
+        DbgPrint("BASESRV: NtCreateDirectoryObject(BaseNamedObjects) failed %08lx\n", Status);
         return Status;
         }
     RtlFreeHeap(RtlProcessHeap(), 0,PrimarySecurityDescriptor);

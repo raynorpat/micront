@@ -539,6 +539,8 @@ NTSTATUS UserServerDllInitialization(
      * can not use ntsd to trace through it easily.
      */
 
+    DbgPrint("USERSRV: UserServerDllInitialization entered\n");
+
     if (RtlGetNtGlobalFlags() & FLG_SHOW_LDR_SNAPS) {
 
         TraceDisplayDriverLoad = 1;

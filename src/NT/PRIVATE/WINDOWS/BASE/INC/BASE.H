@@ -70,8 +70,10 @@ typedef struct _BASE_STATIC_SERVER_DATA {
                 USHORT WindowsMajorVersion;
                 USHORT WindowsMinorVersion;
                 USHORT BuildNumber;
+                USHORT Reserved1;
                 WCHAR CSDVersion[ 128 ];
                 SYSTEM_BASIC_INFORMATION SysInfo;
+                USHORT Reserved2;
                 SYSTEM_TIMEOFDAY_INFORMATION TimeOfDay;
                 PINIFILE_MAPPING IniFileMapping;
 } BASE_STATIC_SERVER_DATA, *PBASE_STATIC_SERVER_DATA;

@@ -2391,6 +2391,8 @@ Environment:
     // If the adapter is not found, display an error.
     //
 
+    DbgPrint("VIDEOPRT: HwFindAdapter returned %08lx\n", findAdapterStatus);
+
     if (findAdapterStatus != NO_ERROR) {
 
         pVideoDebugPrint((1, "VideoPortInitialize: Find adapter failed\n"));
@@ -2640,6 +2642,8 @@ Environment:
                                      REG_SZ,
                                      driverKeyName,
                                      driverKeySize);
+    DbgPrint("VIDEOPRT: DeviceMap write status=%08lx dev=%ws key=%ws\n",
+             ntStatus, deviceNameBuffer, driverKeyName);
 #if DBG
     if (!NT_SUCCESS(ntStatus)) {
 

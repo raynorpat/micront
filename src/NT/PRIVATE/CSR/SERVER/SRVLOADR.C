@@ -116,7 +116,12 @@ CsrLoadServerDll(
     Status = RtlAnsiStringToUnicodeString(&ModuleNameString_U, &ModuleNameString, TRUE);
     ASSERT(NT_SUCCESS(Status));
     if (ServerDllIndex != CSRSRV_SERVERDLL_INDEX) {
+        DbgPrint("CSRSRV: loading ServerDll '%s' index=%d init='%s'\n",
+                 ModuleName, ServerDllIndex,
+                 InitRoutineString ? InitRoutineString : "(default)");
 	Status = LdrLoadDll( UNICODE_NULL, NULL, &ModuleNameString_U, &ModuleHandle );
+        DbgPrint("CSRSRV: LdrLoadDll('%s') status=%08lx handle=%p\n",
+                 ModuleName, Status, ModuleHandle);
         if ( !NT_SUCCESS(Status) ) {
 
             PUNICODE_STRING ErrorStrings[2];
@@ -197,12 +202,18 @@ CsrLoadServerDll(
         }
 
     if (NT_SUCCESS( Status )) {
+        DbgPrint("CSRSRV: calling init routine for '%s' at %p\n",
+                 ModuleName, ServerDllInitialization);
         try {
             Status = (*ServerDllInitialization)( LoadedServerDll );
             }
         except ( CsrUnhandledExceptionFilter( GetExceptionInformation() ) ){
             Status = GetExceptionCode();
+            DbgPrint("CSRSRV: init routine '%s' CRASHED, status=%08lx\n",
+                     ModuleName, Status);
             }
+        DbgPrint("CSRSRV: init routine '%s' returned status=%08lx\n",
+                 ModuleName, Status);
         if (NT_SUCCESS( Status )) {
             CsrTotalPerProcessDataLength += QUAD_ALIGN(LoadedServerDll->PerProcessDataLength);
             CsrTotalPerThreadDataLength += QUAD_ALIGN(LoadedServerDll->PerThreadDataLength);
