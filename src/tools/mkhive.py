@@ -613,15 +613,14 @@ def build_micront_system_hive(profile: str = "headless") -> Hive:
         .set_multi_sz("Authentication Packages", ["msv1_0"])
 
     # LanmanWorkstation\Parameters — LsapDbSetDomainInfo (Pass 2 of
-    # LSA auto-install) reads Domain name and DomainId SID from here.
-    # Without these, the Account Domain SID is never set, and SAM init
-    # fails with STATUS_INVALID_SID. DomainId format is space-separated
-    # decimal (LsapDbGetNextValueToken tokenizes on whitespace):
-    # 6 authority bytes then sub-authorities.
+    # LSA auto-install) reads the Account Domain SID from here.
+    # No Domain/DomainId (primary domain) — MicroNT is standalone,
+    # never domain-joined. LsapDbSetDomainInfo is patched to skip
+    # primary domain setup when these are absent.
+    # AccountDomainId format: space-separated decimal, 6 authority
+    # bytes then sub-authorities (tokenized by LsapDbGetNextValueToken).
     # S-1-5-21-1-2-3 = authority 0 0 0 0 0 5, sub-auths 21 1 2 3.
     services["LanmanWorkstation\\Parameters"] \
-        .set_sz("Domain", "MICRONT") \
-        .set_sz("DomainId", "0 0 0 0 0 5 21 100 200 300") \
         .set_sz("AccountDomainId", "0 0 0 0 0 5 21 1 2 3")
 
     # ProductOptions — LsapDbInitializeServer reads ProductType.

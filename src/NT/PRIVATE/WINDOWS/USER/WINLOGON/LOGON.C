@@ -175,7 +175,9 @@ Logon(
         // i.e. we can ignore the result.
         //
 
+        DbgPrint("WINLOGON: Logon — UpdateDomainCache\n");
         Result = UpdateDomainCache(pGlobals, NULL, FALSE);
+        DbgPrint("WINLOGON: Logon — UpdateDomainCache returned %d\n", Result);
         ASSERT(!DLG_INTERRUPTED(Result));
 
         //
@@ -186,12 +188,14 @@ Logon(
             Result = DLG_SUCCESS;
         } else
 #endif
+        DbgPrint("WINLOGON: Logon — creating Welcome dialog\n");
         Result = TimeoutDialogBoxParam(pGlobals->hInstance,
                                        (LPTSTR)IDD_WELCOME,
                                        NULL,
                                        WelcomeDlgProc,
                                        (LONG)pGlobals,
                                        TIMEOUT_NONE | TIMEOUT_SS_NOTIFY);
+        DbgPrint("WINLOGON: Logon — Welcome dialog returned %d\n", Result);
         if (Result == DLG_SUCCESS) {
 
             //

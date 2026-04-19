@@ -1024,15 +1024,20 @@ if (ProductType == NtProductLanManNt) {
     // Get the primary domain name from the registry
     //
 
+    // MicroNT: primary domain is optional for standalone workstations.
+    // Original code returned if Domain/DomainId were missing, which
+    // also prevented AccountDomainId from being set. We skip the
+    // primary domain and go straight to the account domain.
     Status = LsapDbGetConfig(KeyHandle,
                            L"Domain",
                            &PrimaryDomainName);
     DbgPrint("LSA DB INSTALL: LsapDbGetConfig(Domain) = %08lx\n", Status);
 
     if ( !NT_SUCCESS( Status ) ) {
-        DbgPrint("LSA DB INSTALL: Domain read failed, returning\n");
-        NtClose( KeyHandle );
-        return;
+        DbgPrint("LSA DB INSTALL: no primary domain (standalone workstation)\n");
+        RtlInitUnicodeString(&PrimaryDomainName, NULL);
+        PrimaryDomainSid = NULL;
+        goto SkipPrimaryDomain;
     }
 
     //
@@ -1155,6 +1160,8 @@ if (ProductType == NtProductLanManNt) {
 
 
 
+
+SkipPrimaryDomain:
 
     if (ProductType != NtProductLanManNt) {
 
@@ -1302,33 +1309,31 @@ if (ProductType == NtProductLanManNt) {
 
 
     //
-    // Primary domain name/sid
+    // Primary domain name/sid (skip if no primary domain — standalone)
     //
 
+    if (PrimaryDomainSid != NULL) {
 
-    Status = LsapDbMakeUnicodeAttribute(
-                 &PrimaryDomainName,
-                 &LsapDbNames[PolPrDmN],
-                 (*NextAttribute)
-                 );
-    ASSERT(NT_SUCCESS(Status));
+        Status = LsapDbMakeUnicodeAttribute(
+                     &PrimaryDomainName,
+                     &LsapDbNames[PolPrDmN],
+                     (*NextAttribute)
+                     );
+        ASSERT(NT_SUCCESS(Status));
 
+        (*NextAttribute)++;
+        (*AttributeCount)++;
 
-    (*NextAttribute)++;
-    (*AttributeCount)++;
+        Status = LsapDbMakeSidAttribute(
+                     PrimaryDomainSid,
+                     &LsapDbNames[PolPrDmS],
+                     (*NextAttribute)
+                     );
+        ASSERT(NT_SUCCESS(Status));
 
-
-
-    Status = LsapDbMakeSidAttribute(
-                 PrimaryDomainSid,
-                 &LsapDbNames[PolPrDmS],
-                 (*NextAttribute)
-                 );
-    ASSERT(NT_SUCCESS(Status));
-
-
-    (*NextAttribute)++;
-    (*AttributeCount)++;
+        (*NextAttribute)++;
+        (*AttributeCount)++;
+    }
 
 
     //

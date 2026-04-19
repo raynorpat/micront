@@ -1142,19 +1142,23 @@ UpdateDomainCache(
     // Update the validity of the cache - i.e. see if we changed domain etc
     //
 
+    DbgPrint("WINLOGON: UpdateDomainCache — ValidateDomainCache\n");
     ValidateDomainCache(DomainCache);
 
     //
     // Start an asynchronous cache update if one is required
     //
 
+    DbgPrint("WINLOGON: UpdateDomainCache — CacheNeedsUpdate=%d\n", CacheNeedsUpdate(DomainCache));
     if (CacheNeedsUpdate(DomainCache)) {
 
+        DbgPrint("WINLOGON: UpdateDomainCache — StartCacheUpdate\n");
         Success = StartCacheUpdate(DomainCache);
         if (!Success) {
-            VerbosePrint(("Failed to start async cache update, continuing"));
+            DbgPrint("WINLOGON: StartCacheUpdate FAILED\n");
         }
     }
+    DbgPrint("WINLOGON: UpdateDomainCache — returning\n");
 
     //
     // Wait for cache to become valid if requested

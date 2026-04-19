@@ -136,16 +136,19 @@ int WINAPI WinMain(
     // Don't go any further if setup didn't complete fully
     //
 
+    DbgPrint("WINLOGON: CheckForIncompleteSetup\n");
     CheckForIncompleteSetup(&Globals);
-
 
     //
     // Initialize the secure attention sequence
     //
 
+    DbgPrint("WINLOGON: calling SASInit\n");
     if (!SASInit(&Globals)) {
+        DbgPrint("WINLOGON: SASInit FAILED\n");
         return(1);
     }
+    DbgPrint("WINLOGON: SASInit succeeded\n");
 
     //
     // Check to see if there is any WIN.INI or REG.DAT to migrate into
@@ -212,6 +215,7 @@ int WINAPI WinMain(
 
         DealWithAutochkLogs();
 
+        DbgPrint("WINLOGON: calling Logon\n");
         Result = Logon(&Globals);
 
         if (Result == DLG_SUCCESS) {
