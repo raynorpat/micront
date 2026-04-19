@@ -3284,6 +3284,7 @@ Return Value:
         Status = RtlCopySid( RtlLengthSid( Sid1 ), AliasMembers, Sid1 );
         SUCCESS_ASSERT( Status, "  Couldn't copy Sid1\n" );
 
+        DbgPrint("SAM BUILD: alias xref Rid=%d Sid1\n", Rid);
         Status = UpdateAliasXReference( Rid, Sid1 );
         SUCCESS_ASSERT( Status, "  Couldn't update alias xref\n" );
 
@@ -3295,6 +3296,7 @@ Return Value:
                          Sid2 );
             SUCCESS_ASSERT( Status, "  Couldn't copy Sid2\n" );
 
+            DbgPrint("SAM BUILD: alias xref Rid=%d Sid2\n", Rid);
             Status = UpdateAliasXReference( Rid, Sid2 );
             RtlFreeHeap( RtlProcessHeap(), 0, Sid2 );
             SUCCESS_ASSERT( Status, "  Couldn't update alias xref\n" );
@@ -4361,6 +4363,8 @@ Return Value:
                     for (i = 0; i<MembershipCount ; i++ ) {
                         if ( MembershipArray[i] == AliasRid )
                         {
+                            DbgPrint("SAM BUILD: UpdateAliasXReference — AliasRid %d already in member's list (count=%d)\n",
+                                     AliasRid, MembershipCount);
                             Status = STATUS_MEMBER_IN_ALIAS;
                         }
                     }

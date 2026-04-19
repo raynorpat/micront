@@ -346,6 +346,7 @@ main ()
         goto Cleanup;
     }
 
+    DbgPrint("LSASS: calling LsapNotifyInitializationFinish\n");
     LsapNotifyInitializationFinish(Status);
 
     InitializationNotified = TRUE;
@@ -354,12 +355,15 @@ main ()
     // Open a Trusted Handle to the local SAM server.
     //
 
+    DbgPrint("LSASS: calling LsapAuOpenSam\n");
     Status = LsapAuOpenSam();
+    DbgPrint("LSASS: LsapAuOpenSam returned %08lx\n", Status);
 
     if (!NT_SUCCESS(Status) ) {
 
         goto Cleanup;
     }
+    DbgPrint("LSASS: initialization complete, terminating thread\n");
 
 Cleanup:
 

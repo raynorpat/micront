@@ -1768,7 +1768,9 @@ Return Value:
     // and set the global variables related to this information.
     //
 
+    DbgPrint("LSASS: LsapAuOpenSam — calling LsapGetAccountDomainInfo\n");
     Status = LsapGetAccountDomainInfo( &PolicyAccountDomainInfo );
+    DbgPrint("LSASS: LsapAuOpenSam — LsapGetAccountDomainInfo returned %08lx\n", Status);
 
     if (!NT_SUCCESS(Status)) {
         return(Status);

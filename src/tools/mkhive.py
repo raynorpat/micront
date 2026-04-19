@@ -426,11 +426,11 @@ def build_micront_system_hive(profile: str = "headless") -> Hive:
         .set_dword("lastknowngood", 1) \
         .set_dword("failed",        0)
 
-    h["ControlSet001\\Control"]
+    control = h["ControlSet001\\Control"]
 
     # Session Manager minimal config so smss.exe doesn't try to spawn
     # programs we don't have (autochk.exe, csrss.exe, etc.).
-    sm = h["ControlSet001\\Control\\Session Manager"]
+    sm = control["Session Manager"]
 
     # Empty BootExecute — skip autocheck.
     sm.set_multi_sz("BootExecute", [])
@@ -472,7 +472,7 @@ def build_micront_system_hive(profile: str = "headless") -> Hive:
     #   ServerDllInitialization — entry-point fn each ServerDll exports;
     #                             "CsrServerInitialization" is the
     #                             csrsrv-side default.
-    sm_sub = h["ControlSet001\\Control\\Session Manager\\SubSystems"]
+    sm_sub = sm["SubSystems"]
 
     # Required subsystems: smss loads these by name before any app runs.
     # Micront profile has none — smss just sails past SmpLoadSubSystems
@@ -524,7 +524,7 @@ def build_micront_system_hive(profile: str = "headless") -> Hive:
     # given NT device path. Without a C: symlink, RtlDosPathNameToNtPathName_U
     # fails to resolve "C:\System32" and SmpInitializeKnownDlls returns
     # STATUS_OBJECT_PATH_NOT_FOUND (c000003a).
-    h["ControlSet001\\Control\\Session Manager\\DOS Devices"] \
+    sm["DOS Devices"] \
         .set_sz("C:", "\\Device\\Harddisk0\\Partition1") \
         .set_sz("PIPE", "\\Device\\NamedPipe") \
         .set_sz("MAILSLOT", "\\Device\\Mailslot")
@@ -532,19 +532,19 @@ def build_micront_system_hive(profile: str = "headless") -> Hive:
     # KnownDlls: SmpInitializeKnownDlls reads DllDirectory to locate the
     # KnownDlls filesystem directory. Missing => conversion of NULL path
     # returns STATUS_OBJECT_NAME_INVALID (c0000033). Point at System32.
-    h["ControlSet001\\Control\\Session Manager\\KnownDlls"] \
+    sm["KnownDlls"] \
         .set_expand_sz("DllDirectory", "%SystemRoot%\\System32")
 
     # Memory Management + FileRenameOperations subkeys — SmpRegistryConfigurationTable
     # queries both via RTL_QUERY_REGISTRY_SUBKEY with no OPTIONAL flag; any
     # missing subkey => STATUS_OBJECT_NAME_NOT_FOUND and SmpInit aborts.
-    h["ControlSet001\\Control\\Session Manager\\Memory Management"] \
+    sm["Memory Management"] \
         .set_multi_sz("PagingFiles", [])
-    h["ControlSet001\\Control\\Session Manager\\FileRenameOperations"]
+    sm["FileRenameOperations"]
 
     # ServiceGroupOrder controls the order system-start drivers are loaded.
     # Video Init (port driver) must load before Video (miniports).
-    h["ControlSet001\\Control\\ServiceGroupOrder"] \
+    control["ServiceGroupOrder"] \
         .set_multi_sz("List", [
             "Base",
             "File System",
@@ -557,7 +557,7 @@ def build_micront_system_hive(profile: str = "headless") -> Hive:
     # GroupOrderList: CmpFindDrivers requires this key to exist under
     # Control, even if no per-group tag ordering is needed. Each value
     # is a REG_BINARY array of ULONGs (tag order); empty = no ordering.
-    h["ControlSet001\\Control\\GroupOrderList"]
+    control["GroupOrderList"]
 
     # Services keys for boot drivers. IopInitializeBootDrivers opens each
     # BOOT_DRIVER_LIST_ENTRY's RegistryPath; IopGetDriverNameFromKeyNode reads
@@ -581,11 +581,19 @@ def build_micront_system_hive(profile: str = "headless") -> Hive:
         .set_dword("Type",         2) \
         .set_dword("Start",        0) \
         .set_dword("ErrorControl", 1)
-    services["npfs"] \
-        .set_dword("Type",         2) \
+    npfs = services["npfs"]
+    npfs.set_dword("Type",         2) \
         .set_dword("Start",        1) \
         .set_dword("ErrorControl", 1) \
         .set_sz("Group", "File System")
+    # NPFS pipe name aliases — the RPC client libraries use service-
+    # specific pipe names (lsarpc, samr, etc.) but all security services
+    # in lsass.exe share the single "lsass" pipe endpoint. NPFS
+    # translates these at open time via NpTranslateAlias.
+    # Format: value name = target pipe, value data = alias names
+    # (REG_MULTI_SZ). Verified against reference OAK/BIN/SYSTEM hive.
+    npfs["Aliases"] \
+        .set_multi_sz("lsass", ["netlogon", "lsarpc", "samr"])
     services["msfs"] \
         .set_dword("Type",         2) \
         .set_dword("Start",        1) \
@@ -595,7 +603,7 @@ def build_micront_system_hive(profile: str = "headless") -> Hive:
     # LSA configuration — auth packages list and product options.
     # LsapConfigurePackages reads Control\Lsa\Authentication Packages.
     # msv1_0 is the standard NT LAN Manager auth package.
-    h["ControlSet001\\Control\\Lsa"] \
+    control["Lsa"] \
         .set_multi_sz("Authentication Packages", [])
 
     # LanmanWorkstation\Parameters — LsapDbSetDomainInfo (Pass 2 of
@@ -607,17 +615,17 @@ def build_micront_system_hive(profile: str = "headless") -> Hive:
     # S-1-5-21-1-2-3 = authority 0 0 0 0 0 5, sub-auths 21 1 2 3.
     services["LanmanWorkstation\\Parameters"] \
         .set_sz("Domain", "MICRONT") \
-        .set_sz("DomainId", "0 0 0 0 0 5 21 1 2 3") \
+        .set_sz("DomainId", "0 0 0 0 0 5 21 100 200 300") \
         .set_sz("AccountDomainId", "0 0 0 0 0 5 21 1 2 3")
 
     # ProductOptions — LsapDbInitializeServer reads ProductType.
     # "WinNt" = standalone workstation, "LanManNt" = domain controller.
-    h["ControlSet001\\Control\\ProductOptions"] \
+    control["ProductOptions"] \
         .set_sz("ProductType", "WinNt")
 
     # ComputerName — GetComputerNameW reads this; lsass calls it during
     # LsapDbInitializeServer(2). Missing key = null deref in kernel32.
-    h["ControlSet001\\Control\\ComputerName\\ComputerName"] \
+    control["ComputerName\\ComputerName"] \
         .set_sz("ComputerName", "MICRONT")
 
     # hello.sys — loaded from disk at Phase 1 (SERVICE_SYSTEM_START) as a

@@ -580,23 +580,16 @@ Return Value:
 {
     NTSTATUS Status, IgnoreStatus;
 
-    LSA_HANDLE PolicyHandle;
-    OBJECT_ATTRIBUTES PolicyObjectAttributes;
+    LSAPR_HANDLE PolicyHandle;
 
     //
-    // Open the policy database
+    // MicroNT: use the trusted internal path instead of the RPC client
+    // path (LsaOpenPolicy). The RPC path deadlocks when lsass calls
+    // itself via named pipes — the single RPC worker thread can't
+    // service a second concurrent request from the same process.
     //
 
-    InitializeObjectAttributes( &PolicyObjectAttributes,
-                                  NULL,             // Name
-                                  0,                // Attributes
-                                  NULL,             // Root
-                                  NULL );           // Security Descriptor
-
-    Status = LsaOpenPolicy( NULL,
-                            &PolicyObjectAttributes,
-                            POLICY_VIEW_LOCAL_INFORMATION,
-                            &PolicyHandle );
+    Status = LsaIOpenPolicyTrusted( &PolicyHandle );
     if ( NT_SUCCESS(Status) ) {
 
 
@@ -604,9 +597,9 @@ Return Value:
         // Query the account domain information
         //
 
-        Status = LsaQueryInformationPolicy( PolicyHandle,
+        Status = LsarQueryInformationPolicy( PolicyHandle,
                                             PolicyAccountDomainInformation,
-                                            (PVOID *) PolicyAccountDomainInfo );
+                                            (PLSAPR_POLICY_INFORMATION *) PolicyAccountDomainInfo );
 #if DBG
         if ( NT_SUCCESS(Status) ) {
             ASSERT( (*PolicyAccountDomainInfo) != NULL );
@@ -615,7 +608,7 @@ Return Value:
 #endif // DBG
 
 
-        IgnoreStatus = LsaClose( PolicyHandle );
+        IgnoreStatus = LsarClose( &PolicyHandle );
         ASSERT(NT_SUCCESS(IgnoreStatus));
     }
 
@@ -677,6 +670,7 @@ Return Value:
         ASSERT(NT_SUCCESS(IgnoreStatus));
     }
 
+    DbgPrint("LSASS: LsapOpenSam — event wait returned %08lx\n", Status);
     if ( !NT_SUCCESS(Status) || Status == STATUS_TIMEOUT ) {
 
         return( STATUS_INVALID_SERVER_STATE );
@@ -687,6 +681,7 @@ Return Value:
     // Get the member Sid information for the account domain
     //
 
+    DbgPrint("LSASS: LsapOpenSam — calling LsapGetAccountDomainInfo\n");
     Status = LsapGetAccountDomainInfo( &PolicyAccountDomainInfo );
     if (!NT_SUCCESS(Status)) {
         return(Status);
@@ -698,10 +693,12 @@ Return Value:
     // Get our handles to the ACCOUNT and BUILTIN domains.
     //
 
+    DbgPrint("LSASS: LsapOpenSam — calling SamIConnect\n");
     Status = SamIConnect( NULL,     // No server name
                           &SamHandle,
                           SAM_SERVER_CONNECT,
                           TRUE );   // Indicate we are privileged
+    DbgPrint("LSASS: LsapOpenSam — SamIConnect returned %08lx\n", Status);
 
     if ( NT_SUCCESS(Status) ) {
 
@@ -709,10 +706,12 @@ Return Value:
         // Open the ACCOUNT domain.
         //
 
+        DbgPrint("LSASS: LsapOpenSam — opening ACCOUNT domain\n");
         Status = SamrOpenDomain( SamHandle,
                                  DOMAIN_ALL_ACCESS,
                                  PolicyAccountDomainInfo->DomainSid,
                                  &LsapAccountDomainHandle );
+        DbgPrint("LSASS: LsapOpenSam — ACCOUNT domain status=%08lx\n", Status);
 
         if (NT_SUCCESS(Status)) {
 
@@ -720,12 +719,12 @@ Return Value:
             // Open the BUILTIN domain.
             //
 
-
+            DbgPrint("LSASS: LsapOpenSam — opening BUILTIN domain\n");
             Status = SamrOpenDomain( SamHandle,
                                      DOMAIN_ALL_ACCESS,
                                      LsapBuiltInDomainSid,
                                      &LsapBuiltinDomainHandle );
-
+            DbgPrint("LSASS: LsapOpenSam — BUILTIN domain status=%08lx\n", Status);
 
             if (NT_SUCCESS(Status)) {
 
