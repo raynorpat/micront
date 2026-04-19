@@ -1,3 +1,5 @@
+.claude
+
 # Original source and patches (large, not ours)
 /stuff/
 
@@ -222,6 +224,9 @@ src/NT/PRIVATE/WINDOWS/USER/SERVER/dispcf.c
 src/NT/PRIVATE/WINDOWS/USER/SERVER/callcf.c
 src/NT/PRIVATE/WINDOWS/USER/CLIENT/dispcb.c
 src/NT/PRIVATE/WINDOWS/USER/CLIENT/user32p.def
+
+# GDI geni386-generated struct offset file (rebuilt by build_gdi_geni386)
+src/NT/PRIVATE/WINDOWS/GDI/INC/GDII386.INC
 
 # GUI stack build outputs — all rebuilt from source each run.
 # GDI: engine lib, font driver libs, math lib, halftone, client DLL + private import lib

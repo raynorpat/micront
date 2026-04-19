@@ -906,6 +906,7 @@ PFEOBJ::bSetFontXform (
 {
        BOOL bRet;
 
+        DbgPrint("GRE: bSetFontXform iGraphicsMode=%d\n", dco.u.attr.iGraphicsMode());
         if (dco.u.attr.iGraphicsMode() == GM_COMPATIBLE)
         {
             bRet = bGetNtoD_Win31(
@@ -931,6 +932,7 @@ PFEOBJ::bSetFontXform (
                     );
         }
 
+        DbgPrint("GRE: bSetFontXform bGetNtoD returned %d\n", bRet);
         if (!bRet)
         {
             WARNING(

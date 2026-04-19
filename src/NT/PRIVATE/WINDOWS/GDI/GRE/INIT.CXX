@@ -95,9 +95,10 @@ extern "C" BOOL Initialize(VOID)
     // Initialize lots of random stuff including the handle manager.
     //
 
+    DbgPrint("GRE: Initialize — calling HmgCreate\n");
     if (!HmgCreate())
     {
-        RIP("HMGR failed to initialize\n");
+        DbgPrint("GRE: HmgCreate FAILED\n");
         return(FALSE);
     }
 
@@ -111,9 +112,10 @@ extern "C" BOOL Initialize(VOID)
     // Initialize LDEV
     //
 
+    DbgPrint("GRE: calling bInitLDEVOBJ\n");
     if (!bInitLDEVOBJ())
     {
-        RIP("LDEV Initialization failed\n");
+        DbgPrint("GRE: bInitLDEVOBJ FAILED\n");
         return(FALSE);
     }
 
@@ -121,9 +123,10 @@ extern "C" BOOL Initialize(VOID)
     // Init the font drivers
     //
 
+    DbgPrint("GRE: calling bInitPathAlloc\n");
     if (!bInitPathAlloc())
     {
-        RIP("Pathalloc Initialization failed\n");
+        DbgPrint("GRE: bInitPathAlloc FAILED\n");
         return(FALSE);
     }
 
@@ -155,17 +158,19 @@ extern "C" BOOL Initialize(VOID)
     // Create a monochrome 1x1 bitmap as the default bitmap
     //
 
+    DbgPrint("GRE: calling bInitPALOBJ\n");
     if (!bInitPALOBJ())
     {
-        RIP("bInitPALOBJ failed !\n");
+        DbgPrint("GRE: bInitPALOBJ FAILED\n");
         return(FALSE);
     }
 
     vInitXLATE();
 
+    DbgPrint("GRE: calling bInitBMOBJ\n");
     if (!bInitBMOBJ())
     {
-        RIP("bInitBMOBJ failed !\n");
+        DbgPrint("GRE: bInitBMOBJ FAILED\n");
         return(FALSE);
     }
 
@@ -173,9 +178,10 @@ extern "C" BOOL Initialize(VOID)
     // Init the font drivers
     //
 
+    DbgPrint("GRE: calling bInitFontDrivers\n");
     if (!bInitFontDrivers())
     {
-        RIP("Could not start any font drivers\n");
+        DbgPrint("GRE: bInitFontDrivers FAILED\n");
         return(FALSE);
     }
 
@@ -183,9 +189,10 @@ extern "C" BOOL Initialize(VOID)
     // Init global public PFT
     //
 
+    DbgPrint("GRE: calling bInitPublicPFT\n");
     if (!bInitPublicPFT())
     {
-        RIP("Could not start the global public PFT\n");
+        DbgPrint("GRE: bInitPublicPFT FAILED\n");
         return(FALSE);
     }
 
@@ -193,15 +200,17 @@ extern "C" BOOL Initialize(VOID)
     // Initialize LFONT
     //
 
+    DbgPrint("GRE: calling bInitStockFonts\n");
     if (!bInitStockFonts())
     {
-        RIP("Stock font initialization failed\n");
+        DbgPrint("GRE: bInitStockFonts FAILED\n");
         return(FALSE);
     }
 
+    DbgPrint("GRE: calling bInitFontCache\n");
     if (!bInitFontCache())
     {
-        RIP("Font cache parameter intialization failed\n");
+        DbgPrint("GRE: bInitFontCache FAILED\n");
         return(FALSE);
     }
 
@@ -215,9 +224,10 @@ extern "C" BOOL Initialize(VOID)
     // Start up the brush component
     //
 
+    DbgPrint("GRE: calling bInitBRUSHOBJ\n");
     if (!bInitBRUSHOBJ())
     {
-        RIP("Could not init the brushes\n");
+        DbgPrint("GRE: bInitBRUSHOBJ FAILED\n");
         return(FALSE);
     }
 
@@ -233,5 +243,6 @@ extern "C" BOOL Initialize(VOID)
     vInitializeEUDC();
 #endif
 
+    DbgPrint("GRE: Initialize() complete\n");
     return(TRUE);
 }

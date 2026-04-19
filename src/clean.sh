@@ -53,6 +53,9 @@ find "$NT_ROOT/PRIVATE" -maxdepth 10 -name 'R[CD][a-z][0-9][0-9][0-9][0-9][0-9]'
 # NMAKE temp files (nm<pid>. trailing-dot convention)
 find "$NT_ROOT/PRIVATE" -maxdepth 10 -name 'nm[0-9]*' -delete 2>/dev/null
 
+# GDI geni386-generated struct offset file (rebuilt by build_gdi_geni386)
+rm -f "$NT_ROOT/PRIVATE/WINDOWS/GDI/INC/GDII386.INC" 2>/dev/null
+
 # mc.exe-generated message resources (rebuilt each time)
 rm -f "$NT_ROOT/PRIVATE/WINDOWS/NLSMSG/winerror.h" \
       "$NT_ROOT/PRIVATE/WINDOWS/NLSMSG/winerror.rc" \

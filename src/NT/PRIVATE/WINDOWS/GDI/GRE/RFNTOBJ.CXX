@@ -195,7 +195,9 @@ VOID RFONTOBJ::vInit(XDCOBJ &dco, BOOL bNeedPaths)
 // We start out with the currently selected RFONT.
 // That way, if we deselect it, we will unlock it!
 //
+    DbgPrint("GRE: RFONTOBJ::vInit entered, hdev=%p\n", dco.hdev());
     prfnt = dco.u.font.prfnt();
+    DbgPrint("GRE: vInit prfnt=%p\n", prfnt);
 
 // Early out--maybe the font has not changed.
 
@@ -257,10 +259,12 @@ VOID RFONTOBJ::vInit(XDCOBJ &dco, BOOL bNeedPaths)
 // this must be done before the ghsemPublicPFT is locked down.
 
     PDEVOBJ pdo(dco.hdev());
+    DbgPrint("GRE: vInit PDEVOBJ valid=%d hdev=%p\n", pdo.bValid(), pdo.hdev());
     ASSERTGDI(pdo.bValid(), "gdisrv!RFONTOBJ(dco): bad pdev in dc\n");
 
     if (!pdo.bGotFonts())
         pdo.bGetDeviceFonts();
+    DbgPrint("GRE: vInit past bGetDeviceFonts\n");
 
 // If we get to here, either the LFONT has changed since the last
 // text operation, or the XFORM has changed.  In either case, we'll look
@@ -268,6 +272,7 @@ VOID RFONTOBJ::vInit(XDCOBJ &dco, BOOL bNeedPaths)
 // realization.  If not, we'll just have to realize it now.
 
     vMakeInactive();    // deselects the rfont
+    DbgPrint("GRE: vInit past vMakeInactive\n");
 
 //
 // Now we have no selected RFONT.  We're going to track one down
@@ -276,7 +281,9 @@ VOID RFONTOBJ::vInit(XDCOBJ &dco, BOOL bNeedPaths)
 
 // Lock and Validate the LFONTOBJ user object.
 
+    DbgPrint("GRE: vInit hlfntNew=%p\n", dco.u.font.hlfntNew());
     LFONTOBJ lfo(dco.u.font.hlfntNew(), &pdo);
+    DbgPrint("GRE: vInit LFONTOBJ valid=%d\n", lfo.bValid());
     if (!lfo.bValid())
     {
         WARNING("gdisrv!RFONTOBJ(dco): bad LFONT handle\n");
@@ -320,16 +327,20 @@ VOID RFONTOBJ::vInit(XDCOBJ &dco, BOOL bNeedPaths)
     // LFONTOBJ::ppfeMapFont returns a pointer to the physical font face and
     // a simulation type (ist)
     //
+        DbgPrint("GRE: vInit calling ppfeMapFont\n");
         ppfe = lfo.ppfeMapFont(dco, &flSim, &ptlSim, &flAboutMatch);
+        DbgPrint("GRE: vInit ppfeMapFont returned ppfe=%p\n", ppfe);
 
     //
     // Compute the Notional to Device transform for this realization.
     //
         PFEOBJ  pfeo(ppfe);
+        DbgPrint("GRE: vInit pfeo valid=%d pifi=%p\n", pfeo.bValid(), pfeo.pifi());
         IFIOBJ  ifio(pfeo.pifi());
 
         ASSERTGDI(pfeo.bValid(), "gdisrv!RFONTOBJ(dco): bad ppfe from mapping\n");
 
+        DbgPrint("GRE: vInit calling bSetFontXform\n");
         if (
             !pfeo.bSetFontXform(
                 dco, lfo.pelfw(),
@@ -366,12 +377,14 @@ VOID RFONTOBJ::vInit(XDCOBJ &dco, BOOL bNeedPaths)
 
 // go find the font
 
+    DbgPrint("GRE: vInit creating EXFORMOBJ\n");
     EXFORMOBJ xoWtoD(dco, WORLD_TO_DEVICE);
     ASSERTGDI(xoWtoD.bValid(), "gdisrv!RFONTOBJ(dco) - \n");
 
 // Attempt to find an RFONT in the lists cached off the PDEV.  Its transform,
 // simulation state, style, etc. all must match.
 
+    DbgPrint("GRE: vInit calling bFindRFONT\n");
     if
     (
         bFindRFONT
@@ -400,6 +413,7 @@ VOID RFONTOBJ::vInit(XDCOBJ &dco, BOOL bNeedPaths)
 // Now, we are going to create one just for us to use.
 //
 
+    DbgPrint("GRE: vInit bFindRFONT miss, calling bRealizeFont\n");
     if ( !bRealizeFont(&dco,
                        &pdo,
                        lfo.pelfw(),
@@ -410,12 +424,13 @@ VOID RFONTOBJ::vInit(XDCOBJ &dco, BOOL bNeedPaths)
                        lfo.pelfw()->elfStyleSize,
                        bNeedPaths) )
     {
-        WARNING1("gdisrv!RFONTOBJ(dco): realization failed, RFONTOBJ invalidated\n");
+        DbgPrint("GRE: vInit bRealizeFont FAILED\n");
         prfnt = PRFNTNULL;  // mark RFONTOBJ invalid
         dco.u.font.prfnt(prfnt);
 
         return;
     }
+    DbgPrint("GRE: vInit bRealizeFont succeeded\n");
     ASSERTGDI(bValid(), "gdisrv!RFONTOBJ(dco): invalid hrfnt from realization\n");
 
 // We created a new RFONT, we better hold the PFF reference!
@@ -1207,6 +1222,8 @@ LBOOL RFONTOBJ::bRealizeFont
     //       protection for increment and access.  (InterlockedIncrement
     //       doesn't cut it).
 
+    DbgPrint("GRE: bRealizeFont prfnt=%p pfo=%p GdiInfo=%p\n", prfnt, pfo(), ppdo->GdiInfo());
+    DbgPrint("GRE: bRealizeFont &ulLogPixelsX=%p\n", &(ppdo->GdiInfo()->ulLogPixelsX));
     pfo()->sizLogResPpi.cx = ppdo->GdiInfo()->ulLogPixelsX;
     pfo()->sizLogResPpi.cy = ppdo->GdiInfo()->ulLogPixelsY;
     pfo()->ulStyleSize = ulStyleHtPt;
@@ -1230,6 +1247,7 @@ LBOOL RFONTOBJ::bRealizeFont
 
 // Copy the font transform passed in.
 
+    DbgPrint("GRE: bRealizeFont — copying fdx/ptlSim\n");
     prfnt->fdx = *pfdx;
     prfnt->reExtra.fdxQuantized = *pfdx;
     prfnt->ptlSim = *pptlSim;
@@ -1287,6 +1305,7 @@ LBOOL RFONTOBJ::bRealizeFont
 // Outline (transformable)?
 
     IFIOBJ ifio(pfeo.pifi());
+    DbgPrint("GRE: bRealizeFont — setting flInfo, pfdg\n");
     prfnt->flInfo = pfeo.pifi()->flInfo;
 
     pfdg(pfeo.pfdg());
@@ -1336,6 +1355,7 @@ LBOOL RFONTOBJ::bRealizeFont
 
 // get and convert device metrics.
 
+    DbgPrint("GRE: bRealizeFont — calling bGetDEVICEMETRICS\n");
     if ( !bGetDEVICEMETRICS(&devm) )
     {
         WARNING("gdisrv!bRealizeFontRFONTOBJ(): error with DEVICEMETRICS\n");
@@ -1348,6 +1368,8 @@ LBOOL RFONTOBJ::bRealizeFont
 
 // Pre-compute some useful values for text placement and extents.
 // (But only if it's not some journalling guys calling.)
+
+    DbgPrint("GRE: bRealizeFont — bGetDEVICEMETRICS OK, pdco=%p\n", pdco);
 
     if (pdco != (XDCOBJ *) NULL)
     {
@@ -1585,9 +1607,23 @@ LBOOL RFONTOBJ::bRealizeFont
 
 // Initialize glyph cache.
 
-    if ( !bInitCache() ||
-         !bGetGlyphMetrics(1,&gpTmp, &wcBreak) )
+    DbgPrint("GRE: bRealizeFont — calling bInitCache\n");
+    if ( !bInitCache() )
     {
+        DbgPrint("GRE: bRealizeFont — bInitCache FAILED\n");
+        WARNING("gdisrv!bRealizeFontRFONTOBJ(): cache initialization failed\n");
+
+        vDeleteCache();
+        vDestroyFont(&ldo);
+        FREEOBJ(prfnt,RFONT_TYPE);
+        prfnt = PRFNTNULL;
+        return bRet;
+    }
+    DbgPrint("GRE: bRealizeFont — bInitCache OK, wcgp=%p wcBreak=%04x\n", prfnt->wcgp, wcBreak);
+    DbgPrint("GRE: &prfnt->wcgp=%p (offset=%d)\n", &prfnt->wcgp, (int)((char*)&prfnt->wcgp - (char*)prfnt));
+    if ( !bGetGlyphMetrics(1,&gpTmp, &wcBreak) )
+    {
+        DbgPrint("GRE: bRealizeFont — bGetGlyphMetrics FAILED\n");
         WARNING("gdisrv!bRealizeFontRFONTOBJ(): cache initialization failed\n");
 
         vDeleteCache();
@@ -2066,6 +2102,8 @@ BOOL RFONTOBJ::bGetDEVICEMETRICS
     XLDEVOBJ ldo(prfnt->pldevProducer);
     ASSERTGDI(ldo.bValid(), "gdisrv!bGetDEVICEMTERICSRFONTOBJ(): bad pldevProducer\n");
 
+    DbgPrint("GRE: bGetDEVICEMETRICS calling QueryFontData dhpdev=%p pfo=%p\n",
+             prfnt->dhpdev, pfo());
     if ( ((ulRet = (*PFNDRV(ldo, QueryFontData)) (
                     prfnt->dhpdev,
                     pfo(),

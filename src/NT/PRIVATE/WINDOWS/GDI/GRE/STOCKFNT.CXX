@@ -288,6 +288,9 @@ LBOOL bInitSystemFont ()
     {
     // Get FONTS.FON.
 
+        // MicroNT: original code returned FALSE here when GRE_Initialize
+        // registry key is missing (no SOFTWARE hive). Changed to fall
+        // through to the winsrv.dll embedded-font fallback instead.
         if ((FastGetProfileStringW (
                 PMAP_GREINIT,
                 (LPWSTR) L"FONTS.FON",
@@ -297,18 +300,12 @@ LBOOL bInitSystemFont ()
                 ) == MAX_PATH)
            || (awchFontFile[0] == L'\0'))
         {
-            SAVE_ERROR_CODE(ERROR_CAN_NOT_COMPLETE);
-
-             #if DBG
-            DbgPrint("gdisrv!bInitSystemFont(): bad pathname (%ws) for FONTS.FON in WIN.INI\n", awchFontFile);
-            #endif
-
-            return (FALSE);
+            DbgPrint("gdisrv!bInitSystemFont(): FONTS.FON not in registry, trying fallback\n");
         }
 
-    // Load font file.
+    // Load font file (skip if no valid path from registry).
 
-        if ((cFonts = GreAddFontResourceW(awchFontFile, AFRW_SEARCH_PATH | AFRW_ADD_LOCAL_FONT)) != 0)
+        else if ((cFonts = GreAddFontResourceW(awchFontFile, AFRW_SEARCH_PATH | AFRW_ADD_LOCAL_FONT)) != 0)
         {
         // Create and validate public PFT user object.
 
@@ -368,13 +365,13 @@ LBOOL bInitSystemFont ()
 
     if (!bFontLoaded)
     {
-    // Diagnostic error message.
-
-        WARNING("\nWINSRV.DLL warning -- System font not available, resorting to built-in font.\n");
+        DbgPrint("GRE: system font not found, trying winsrv.dll built-in\n");
 
     // Load font file.
 
-        if ((cFonts = GreAddFontResourceW((LPWSTR) L"winsrv.dll", AFRW_SEARCH_PATH | AFRW_ADD_LOCAL_FONT)) != 0)
+        cFonts = GreAddFontResourceW((LPWSTR) L"winsrv.dll", AFRW_SEARCH_PATH | AFRW_ADD_LOCAL_FONT);
+        DbgPrint("GRE: GreAddFontResourceW(winsrv.dll) = %d\n", cFonts);
+        if (cFonts != 0)
         {
         // Create and validate public PFT user object.
 
@@ -433,7 +430,7 @@ LBOOL bInitSystemFont ()
 
     if (!bFontLoaded)
     {
-        WARNING("gdisrv!bInitSystemFont(): no system font\n");
+        DbgPrint("GRE: bInitSystemFont — no system font available\n");
         return FALSE;
     }
 
@@ -474,9 +471,9 @@ LBOOL bInitSystemFixedFont ()
             ) == MAX_PATH)
        || (awchFontFile[0] == L'\0'))
     {
-         #if DBG
+        //#if DBG
         DbgPrint("bInitSystemFixedFont(): bad filename (%ws), defaulting to system font\n", awchFontFile);
-        #endif
+        //#endif
 
     // Default to system font.
 
@@ -507,9 +504,9 @@ LBOOL bInitSystemFixedFont ()
     {
 
         SAVE_ERROR_CODE(ERROR_INVALID_HANDLE);
-         #if DBG
+        //#if DBG
         DbgPrint("bInitSystemFixedFont(): bad PFFOBJ user object\n");
-        #endif
+        //#endif
         return (FALSE);
     }
 
@@ -519,9 +516,9 @@ LBOOL bInitSystemFixedFont ()
     {
 
         SAVE_ERROR_CODE(ERROR_INVALID_HANDLE);
-         #if DBG
+        //#if DBG
         DbgPrint("bInitSystemFixedFont(): bad PFEOBJ user object\n");
-        #endif
+        //#endif
         return (FALSE);
     }
 
@@ -568,9 +565,9 @@ LBOOL bInitOEMFont ()
             ) == MAX_PATH)
        || (awchFontFile[0] == L'\0'))
     {
-         #if DBG
+        //#if DBG
         DbgPrint("bInitOEMFont(): bad filename (%ws), defaulting to system font\n", awchFontFile);
-        #endif
+        //#endif
 
     // Default to system font.
 
@@ -599,9 +596,9 @@ LBOOL bInitOEMFont ()
     {
 
         SAVE_ERROR_CODE(ERROR_INVALID_HANDLE);
-         #if DBG
+        //#if DBG
         DbgPrint("bInitOEMFont(): bad PFFOBJ user object\n");
-        #endif
+        //#endif
         return (FALSE);
     }
 
@@ -611,9 +608,9 @@ LBOOL bInitOEMFont ()
     {
         SAVE_ERROR_CODE(ERROR_INVALID_HANDLE);
 
-         #if DBG
+        //#if DBG
         DbgPrint("bInitOEMFont(): bad PFEOBJ user object\n");
-        #endif
+        //#endif
         return (FALSE);
     }
 

@@ -916,9 +916,12 @@ int _GetCharDimensions(
     static WCHAR wszAvgChars[] =
             L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
+    DbgPrint("USERSRV: _GetCharDimensions hdc=%p\n", hdc);
+
     /*
      * Only search the font cache if we're in the default map-mode.
      */
+    DbgPrint("USERSRV: calling GreGetMapMode\n");
     if (GreGetMapMode(hdc) == MM_TEXT) {
         HFONT hfont;
         PFONTCACHEENTRY pfce;
@@ -949,7 +952,9 @@ int _GetCharDimensions(
 
     {
         TMW_INTERNAL tmi;
+        DbgPrint("USERSRV: calling GreGetTextMetricsW\n");
         GreGetTextMetricsW(hdc, &tmi);
+        DbgPrint("USERSRV: GreGetTextMetricsW done\n");
         *lptm = tmi.tmw;
     }
 

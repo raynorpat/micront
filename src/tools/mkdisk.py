@@ -458,6 +458,11 @@ _CORE_FILES: list[tuple[str, Path]] = [
     ("System32/c_1252.nls",         NT / "PRIVATE/WINDOWS/WINNLS/DATA/C_1252.NLS"),
     ("System32/c_437.nls",          NT / "PRIVATE/WINDOWS/WINNLS/DATA/C_437.NLS"),
     ("System32/l_intl.nls",         NT / "PRIVATE/WINDOWS/WINNLS/DATA/L_INTL.NLS"),
+    ("System32/unicode.nls",        NT / "PRIVATE/WINDOWS/WINNLS/DATA/UNICODE.NLS"),
+    ("System32/locale.nls",         NT / "PRIVATE/WINDOWS/WINNLS/DATA/LOCALE.NLS"),
+    ("System32/ctype.nls",          NT / "PRIVATE/WINDOWS/WINNLS/DATA/CTYPE.NLS"),
+    ("System32/sortkey.nls",        NT / "PRIVATE/WINDOWS/WINNLS/DATA/SORTKEY.NLS"),
+    ("System32/sorttbls.nls",       NT / "PRIVATE/WINDOWS/WINNLS/DATA/SORTTBLS.NLS"),
     # SYSTEM hive — path is rewritten per-profile in get_disk_files().
     ("System32/ntdll.dll",          SDK_LIB / "ntdll.dll"),
     ("System32/smss.exe",           OBJ("SM/SERVER") / "smss.exe"),

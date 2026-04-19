@@ -554,6 +554,7 @@ void LW_DCInit(void)
     /*
      * Let engine know that the display must be secure.
      */
+    DbgPrint("USERSRV: LW_DCInit — pdceFirst=%p\n", pdceFirst);
     GreMarkDCUnreadable(pdceFirst->hdc);
 
     ghfontSys = (HFONT)GreGetStockObject(SYSTEM_FONT);
@@ -583,6 +584,7 @@ void LW_DCInit(void)
     }
 #endif
 
+    DbgPrint("USERSRV: LW_DCInit — gpsi=%p\n", gpsi);
     gpsi->fPaletteDisplay = GreGetDeviceCaps(ghdcScreen, RASTERCAPS) & RC_PALETTE;
 
     /*
@@ -594,6 +596,7 @@ void LW_DCInit(void)
     /*
      * Store the System Font metrics info.
      */
+    DbgPrint("USERSRV: LW_DCInit — getting char dimensions\n");
     cxSysFontChar = _GetCharDimensions(hdcBits, &tm);
 
     AddFontCacheEntry(TEXT("SysFont"), ghfontSys, 10, cxSysFontChar, &tm);

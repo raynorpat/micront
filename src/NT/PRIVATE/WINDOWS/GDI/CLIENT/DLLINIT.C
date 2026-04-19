@@ -32,10 +32,13 @@ BOOLEAN GdiDllInitialize(
     BOOLEAN    fServer;
     int c;
 
+    DbgPrint("GDI32: GdiDllInitialize reason=%d\n", ulReason);
+
     switch (ulReason)
     {
     case DLL_PROCESS_ATTACH:
 
+        DbgPrint("GDI32: DLL_PROCESS_ATTACH — connecting to server\n");
         status = CsrClientConnectToServer(WINSS_OBJECT_DIRECTORY_NAME,
                                  GDISRV_SERVERDLL_INDEX,
                                  NULL,
@@ -43,6 +46,7 @@ BOOLEAN GdiDllInitialize(
                                  NULL,
                                  &fServer);
 
+        DbgPrint("GDI32: CsrClientConnectToServer status=%08lx\n", status);
         if (!NT_SUCCESS(status))
         {
             WARNING("GDICLIENT: couldn't connect to server\n");
@@ -117,6 +121,7 @@ BOOLEAN GdiDllInitialize(
         break;
     }
 
+    DbgPrint("GDI32: GdiDllInitialize returning TRUE\n");
     return(TRUE);
 
     pvDllHandle;

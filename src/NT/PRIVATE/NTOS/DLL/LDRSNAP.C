@@ -561,9 +561,8 @@ LdrpRunInitializeRoutines(
 #endif
             if ( InitRoutine ) {
 
-                //
-                // If the DLL has TLS data, then call the optional initializers
-                //
+                DbgPrint("LDR: calling init %wZ at %lx\n",
+                         &LdrDataTableEntry->BaseDllName, InitRoutine);
 
                 LdrDataTableEntry->Flags |= LDRP_PROCESS_ATTACH_CALLED;
 
@@ -591,6 +590,9 @@ LdrpRunInitializeRoutines(
                     ULONG ErrorResponse;
                     NTSTATUS ErrorStatus;
 
+                    DbgPrint("LDR: %wZ — stack corrupted (esp %lx != %lx)\n",
+                             &LdrDataTableEntry->FullDllName, CurSp, SaveSp);
+
                     ErrorParameters[0] = (ULONG)&LdrDataTableEntry->FullDllName;
 
                     ErrorStatus = NtRaiseHardError(
@@ -610,13 +612,12 @@ LdrpRunInitializeRoutines(
 #endif
                 if ( !InitStatus ) {
 
-                    //
-                    // Hard Error Time
-                    //
-
                     ULONG ErrorParameters[2];
                     ULONG ErrorResponse;
                     NTSTATUS ErrorStatus;
+
+                    DbgPrint("LDR: %wZ — DllMain returned FALSE\n",
+                             &LdrDataTableEntry->FullDllName);
 
                     ErrorParameters[0] = (ULONG)&LdrDataTableEntry->FullDllName;
 

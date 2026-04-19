@@ -765,7 +765,64 @@ build_gdi_ttfd()     { run_nmake "$GDI/FONDRV/TT/TTFD"     "GDI/FONDRV/TT/TTFD -
 build_gdi_bmfd()     { run_nmake "$GDI/FONDRV/BMFD"        "GDI/FONDRV/BMFD - bmfd.lib"; }
 build_gdi_vtfd()     { run_nmake "$GDI/FONDRV/VTFD"        "GDI/FONDRV/VTFD - vtfd.lib"; }
 build_gdi_halftone() { run_nmake "$GDI/HALFTONE/HT"        "GDI/HALFTONE - halftone.lib"; }
-build_gdisrv()       { run_nmake "$GDI/GRE"                "GDI/GRE - gdisrvl.lib (GDI engine)"; }
+
+build_gdi_geni386() {
+    echo "========================================"
+    echo "Building: GDI GENI386 (struct offset generator)"
+    echo "========================================"
+
+    local gre="$GDI/GRE"
+    local geni_src="$gre/I386/GENI386.CXX"
+    local obj_dir="$gre/obj/i386"
+    local out_inc="$GDI/INC/GDII386.INC"
+    mkdir -p "$obj_dir"
+
+    if [ ! -f "$geni_src" ]; then
+        echo "ERROR: GENI386.CXX not found at $geni_src"
+        return 1
+    fi
+
+    local obj_dir_win; obj_dir_win="$(path_to_win "$obj_dir")"
+    local out_inc_win; out_inc_win="$(path_to_win "$out_inc")"
+
+    # Compile with the same flags as gdisrvl — same include paths, same
+    # defines, same packing — so OFFSET() produces the same values the
+    # engine objects see.
+    run_wibo_tool "$gre" cl386 \
+        -nologo -c -Zp8 -Gz \
+        -Di386=1 -D_X86_=1 -DNT_UP=1 -DSTD_CALL \
+        -DCONDITION_HANDLING=1 -DWIN32_LEAN_AND_MEAN=1 -DNOICM \
+        -DDBG=0 -DDEVL=1 -DPRECOMPILED_GRE -DWIN32=100 -D_NT1X_=100 \
+        "-I." \
+        "-I..\\inc" \
+        "-I..\\..\\inc" \
+        "-I${NT_ROOT_WIN}\\PUBLIC\\OAK\\INC" \
+        "-I${NT_ROOT_WIN}\\PUBLIC\\SDK\\INC" \
+        "-I${NT_ROOT_WIN}\\PUBLIC\\SDK\\INC\\CRT" \
+        "-I${NT_ROOT_WIN}\\PRIVATE\\WINDOWS\\GDI\\MATH\\I386" \
+        "I386\\GENI386.CXX" \
+        "-Fo${obj_dir_win}\\gdi_geni386.obj" || return 1
+
+    run_wibo_tool "$gre" link \
+        -nologo -subsystem:console \
+        "-out:${obj_dir_win}\\gdi_geni386.exe" \
+        "${obj_dir_win}\\gdi_geni386.obj" \
+        "${NT_ROOT_WIN}\\PUBLIC\\SDK\\LIB\\I386\\LIBC.LIB" \
+        "${NT_ROOT_WIN}\\PUBLIC\\SDK\\LIB\\I386\\KERNEL32.LIB" || return 1
+
+    env -i HOME="$HOME" TERM="${TERM:-dumb}" ${WIBO_DEBUG:+"WIBO_DEBUG=$WIBO_DEBUG"} \
+        "${NT_ENV_ARR[@]}" \
+        "$WIBO_BIN" --chdir "$gre" \
+            "$obj_dir/gdi_geni386.exe" \
+            "$out_inc_win" || return 1
+
+    echo ">>> GDI GENI386: $out_inc regenerated"
+}
+
+build_gdisrv() {
+    build_gdi_geni386 || return 1
+    run_nmake "$GDI/GRE"                "GDI/GRE - gdisrvl.lib (GDI engine)"
+}
 
 # user32 ↔ gdi32 have a circular import dependency (user32 links
 # gdi32p.lib, gdi32 links user32p.lib). Break the cycle by pre-
@@ -796,7 +853,15 @@ build_gui_import_stubs() {
 
 build_gdi32() {
     build_gui_import_stubs || return 1
+    local saved
+    for i in "${!NT_ENV_ARR[@]}"; do
+        if [[ "${NT_ENV_ARR[$i]}" == "NTDEBUG=" ]]; then
+            saved=$i
+            NT_ENV_ARR[$i]="NTDEBUG=sym"
+        fi
+    done
     run_nmake "$GDI/CLIENT" "GDI/CLIENT - gdi32.dll" makedll=1
+    [ -n "${saved:-}" ] && NT_ENV_ARR[$saved]="NTDEBUG="
 }
 
 build_usersrv() {
@@ -805,7 +870,15 @@ build_usersrv() {
 }
 build_user32() {
     build_gui_import_stubs || return 1
+    local saved
+    for i in "${!NT_ENV_ARR[@]}"; do
+        if [[ "${NT_ENV_ARR[$i]}" == "NTDEBUG=" ]]; then
+            saved=$i
+            NT_ENV_ARR[$i]="NTDEBUG=sym"
+        fi
+    done
     run_nmake "$USER/CLIENT" "USER/CLIENT - user32.dll" makedll=1
+    [ -n "${saved:-}" ] && NT_ENV_ARR[$saved]="NTDEBUG="
 }
 
 build_consrv()       { run_nmake "$NT_ROOT/PRIVATE/WINDOWS/WINCON/SERVER/DAYTONA" "WINCON/SERVER - consrvl.lib"; }
