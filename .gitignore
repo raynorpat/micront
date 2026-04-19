@@ -145,6 +145,10 @@ src/NT/PUBLIC/SDK/LIB/I386/rpcutil.lib
 # Follows the kernel32/advapi32 pattern: import .lib tracked, .dll + .exp
 # regenerated each build. nlrepl is purely static.
 src/NT/PUBLIC/SDK/LIB/I386/nlrepl.lib
+# MSV1_0 authentication package (built from LSA/MSV1_0)
+src/NT/PUBLIC/SDK/LIB/I386/msv1_0.dll
+src/NT/PUBLIC/SDK/LIB/I386/msv1_0.exp
+src/NT/PUBLIC/SDK/LIB/I386/msv1_0.lib
 src/NT/PUBLIC/SDK/LIB/I386/lsasrv.dll
 src/NT/PUBLIC/SDK/LIB/I386/lsasrv.exp
 src/NT/PUBLIC/SDK/LIB/I386/lsasrv.lib

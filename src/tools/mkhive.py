@@ -610,7 +610,7 @@ def build_micront_system_hive(profile: str = "headless") -> Hive:
     # LsapConfigurePackages reads Control\Lsa\Authentication Packages.
     # msv1_0 is the standard NT LAN Manager auth package.
     control["Lsa"] \
-        .set_multi_sz("Authentication Packages", [])
+        .set_multi_sz("Authentication Packages", ["msv1_0"])
 
     # LanmanWorkstation\Parameters — LsapDbSetDomainInfo (Pass 2 of
     # LSA auto-install) reads Domain name and DomainId SID from here.

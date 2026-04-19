@@ -489,6 +489,7 @@ _HEADLESS_FILES: list[tuple[str, Path]] = [
     ("System32/lsasrv.dll",         SDK_LIB / "lsasrv.dll"),
     ("System32/samsrv.dll",         SDK_LIB / "samsrv.dll"),
     ("System32/samlib.dll",         SDK_LIB / "samlib.dll"),
+    ("System32/msv1_0.dll",         SDK_LIB / "msv1_0.dll"),
     ("System32/netapi32.dll",       SDK_LIB / "NETAPI32.DLL"),  # XXX: pre-built
     ("System32/netrap.dll",         SDK_LIB / "NETRAP.DLL"),    # XXX: pre-built
     ("System32/lsass.exe",          OBJ("LSA/SERVER") / "lsass.exe"),

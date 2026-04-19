@@ -501,6 +501,7 @@ build_lsasrv() {
     # lsasrv.dll's entry).
     KEEP_UMAPPL=1 run_nmake "$NT_ROOT/PRIVATE/LSA/SERVER" "LSA/SERVER - lsasrv.dll + lsass.exe" makedll=1
 }
+build_msv1_0() { run_nmake "$NT_ROOT/PRIVATE/LSA/MSV1_0" "MSV1_0 - NT LAN Manager auth package" makedll=1; }
 build_advapi32() { build_rpcutil || return 1; run_nmake "$NT_ROOT/PRIVATE/WINDOWS/BASE/ADVAPI" "advapi32.dll" makedll=1; }
 
 # --- Host tools (sdktools bootstrap phase) -----------------------------------
@@ -1205,7 +1206,7 @@ USERLAND_TARGETS=(
     # obj/*.obj` to produce decorated import stubs).
     nlrepl
     samlib samsrv
-    lsasrv
+    lsasrv msv1_0
 )
 
 # GUI userland: pulls in the whole Win32 window/drawing stack. advapi32
