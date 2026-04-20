@@ -140,6 +140,11 @@ LUAJIT_TLDFLAGS := -nostdlib -nostartfiles -nodefaultlibs \
 LUAJIT_TLIBS := -lntshim -lkernel32 -lmingwex -lntdllcrt -lntdll -lgcc
 
 $(LUAJIT_EXE): libntshim.a libkernel32.a
+	# Force relink: LuaJIT's Makefile sees its own luajit.exe as up-to-
+	# date vs its own deps and won't notice that our static libs got
+	# rebuilt. Blowing away the final target makes it relink (all
+	# LuaJIT .o files stay cached — only the link step re-runs, fast).
+	rm -f $(LUAJIT_EXE)
 	$(MAKE) -C $(LUAJIT_SRC) \
 	    HOST_CC="gcc -m32" \
 	    HOST_CFLAGS="-DLUAJIT_DISABLE_PROFILE" \
