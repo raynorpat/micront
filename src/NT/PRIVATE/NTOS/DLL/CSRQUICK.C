@@ -171,11 +171,14 @@ CsrpProcessCallbackRequest(
             Msg->ReturnValue = (ULONG)STATUS_ILLEGAL_FUNCTION;
             }
         else {
-
-            Msg->ReturnValue =
-                (*(CallbackInfo->CallbackDispatchTable[ ApiTableIndex ]))(
-                    (PCSR_API_MSG)Msg->ApiMessageData
-                    );
+            PCSR_CALLBACK_ROUTINE Routine = CallbackInfo->CallbackDispatchTable[ ApiTableIndex ];
+                if (Routine == NULL) {
+                    DbgPrint("CSRDLL: callback dispatch NULL at DllIndex=%d ApiIndex=%d (ApiNumber=%08lx)\n",
+                            ClientDllIndex, ApiTableIndex, Msg->ApiNumber);
+                    Msg->ReturnValue = (ULONG)STATUS_ILLEGAL_FUNCTION;
+                } else {
+                    Msg->ReturnValue = (*Routine)((PCSR_API_MSG)Msg->ApiMessageData);
+                }
             }
         }
 }

@@ -402,9 +402,11 @@ VOID RFONTOBJ::vInit(XDCOBJ &dco, BOOL bNeedPaths)
     {
         dco.u.font.prfnt(prfnt);
 
+        DbgPrint("GRE: vInit bFindRFONT hit, calling vGetCache\n");
         vGetCache();
         dco.u.font.vXformChange(FALSE);
 
+        DbgPrint("GRE: vInit returning (cached)\n");
         return;
     }
 
@@ -1620,14 +1622,11 @@ LBOOL RFONTOBJ::bRealizeFont
         return bRet;
     }
     DbgPrint("GRE: bRealizeFont — bInitCache OK, wcgp=%p wcBreak=%04x\n", prfnt->wcgp, wcBreak);
-    DbgPrint("GRE: RFONT sizeof=%d ulContent=%d cache=%d flInfo=%d wcDefault=%d hgDefault=%d pfdg=%d wcgp=%d\n",
+    DbgPrint("GRE: RFONT sizeof=%d fmCache=%d cache=%d bNeededPaths=%d wcgp=%d\n",
              sizeof(RFONT),
-             (int)((char*)&prfnt->ulContent - (char*)prfnt),
+             (int)((char*)&prfnt->fmCache - (char*)prfnt),
              (int)((char*)&prfnt->cache - (char*)prfnt),
-             (int)((char*)&prfnt->flInfo - (char*)prfnt),
-             (int)((char*)&prfnt->wcDefault - (char*)prfnt),
-             (int)((char*)&prfnt->hgDefault - (char*)prfnt),
-             (int)((char*)&prfnt->pfdg - (char*)prfnt),
+             (int)((char*)&prfnt->bNeededPaths - (char*)prfnt),
              (int)((char*)&prfnt->wcgp - (char*)prfnt));
     if ( !bGetGlyphMetrics(1,&gpTmp, &wcBreak) )
     {
