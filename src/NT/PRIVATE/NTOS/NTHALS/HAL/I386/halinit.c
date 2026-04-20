@@ -148,6 +148,19 @@ HalInitSystem(
         /* Unmask IRQ 0 (timer) and IRQ 2 (cascade) on master PIC */
         HalpWritePort(PIC1_DATA, 0xFA);  /* mask = 11111010 = all masked except IRQ0 + IRQ2 */
 
+        /* Tell the kernel our tick length (100000 * 100ns = 10ms).
+         * Without this, KeTimeAdjustment stays 0 → KeUpdateSystemTime
+         * increments SystemTime by 0 per tick → NtQuerySystemTime
+         * returns a frozen 0, NtDelayExecution never wakes from its
+         * timer wait, and everything timer-related silently breaks.
+         * TickCountLow and InterruptTime advance fine without this —
+         * they use separate counters — which is why the symptom only
+         * surfaces when something reads SystemTime. */
+        {
+            extern VOID KeSetTimeIncrement(ULONG Max, ULONG Min);
+            KeSetTimeIncrement(100000, 100000);
+        }
+
         HalpSerialPrint("HAL: Phase 1 complete (clock enabled)\r\n");
 
         return TRUE;

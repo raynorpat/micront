@@ -23,15 +23,89 @@ KeStallExecutionProcessor(
     }
 }
 
+/*
+ * TSC-based performance counter. The x86 TSC (CPUID 0x01.EDX bit 4)
+ * monotonically increments every CPU cycle on post-Pentium hardware
+ * and is virtualised by QEMU. On modern CPUs it's "invariant" (CPUID
+ * 0x80000007.EDX bit 8) so the rate is constant regardless of P-state
+ * — we trust that since our only target is QEMU.
+ *
+ * Frequency is discovered on the first call via a PIT-channel-2 gated
+ * busy-poll (~55ms blocking once); subsequent calls are lock-free
+ * reads of the cached value.
+ */
+
+static ULONGLONG HalpTscFrequency = 0;    /* Hz; 0 = not yet calibrated */
+
+static ULONGLONG
+HalpReadTsc(VOID)
+{
+    ULONG lo, hi;
+    /* CL 8.50's inline assembler predates the Pentium's RDTSC mnemonic,
+     * so hand-emit the two opcode bytes (0F 31). Result is in EDX:EAX. */
+    _asm { _emit 0x0F }
+    _asm { _emit 0x31 }
+    _asm { mov lo, eax }
+    _asm { mov hi, edx }
+    return ((ULONGLONG)hi << 32) | lo;
+}
+
+/*
+ * Calibrate TSC against PIT channel 2 without disturbing channel 0
+ * (our IRQ0 source). Channel 2's output gates the PC speaker via
+ * port 0x61 bit 5 (OUT2), so we can poll it without wiring an IRQ.
+ *
+ *   1. Program channel 2, mode 0 (one-shot), count = 0xFFFF → ~55ms
+ *      at 1.193182 MHz.
+ *   2. Enable gate 2 (port 0x61 bit 0), keep speaker disabled (bit 1).
+ *   3. Read TSC, poll port 0x61 bit 5 until OUT2 rises (count expired),
+ *      read TSC again.
+ *   4. freq = TSC_delta * PIT_Hz / PIT_count.
+ */
+static VOID
+HalpCalibrateTscViaPIT(VOID)
+{
+    const ULONG pit_count = 0xFFFF;
+    const ULONG pit_hz    = 1193182;
+    UCHAR gate_saved;
+    ULONGLONG start, end, delta;
+
+    HalpWritePort(0x43, 0xB0);                      /* ch2, lo/hi, mode 0 */
+    HalpWritePort(0x42, (UCHAR)(pit_count & 0xFF));
+    HalpWritePort(0x42, (UCHAR)(pit_count >> 8));
+
+    gate_saved = HalpReadPort(0x61);
+    HalpWritePort(0x61, (UCHAR)((gate_saved & ~0x02) | 0x01));
+
+    start = HalpReadTsc();
+    while (!(HalpReadPort(0x61) & 0x20)) { /* spin */ }
+    end = HalpReadTsc();
+
+    HalpWritePort(0x61, gate_saved);
+
+    delta = end - start;
+    HalpTscFrequency = (delta * pit_hz) / pit_count;
+}
+
 LARGE_INTEGER
 KeQueryPerformanceCounter(
     OUT PLARGE_INTEGER PerformanceFrequency OPTIONAL
     )
 {
     LARGE_INTEGER li;
-    li.QuadPart = 0;
+    ULONGLONG tsc;
+
+    if (HalpTscFrequency == 0) {
+        HalpCalibrateTscViaPIT();
+    }
+
+    tsc = HalpReadTsc();
+    li.LowPart  = (ULONG)tsc;
+    li.HighPart = (LONG)(tsc >> 32);
+
     if (PerformanceFrequency) {
-        PerformanceFrequency->QuadPart = 1000000;
+        PerformanceFrequency->LowPart  = (ULONG)HalpTscFrequency;
+        PerformanceFrequency->HighPart = (LONG)(HalpTscFrequency >> 32);
     }
     return li;
 }
