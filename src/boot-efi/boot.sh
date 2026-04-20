@@ -1,12 +1,12 @@
 #!/bin/sh
 #
-# Boot MicroNT UEFI loader under OVMF32 in QEMU.
+# Boot MicroNT UEFI loader under OVMF64 in QEMU.
 # Usage: boot.sh [profile]   (default: headless)
 # Profiles: micront, headless, gui
 #
-# OVMF needs `-machine q35` — the secboot variant's SMM/PI code targets
-# the ICH9 chipset. Default i440fx machine hangs silently before firmware
-# ever initializes.
+# Runs under the default -machine pc (i440fx + PIIX3); OVMF64 works on
+# both i440fx and q35, and our NT 3.5 atdisk.sys only speaks legacy IDE
+# anyway, so staying on PIIX3 saves us the q35-→-AHCI impedance mismatch.
 #
 # Keep a per-checkout copy of NVRAM vars so /usr/share stays pristine.
 
@@ -27,7 +27,7 @@ else
     DISPLAY_FLAGS="-display none"
 fi
 
-cp /usr/share/OVMF/OVMF32_VARS_4M.fd OVMF32_VARS_4M.fd
+cp /usr/share/OVMF/OVMF_VARS_4M.fd OVMF_VARS_4M.fd
 
 # Guest RAM size. Override via env: MEM=512 boot.sh micront
 # Default keeps parity with the old behaviour (qemu-system-i386 default
@@ -55,18 +55,14 @@ fi
 
 #
 # Serial: COM1 (loader) + COM2 (kernel debug) both multiplexed to stdio.
-# QEMU chardev mux-on merges both streams to the same terminal — output
-# is interleaved but lets us watch everything live.
-# Storage: attach esp.img to a PIIX3 IDE controller rather than q35's
-# default AHCI. Reason: NT 3.5's atdisk.sys only speaks legacy IDE/ATA
-# (ISA + PCI IDE), not AHCI. OVMF's built-in IdeBusDxe still finds the
-# PIIX3 controller fine so firmware-side boot is unaffected.
-exec qemu-system-i386 -machine q35 -m "$MEM" \
-    -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF32_CODE_4M.secboot.fd \
-    -drive if=pflash,format=raw,file=./OVMF32_VARS_4M.fd \
-    -device piix3-ide,id=ide \
-    -drive id=disk0,file="$ESP_IMG",format=raw,if=none \
-    -device ide-hd,bus=ide.0,drive=disk0 \
+# QEMU chardev mux-on merges both streams to the same terminal.
+# Storage: legacy IDE is the default on -machine pc — no explicit
+# -device piix3-ide needed. NT 3.5's atdisk.sys speaks IDE/ATA and
+# OVMF64's IdeBusDxe handles the firmware-side enumeration fine.
+exec qemu-system-x86_64 -m "$MEM" \
+    -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
+    -drive if=pflash,format=raw,file=./OVMF_VARS_4M.fd \
+    -drive file="$ESP_IMG",format=raw,if=ide \
     -chardev stdio,id=serialmux,mux=on \
     -serial chardev:serialmux \
     -serial chardev:serialmux \

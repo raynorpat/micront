@@ -94,10 +94,13 @@ EFI_STATUS mmu_alloc_pt_pool(void);
 void mmu_build_and_activate(void);
 
 /* Accessors for loaderblock.c so it can write KSEG0 pointers into
- * LoaderBlock.KernelStack, .Thread, etc. */
+ * LoaderBlock.KernelStack, .Thread, etc. Also used by transition.S to
+ * install our 32-bit descriptor state post-mode-drop. */
 EFI_PHYSICAL_ADDRESS mmu_idle_stack_base(void);
 EFI_PHYSICAL_ADDRESS mmu_tss_base(void);
 EFI_PHYSICAL_ADDRESS mmu_pd_base(void);
+EFI_PHYSICAL_ADDRESS mmu_gdt_base(void);
+EFI_PHYSICAL_ADDRESS mmu_idt_base(void);
 
 /* Top of the idle stack as a KSEG0 virtual address — used by handoff.S
  * so the kernel runs on a stack that survives the low-2GB unmap. */

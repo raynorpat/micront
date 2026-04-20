@@ -211,7 +211,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
      * past any realistic depth from here to the stack switch. */
     {
         UINTN rsp;
-        __asm__ volatile("mov %%esp, %0" : "=r"(rsp));
+        __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
         UINTN top    = (rsp + 0xFFFul) & ~0xFFFul;
         UINTN bottom = (top - 8 * 0x1000) & ~0xFFFul;
         mmu_register_image(bottom, 8);

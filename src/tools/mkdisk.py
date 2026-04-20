@@ -563,7 +563,7 @@ def main() -> None:
     ap.add_argument("--output-dir", type=Path, default=None,
                     help="directory for esp.img (default: build/<profile>)")
     ap.add_argument("--efi-binary", type=Path, required=True,
-                    help="path to BOOTIA32.EFI")
+                    help="path to BOOTX64.EFI")
     ap.add_argument("-x", "--extra", action="append", default=[],
                     metavar="HOST:DEST",
                     help="extra file to stage on the disk "
@@ -584,7 +584,7 @@ def main() -> None:
         host, dest = spec.split(":", 1)
         disk_files.append((dest, Path(host)))
 
-    esp_files = [("EFI/BOOT/BOOTIA32.EFI", args.efi_binary)] + disk_files
+    esp_files = [("EFI/BOOT/BOOTX64.EFI", args.efi_binary)] + disk_files
 
     esp_out = output_dir / "esp.img"
     esp = _build_image(esp_files, size_mb=64)

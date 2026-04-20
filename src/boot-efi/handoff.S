@@ -1,58 +1,32 @@
 /*
- * Final jump to KiSystemStartup.
+ * 64→32 mode-drop placeholder.
  *
- * Takes three args: kernel entry, loader block (both KSEG0 virtuals),
- * and a KSEG0-virtual stack top to switch to. The stack switch is
- * essential under UEFI: our inherited UEFI stack lives in low phys
- * (~100 MB, identity-mapped via our PD), but MiInitMachineDependent
- * zeroes PDEs 0..511 early in MM init, yanking that identity mapping.
- * Continuing on the low-phys stack after that = #PF, no handler, triple
- * fault. Switching to a KSEG0-aliased stack keeps it valid through
- * the unmap.
+ * Under OVMF64 this .S will eventually contain the full transition:
+ *   lgdt 32-bit → far-jmp compat → clear CR0.PG → clear EFER.LME →
+ *   clear CR4.PAE → load 32-bit CR3 → set CR0.PG → far-jmp kernel.
  *
- * Signature:
+ * For Commit A we're only validating that the x86_64 build compiles
+ * and reaches ExitBootServices under OVMF64. handoff() here just halts
+ * so main.c's call site is satisfied. Commit B replaces this with the
+ * real transition stub.
+ *
+ * Signature (unchanged from 32-bit world):
  *   void handoff(unsigned long entry_kseg0,
  *                unsigned long loader_block_kseg0,
- *                unsigned long new_stack_top_kseg0);
+ *                unsigned long stack_top_kseg0);
+ * Under MS x64 the args arrive in RCX, RDX, R8. Under SysV x64 they'd
+ * be RDI, RSI, RDX. We don't touch them — just halt — so either works.
  */
+
     .section .text
     .globl handoff
     .type   handoff, @function
 handoff:
-    /* Disable interrupts — HalpInitializePICs will re-enable once the
-     * kernel's IDT and PIC vectors are set up. */
     cli
-
-    /* Fetch args from caller's stack BEFORE we switch stacks. */
-    movl    4(%esp), %eax     /* entry */
-    movl    8(%esp), %ebx     /* loader_block */
-    movl    12(%esp), %ecx    /* new_stack_top (KSEG0) */
-
-    /* Switch to the KSEG0 stack. From here on we must not reference the
-     * caller's stack frame — args are already in registers. */
-    movl    %ecx, %esp
-
-    /* Initialize FPU and clear pending exceptions (matches boot/entry.S). */
-    clts
-    fninit
-    fnclex
-
-    /* Diagnostic: poke 'K' to COM1 (0x3F8) so we know we reached the jump.
-     * Save/restore eax around it — `mov $'K', %al` clobbers the low byte
-     * of eax, which holds the kernel entry pointer. Learned the hard way. */
-    pushl   %eax
+    /* Diagnostic: 'H' to COM1 so we know the call reached us. */
     movw    $0x3F8, %dx
-    movb    $'K', %al
+    movb    $'H', %al
     outb    %al, %dx
-    popl    %eax
-
-    /* Push loader_block as KiSystemStartup's argument, then call via eax.
-     * KiSystemStartup never returns. */
-    pushl   %ebx
-    calll   *%eax
-
-    /* Unreachable — hang deterministically if we somehow return. */
-    cli
 1:  hlt
     jmp     1b
     .size   handoff, .-handoff

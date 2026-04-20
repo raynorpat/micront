@@ -1262,15 +1262,15 @@ build_userland_gui()     { build_group userland_gui     "${USERLAND_GUI_TARGETS[
 build_efi() {
     echo ""
     echo "========================================"
-    echo "Building: UEFI bootloader (BOOTIA32.EFI)"
+    echo "Building: UEFI bootloader (BOOTX64.EFI)"
     echo "========================================"
-    make -C "$SCRIPT_DIR/boot-efi" BOOTIA32.EFI
+    make -C "$SCRIPT_DIR/boot-efi" BOOTX64.EFI
 }
 
 build_disk() {
     local profile="${1:-${PROFILE:-headless}}"
     local out_dir="$(dirname "$SCRIPT_DIR")/build/$profile"
-    local efi_bin="$SCRIPT_DIR/boot-efi/BOOTIA32.EFI"
+    local efi_bin="$SCRIPT_DIR/boot-efi/BOOTX64.EFI"
 
     echo ""
     echo "========================================"

@@ -434,28 +434,26 @@ static void build_page_tables(void) {
 /*----------------------------------------------------------------------------
  * mmu_build_and_activate
  *
- * Runs post-ExitBootServices. No UEFI services; we stand entirely on
- * our AllocatePages'd pages. Build the page tables, build GDT/IDT in
- * their dedicated pages, then lgdt/lidt/mov-cr3 to switch to our world.
+ * Runs post-ExitBootServices in long mode (64-bit UEFI). We're NOT
+ * switching to our NT-facing 32-bit paging here — that's the job of
+ * the 64→32 transition stub in transition.S. This function's job is
+ * purely to materialize everything in memory that the stub will later
+ * install: the 32-bit page directory + page tables, the 32-bit GDT,
+ * a zeroed IDT, and the TSS.
  *
- * Paging is already on (UEFI's doing); we are SWITCHING tables via CR3.
- * Our PD identity-maps every phys page the loader registered — all
- * mmu_alloc'd regions + the UEFI-placed loader image + the current
- * stack — so execution continues at the same linear address after
- * CR3 is loaded regardless of where UEFI placed us in phys RAM.
+ * The transition stub, running post-mode-drop in 32-bit protected
+ * mode, does the actual lgdt / lidt / mov-cr3 / segment reloads / ltr
+ * sequence using these pre-built structures.
  *---------------------------------------------------------------------------*/
 
 void mmu_build_and_activate(void) {
     UINT32 gdt_kseg0 = (UINT32)(KSEG0_BASE | g_phys_gdt);
-    UINT32 idt_kseg0 = (UINT32)(KSEG0_BASE | g_phys_idt);
     UINT32 tss_kseg0 = (UINT32)(KSEG0_BASE | g_phys_tss);
-    /* TSS limit covers the full 3-page allocation (enough for NT's KTSS
-     * with its I/O bitmap and interrupt redirection map). */
     UINT32 tss_limit = 3 * 4096 - 1;
 
-    /* UEFI leaves interrupts enabled. Our IDT will be all zeros (non-
-     * present gates) post-lidt, so any interrupt would triple-fault us.
-     * HalpInitializePICs re-enables after the kernel's IDT is filled. */
+    /* UEFI leaves interrupts enabled. Disable now — our IDT is zero
+     * and the transition stub runs with IF=0 through the mode drop.
+     * HalpInitializePICs re-enables once the kernel's IDT is filled. */
     __asm__ volatile("cli");
 
     com1_puts("[mmu] building page tables\n");
@@ -473,104 +471,10 @@ void mmu_build_and_activate(void) {
     com1_puts("[mmu] building TSS\n");
     build_tss((void *)(UINTN)g_phys_tss);
 
-    /* OVMF-ia32 runs with paging DISABLED — flat 32-bit protected mode.
-     * We load CR3 (harmless while PG=0), make sure CR4.PAE=0 (our PD is
-     * 2-level, not PDPT), then flip CR0.PG=1 to activate paging.
-     * Identity map covers current EIP so the fetch after CR0.PG survives. */
-    {
-        UINT32 cr0, cr4;
-        __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
-        __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
-        com1_puts("[mmu] entry CR0=");
-        com1_put_hex(cr0);
-        com1_puts(" CR4=");
-        com1_put_hex(cr4);
-        com1_puts("\n");
-
-        if (cr4 & (1u << 5)) {
-            cr4 &= ~(1u << 5);
-            __asm__ volatile("mov %0, %%cr4" : : "r"(cr4));
-        }
-        __asm__ volatile("mov %0, %%cr3"
-                         : : "r"((UINT32)(UINTN)g_phys_pd) : "memory");
-        cr0 |= (1u << 31);                             /* CR0.PG = 1 */
-        __asm__ volatile("mov %0, %%cr0" : : "r"(cr0) : "memory");
-        com1_puts("[mmu] paging enabled\n");
-    }
-
-    /* GDT and IDT still accessed via phys (identity-mapped in our PD).
-     * Kernel will eventually use the KSEG0 view via lgdt/lidt at its base;
-     * we install with KSEG0 base here so when segments reload (via ltr etc.)
-     * they target the canonical high-memory descriptors. */
-    com1_puts("[mmu] installing GDT+IDT at KSEG0 bases\n");
-    {
-        struct __attribute__((packed)) {
-            UINT16 limit;
-            UINT32 base;
-        } gdtr = { 32 * 8 - 1, gdt_kseg0 }, idtr = { 256 * 8 - 1, idt_kseg0 };
-
-        /* Dump descriptor 1 (KGDT_R0_CODE) so we can verify via serial. */
-        {
-            UINT32 *d = (UINT32 *)(UINTN)(g_phys_gdt + 8);
-            com1_puts("  GDT[1]=");
-            com1_put_hex(d[1]);
-            com1_puts(":");
-            com1_put_hex(d[0]);
-            com1_puts("\n");
-        }
-        /* And from the KSEG0 view — should read the same via paging. */
-        {
-            UINT32 *d = (UINT32 *)(UINTN)gdt_kseg0 + 2;  /* +8 bytes = +2 dwords */
-            com1_puts("  via KSEG0 GDT[1]=");
-            com1_put_hex(d[1]);
-            com1_puts(":");
-            com1_put_hex(d[0]);
-            com1_puts("\n");
-        }
-
-        __asm__ volatile("lgdt %0" : : "m"(gdtr));
-        __asm__ volatile("lidt %0" : : "m"(idtr));
-    }
-
-    /* Reload CS via push+lret. We avoid `ljmp $sel, $label` because the
-     * immediate label address needs a PE base-relocation that gnu-efi's
-     * linker script isn't guaranteed to emit for inline-asm immediates.
-     * call/pop gets EIP at runtime; add (end-start) offset; push selector;
-     * push target EIP; lret switches CS and jumps. */
-    com1_puts("[mmu] switch CS\n");
-    __asm__ volatile(
-        "   call 1f\n"
-        "1: popl %%eax\n"
-        "   addl $(2f - 1b), %%eax\n"   /* %eax = addr of label 2 */
-        "   pushl $0x08\n"              /* new CS = KGDT_R0_CODE */
-        "   pushl %%eax\n"              /* new EIP */
-        "   lretl\n"
-        "2:\n"
-        ::: "eax", "memory"
-    );
-    com1_puts("[mmu] ds/es/ss\n");
-    __asm__ volatile(
-        "mov $0x10, %%ax\n"
-        "mov %%ax, %%ds\n"
-        "mov %%ax, %%es\n"
-        "mov %%ax, %%ss\n"
-        ::: "eax", "memory"
-    );
-    com1_puts("[mmu] fs=pcr\n");
-    __asm__ volatile(
-        "mov $0x30, %%ax\n"       /* KGDT_R0_PCR */
-        "mov %%ax, %%fs\n"
-        "xor %%ax, %%ax\n"
-        "mov %%ax, %%gs\n"
-        ::: "eax"
-    );
-
-    com1_puts("[mmu] ltr\n");
-    __asm__ volatile(
-        "mov $0x28, %%ax\n"
-        "ltr %%ax\n"
-        ::: "eax"
-    );
-
-    com1_puts("[mmu] active\n");
+    com1_puts("[mmu] structures ready; mode drop pending\n");
 }
+
+/* Accessors for transition.S: it needs the phys bases of the PD, GDT,
+ * and IDT to install them post-mode-drop. */
+EFI_PHYSICAL_ADDRESS mmu_gdt_base(void) { return g_phys_gdt; }
+EFI_PHYSICAL_ADDRESS mmu_idt_base(void) { return g_phys_idt; }

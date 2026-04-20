@@ -187,7 +187,7 @@ disk: $(LAUNCH)
 	    $(BUILD)/SYSTEM
 	python3 $(TOOLS)/mkdisk.py --profile micront \
 	    --output-dir $(BUILD) \
-	    --efi-binary $(BOOT_EFI)/BOOTIA32.EFI \
+	    --efi-binary $(BOOT_EFI)/BOOTX64.EFI \
 	    -x $(MKFILE_DIR)$(LAUNCH):System32/$(LAUNCH)
 
 boot: disk
