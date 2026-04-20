@@ -20,23 +20,29 @@ jobs:
 
     steps:
       - name: install build deps
-        # Minimal set — no wine, no build-essential. Everything Windows-side
-        # runs through wibo (downloaded below). Only thing needing native
-        # compilation is src/boot-efi/, which uses gcc -m32 + gnu-efi's
-        # ia32 crt0/lds to produce BOOTIA32.EFI.
-        #
-        # Required by boot-efi's Makefile: gcc (pulls in binutils = ld +
-        # objcopy), gcc-multilib (-m32 support), gnu-efi, make. Plus curl
-        # to fetch wibo, ca-certificates for HTTPS, git for checkout.
+        # Three toolchains coexist in this job:
+        #   boot-efi  : gcc + gcc-multilib + gnu-efi (ia32 UEFI PE via
+        #               crt0 + linker script)
+        #   NT build  : wibo (downloaded below) running the MS toolchain
+        #   cr testbed: mingw-w64 i686 cross-compiler producing native-
+        #               subsystem PE; libc6-dev-i386 is needed because
+        #               LuaJIT's buildvm insists on host/target pointer
+        #               size match (host x86_64, target i386) so minilua
+        #               + buildvm must compile under `gcc -m32`.
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
             ca-certificates curl git \
-            gcc gcc-multilib make \
+            gcc gcc-multilib libc6-dev-i386 make \
             gnu-efi \
+            gcc-mingw-w64-i686 binutils-mingw-w64-i686 \
+            mingw-w64-i686-dev \
             python3
 
       - uses: actions/checkout@v4
+        with:
+          # src/cr/luajit is a submodule pinned at our v2.1-micront fork
+          submodules: recursive
 
       - name: download wibo (MicroNT fork)
         # Fetch the release asset from the patched wibo fork. build.sh
@@ -54,8 +60,19 @@ jobs:
           cd src
           ./build.sh
 
+      - name: build cr (native-NT testbed)
+        # Independent from the wibo toolchain — pure mingw cross-compile.
+        # Produces src/cr/luajit.exe (subsystem=native 3.50, ntdll-only).
+        run: make -C src/cr all
+
       - uses: actions/upload-artifact@v4
         with:
           name: gui-disk
           path: build/gui/
+          retention-days: 3
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cr-luajit
+          path: src/cr/luajit.exe
           retention-days: 3

@@ -473,7 +473,6 @@ _CORE_FILES: list[tuple[str, Path]] = [
     ("System32/Drivers/fastfat.sys",SDK_LIB / "fastfat.sys"),
     ("System32/Drivers/npfs.sys",   SDK_LIB / "npfs.sys"),
     ("System32/Drivers/msfs.sys",   SDK_LIB / "msfs.sys"),
-    ("System32/cowtest.exe",        SDK_LIB / "cowtest.exe"),
 ]
 
 # Headless adds the Win32 subsystem base.
@@ -565,12 +564,26 @@ def main() -> None:
                     help="directory for esp.img (default: build/<profile>)")
     ap.add_argument("--efi-binary", type=Path, required=True,
                     help="path to BOOTIA32.EFI")
+    ap.add_argument("-x", "--extra", action="append", default=[],
+                    metavar="HOST:DEST",
+                    help="extra file to stage on the disk "
+                         "(repeatable; e.g. -x build/foo.exe:System32/foo.exe)")
     args = ap.parse_args()
 
     output_dir = args.output_dir or (SRC_ROOT.parent / "build" / args.profile)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     disk_files = get_disk_files(args.profile, output_dir)
+
+    # Extras: appended after the profile core so iteration-specific files
+    # (e.g. a fresh hello-native.exe from src/cr) can ride on top without
+    # editing the profile lists.
+    for spec in args.extra:
+        if ":" not in spec:
+            raise SystemExit(f"-x {spec!r}: expected HOST:DEST")
+        host, dest = spec.split(":", 1)
+        disk_files.append((dest, Path(host)))
+
     esp_files = [("EFI/BOOT/BOOTIA32.EFI", args.efi_binary)] + disk_files
 
     esp_out = output_dir / "esp.img"

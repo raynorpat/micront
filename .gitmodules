@@ -1,0 +1,4 @@
+[submodule "src/cr/luajit"]
+	path = src/cr/luajit
+	url = https://github.com/HarryR/LuaJIT.git
+	branch = v2.1-micront

@@ -396,7 +396,8 @@ class Hive:
 PROFILES = ("micront", "headless", "gui")
 
 
-def build_micront_system_hive(profile: str = "headless") -> Hive:
+def build_micront_system_hive(profile: str = "headless",
+                              launch: str | None = None) -> Hive:
     """Return a Hive populated with the minimum NT 3.5 needs to boot.
 
     `profile` selects how much of the Win32 subsystem gets wired up:
@@ -440,8 +441,10 @@ def build_micront_system_hive(profile: str = "headless") -> Hive:
     # smss defaults to "winlogon.exe" (line 753) which we don't have yet.
     # For headless/gui we launch lsass.exe as InitialCommand — gets the
     # security subsystem up without needing winlogon.
-    if profile == "micront":
-        sm.set_multi_sz("Execute", ["cowtest.exe"])
+    if profile == "micront" and launch:
+        # Micront: whatever caller picked is smss's InitialCommand.
+        # Must be IMAGE_SUBSYSTEM_NATIVE (linked against ntdll only).
+        sm.set_multi_sz("Execute", [launch])
     else:
         # Empty Execute list — smss defaults to "winlogon.exe" as
         # InitialCommand (SMINIT.C line 753). winlogon then launches
@@ -449,6 +452,9 @@ def build_micront_system_hive(profile: str = "headless") -> Hive:
         # hive (Winlogon\System key). Note: the Execute list only
         # accepts IMAGE_SUBSYSTEM_NATIVE binaries; lsass.exe is
         # WINDOWS_GUI subsystem so it can't go here.
+        # For micront with no --launch: smss will hit the winlogon.exe
+        # fallback and fail since micront has no winlogon. Caller must
+        # supply --launch to get a usable micront disk.
         sm.set_multi_sz("Execute", [])
 
     # SystemDrive gets set by the full NTLDR/OSLOADER at boot time from
@@ -731,8 +737,11 @@ def build_micront_software_hive(profile: str = "headless") -> Hive:
            .set_sz("FIXEDFON.FON", "C:\\System32\\vgafix.fon") \
            .set_sz("OEMFONT.FON", "C:\\System32\\vgaoem.fon")
 
-        # Font substitution table — empty is fine for now.
-        cv["FontSubstitutes"]
+        # Font substitution table — maps logical font names to physical
+        # fonts. "MS Shell Dlg" is used by all winlogon dialogs and
+        # must resolve to a font we actually have.
+        cv["FontSubstitutes"] \
+            .set_sz("MS Shell Dlg", "System")
 
     # IniFileMapping — BaseSrvInitializeIniFileMappings reads this tree
     # to map GetProfileString("section","key") calls to registry paths.
@@ -759,6 +768,10 @@ def main() -> None:
                     help="path to write the hive to")
     ap.add_argument("--profile", choices=PROFILES, default="headless",
                     help="which registry layout to emit (default: headless)")
+    ap.add_argument("--launch", default=None, metavar="EXE",
+                    help="micront only: name of the native NT .exe smss "
+                         "should run as InitialCommand (no default — "
+                         "omit and Execute is empty)")
     args = ap.parse_args()
 
     # Banner the stamp we're building against so CI logs pin hive <-> binary
@@ -772,7 +785,7 @@ def main() -> None:
     except Exception as e:
         print(f"build stamp: unavailable ({e})")
 
-    h = build_micront_system_hive(profile=args.profile)
+    h = build_micront_system_hive(profile=args.profile, launch=args.launch)
     size = h.write(args.output)
     print(f"SYSTEM hive ({args.profile}): {size} bytes -> {args.output}")
 

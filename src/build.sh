@@ -826,7 +826,9 @@ build_gdi_geni386() {
 }
 
 build_gdisrv() {
-    build_gdi_geni386 || return 1
+    # gdi_geni386 is hoisted to the front of USERLAND_GUI_TARGETS so
+    # MATH (efloat) can include GDII386.INC. By the time we run here
+    # the .inc is already in GDI/INC/.
     run_nmake "$GDI/GRE"                "GDI/GRE - gdisrvl.lib (GDI engine)"
 }
 
@@ -1216,6 +1218,10 @@ USERLAND_TARGETS=(
 # whole Win32 security/services infrastructure, which isn't tractable
 # for a "small DLL" port. winlogon is the main caller.
 USERLAND_GUI_TARGETS=(
+    # GDI struct-offset generator — must run first because GDI/MATH's
+    # assembly (.asm files under gdi_efloat) includes the generated
+    # GDII386.INC. Same pattern as geni386 leading NTOSKRNL_TARGETS.
+    gdi_geni386
     # GDI support libs (font drivers + math) — built before gdisrvl
     gdi_efloat gdi_fscaler gdi_ttfd gdi_bmfd gdi_vtfd gdi_halftone
     # GDI server (engine) + client DLL

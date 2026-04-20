@@ -37,6 +37,15 @@ if [ "${GDB:-0}" = "1" ]; then
     echo "[boot.sh] gdb-stub on :1234, CPU frozen — attach with: gdb -x gdb.init"
 fi
 
+# TRACE=1 enables QEMU's instruction + interrupt log to ./qemu.log.
+# Off by default — `in_asm` produces a huge file per boot. Opt-in only
+# when actually debugging a bad-instruction / exception.
+TRACE_FLAGS=""
+if [ "${TRACE:-0}" = "1" ]; then
+    TRACE_FLAGS="-d int,cpu_reset,in_asm -D qemu.log"
+    echo "[boot.sh] tracing int,cpu_reset,in_asm to ./qemu.log"
+fi
+
 #
 # Serial: COM1 (loader) + COM2 (kernel debug) both multiplexed to stdio.
 # QEMU chardev mux-on merges both streams to the same terminal — output
@@ -54,6 +63,5 @@ exec qemu-system-i386 -machine q35 \
     -chardev stdio,id=serialmux,mux=on \
     -serial chardev:serialmux \
     -serial chardev:serialmux \
-    -d int,cpu_reset,in_asm -D qemu.log \
     -no-reboot \
-    $DISPLAY_FLAGS $GDB_FLAGS
+    $DISPLAY_FLAGS $GDB_FLAGS $TRACE_FLAGS

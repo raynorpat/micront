@@ -1,0 +1,5 @@
+*.exe
+*.o
+*.fd
+*.a
+NOTES.md
