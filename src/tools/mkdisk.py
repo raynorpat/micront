@@ -447,7 +447,9 @@ def _dir_entry(name11: bytes, attr: int, first_cluster: int,
 SRC_ROOT = Path(__file__).resolve().parent.parent    # src/
 NT        = SRC_ROOT / "NT"
 SDK_LIB   = NT / "PUBLIC/SDK/LIB/I386"
-OBJ       = lambda comp: NT / f"PRIVATE/{comp}/obj/i386"
+
+def OBJ(comp:str):
+    return NT / f"PRIVATE/{comp}/obj/i386"
 
 PROFILES = ("micront", "headless", "gui")
 
@@ -575,8 +577,11 @@ def main() -> None:
                     help="path to BOOTX64.EFI")
     ap.add_argument("-x", "--extra", action="append", default=[],
                     metavar="HOST:DEST",
-                    help="extra file to stage on the disk "
-                         "(repeatable; e.g. -x build/foo.exe:System32/foo.exe)")
+                    help="extra file or directory to stage on the disk. "
+                         "If HOST is a directory its contents are copied "
+                         "recursively under DEST. Repeatable. "
+                         "e.g. -x build/foo.exe:System32/foo.exe, "
+                         "-x src/cr/lua:lua")
     args = ap.parse_args()
 
     output_dir = args.output_dir or (SRC_ROOT.parent / "build" / args.profile)
@@ -586,12 +591,20 @@ def main() -> None:
 
     # Extras: appended after the profile core so iteration-specific files
     # (e.g. a fresh hello-native.exe from src/cr) can ride on top without
-    # editing the profile lists.
+    # editing the profile lists. If HOST is a directory, its contents are
+    # staged recursively under DEST (preserving the subtree layout).
     for spec in args.extra:
         if ":" not in spec:
             raise SystemExit(f"-x {spec!r}: expected HOST:DEST")
         host, dest = spec.split(":", 1)
-        disk_files.append((dest, Path(host)))
+        host_path = Path(host)
+        if host_path.is_dir():
+            for file in sorted(host_path.rglob("*")):
+                if file.is_file():
+                    rel = file.relative_to(host_path).as_posix()
+                    disk_files.append((f"{dest}/{rel}", file))
+        else:
+            disk_files.append((dest, host_path))
 
     esp_files = [("EFI/BOOT/BOOTX64.EFI", args.efi_binary)] + disk_files
 

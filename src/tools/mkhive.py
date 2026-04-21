@@ -397,7 +397,8 @@ PROFILES = ("micront", "headless", "gui")
 
 
 def build_micront_system_hive(profile: str = "headless",
-                              launch: str | None = None) -> Hive:
+                              init_exe: str | None = None,
+                              init_args: str | None = None) -> Hive:
     """Return a Hive populated with the minimum NT 3.5 needs to boot.
 
     `profile` selects how much of the Win32 subsystem gets wired up:
@@ -430,11 +431,16 @@ def build_micront_system_hive(profile: str = "headless",
     control = h["ControlSet001\\Control"]
 
     # MicroNT: Control\InitExe overrides the kernel's hardcoded initial
-    # user-mode process path. The kernel (INIT.C QueryInitExePath) reads
-    # this REG_SZ verbatim as a full NT path. Only set it for micront —
-    # headless/gui leave it unset so the kernel falls back to smss.exe.
-    if profile == "micront" and launch:
-        control.set_sz("InitExe", f"\\SystemRoot\\System32\\{launch}")
+    # user-mode process path. The kernel (INIT.C QueryInitConfig) reads
+    # this REG_SZ verbatim as a full NT path. `init_exe` is a SystemRoot-
+    # relative path (e.g. "lua\\jit.exe"); mkhive prepends \SystemRoot\.
+    # Control\InitArgs is the argv tail appended to CommandLine after a
+    # space separator. Only set for micront — headless/gui leave them
+    # unset so the kernel falls back to \SystemRoot\System32\smss.exe.
+    if init_exe:
+        control.set_sz("InitExe", f"\\SystemRoot\\{init_exe}")
+        if init_args:
+            control.set_sz("InitArgs", init_args)
 
     # Session Manager minimal config so smss.exe doesn't try to spawn
     # programs we don't have (autochk.exe, csrss.exe, etc.).
@@ -444,25 +450,11 @@ def build_micront_system_hive(profile: str = "headless",
     sm.set_multi_sz("BootExecute", [])
 
     # Session Manager\Execute: smss reads this as REG_MULTI_SZ and the
-    # LAST entry becomes InitialCommand (see SMINIT.C:718-726). If empty,
-    # smss defaults to "winlogon.exe" (line 753) which we don't have yet.
-    # For headless/gui we launch lsass.exe as InitialCommand — gets the
-    # security subsystem up without needing winlogon.
-    if profile == "micront" and launch:
-        # Micront: whatever caller picked is smss's InitialCommand.
-        # Must be IMAGE_SUBSYSTEM_NATIVE (linked against ntdll only).
-        sm.set_multi_sz("Execute", [launch])
-    else:
-        # Empty Execute list — smss defaults to "winlogon.exe" as
-        # InitialCommand (SMINIT.C line 753). winlogon then launches
-        # lsass.exe via the "System" registry value in the SOFTWARE
-        # hive (Winlogon\System key). Note: the Execute list only
-        # accepts IMAGE_SUBSYSTEM_NATIVE binaries; lsass.exe is
-        # WINDOWS_GUI subsystem so it can't go here.
-        # For micront with no --launch: smss will hit the winlogon.exe
-        # fallback and fail since micront has no winlogon. Caller must
-        # supply --launch to get a usable micront disk.
-        sm.set_multi_sz("Execute", [])
+    # LAST entry becomes InitialCommand (see SMINIT.C:718-726). Empty list
+    # → smss defaults to "winlogon.exe" (line 753), which then launches
+    # lsass.exe via the SOFTWARE hive Winlogon\System value. Irrelevant to
+    # micront (bypasses smss entirely via Control\InitExe).
+    sm.set_multi_sz("Execute", [])
 
     # SystemDrive gets set by the full NTLDR/OSLOADER at boot time from
     # the ARC boot device — under our UEFI loader it stays unset, so we
@@ -785,10 +777,15 @@ def main() -> None:
                     help="path to write the hive to")
     ap.add_argument("--profile", choices=PROFILES, default="headless",
                     help="which registry layout to emit (default: headless)")
-    ap.add_argument("--launch", default=None, metavar="EXE",
-                    help="micront only: name of the native NT .exe smss "
-                         "should run as InitialCommand (no default — "
-                         "omit and Execute is empty)")
+    ap.add_argument("--init-exe", default=None, metavar="PATH",
+                    help="micront only: SystemRoot-relative path to the "
+                         "initial user-mode process exe (e.g. "
+                         "'lua\\jit.exe'). Control\\InitExe is written as "
+                         "\\SystemRoot\\<PATH>.")
+    ap.add_argument("--init-args", default=None, metavar="ARGS",
+                    help="micront only: Control\\InitArgs value — argv tail "
+                         "appended to InitExe's command line, whitespace-"
+                         "separated. Only meaningful with --init-exe.")
     args = ap.parse_args()
 
     # Banner the stamp we're building against so CI logs pin hive <-> binary
@@ -802,7 +799,9 @@ def main() -> None:
     except Exception as e:
         print(f"build stamp: unavailable ({e})")
 
-    h = build_micront_system_hive(profile=args.profile, launch=args.launch)
+    h = build_micront_system_hive(profile=args.profile,
+                                  init_exe=args.init_exe,
+                                  init_args=args.init_args)
     size = h.write(args.output)
     print(f"SYSTEM hive ({args.profile}): {size} bytes -> {args.output}")
 

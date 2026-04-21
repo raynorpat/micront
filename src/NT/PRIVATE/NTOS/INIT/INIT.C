@@ -779,50 +779,70 @@ Return Value:
 
 
 //
-// MicroNT: the initial user-mode process path is configurable via
-//     \Registry\Machine\System\CurrentControlSet\Control\InitExe  (REG_SZ)
-// If present, the value is expected to be a full NT path and is appended
-// to ImagePathName verbatim. Otherwise fall back to the historical
-// \SystemRoot\System32\smss.exe.
+// MicroNT: the initial user-mode process image and argv are configurable via
+//     \Registry\Machine\System\CurrentControlSet\Control\InitExe   (REG_SZ)
+//     \Registry\Machine\System\CurrentControlSet\Control\InitArgs  (REG_SZ)
+// InitExe is a full NT path used for both ImagePathName and as the first
+// token of CommandLine. If absent, falls back to \SystemRoot\System32\smss.exe.
+// InitArgs, when non-empty, is appended to CommandLine prefixed by a space —
+// so the process sees argv as "<InitExe> <InitArgs>".
 //
 static VOID
-QueryInitExePath(
-    IN OUT PUNICODE_STRING ImagePathName
+QueryInitConfig(
+    IN OUT PUNICODE_STRING ImagePathName,
+    IN OUT PUNICODE_STRING CommandLine
     )
 {
     OBJECT_ATTRIBUTES objectAttributes;
     UNICODE_STRING    keyPath;
     UNICODE_STRING    valueName;
-    HANDLE            key;
+    HANDLE            key = NULL;
     NTSTATUS          status;
     ULONG             length = 0;
     UCHAR             buffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) +
                              DOS_MAX_PATH_LENGTH * sizeof(WCHAR)];
     PKEY_VALUE_PARTIAL_INFORMATION info =
         (PKEY_VALUE_PARTIAL_INFORMATION)buffer;
+    BOOLEAN exeFromRegistry = FALSE;
 
     RtlInitUnicodeString(&keyPath,
         L"\\Registry\\Machine\\System\\CurrentControlSet\\Control");
     InitializeObjectAttributes(&objectAttributes, &keyPath,
                                OBJ_CASE_INSENSITIVE, NULL, NULL);
 
-    status = ZwOpenKey(&key, KEY_READ, &objectAttributes);
-    if (NT_SUCCESS(status)) {
+    if (NT_SUCCESS(ZwOpenKey(&key, KEY_READ, &objectAttributes))) {
         RtlInitUnicodeString(&valueName, L"InitExe");
         status = ZwQueryValueKey(key, &valueName,
                                  KeyValuePartialInformation,
                                  buffer, sizeof(buffer), &length);
-        ZwClose(key);
         if (NT_SUCCESS(status) &&
             info->Type == REG_SZ &&
             info->DataLength >= sizeof(WCHAR)) {
             RtlAppendUnicodeToString(ImagePathName, (PCWSTR)info->Data);
-            return;
+            exeFromRegistry = TRUE;
         }
     }
 
-    RtlAppendUnicodeToString(ImagePathName,
-                             L"\\SystemRoot\\System32\\smss.exe");
+    if (!exeFromRegistry) {
+        RtlAppendUnicodeToString(ImagePathName,
+                                 L"\\SystemRoot\\System32\\smss.exe");
+    }
+
+    RtlCopyUnicodeString(CommandLine, ImagePathName);
+
+    if (key) {
+        RtlInitUnicodeString(&valueName, L"InitArgs");
+        status = ZwQueryValueKey(key, &valueName,
+                                 KeyValuePartialInformation,
+                                 buffer, sizeof(buffer), &length);
+        if (NT_SUCCESS(status) &&
+            info->Type == REG_SZ &&
+            info->DataLength > sizeof(WCHAR)) {
+            RtlAppendUnicodeToString(CommandLine, L" ");
+            RtlAppendUnicodeToString(CommandLine, (PCWSTR)info->Data);
+        }
+        ZwClose(key);
+    }
 }
 
 
@@ -1500,7 +1520,15 @@ Phase1Initialization(
                  );
     ProcessParameters->ImagePathName.Buffer = Dst;
     ProcessParameters->ImagePathName.MaximumLength = DOS_MAX_PATH_LENGTH * sizeof( WCHAR );
-    QueryInitExePath( &ProcessParameters->ImagePathName );
+
+    Dst = (PWSTR)((PCHAR)ProcessParameters->ImagePathName.Buffer +
+                  ProcessParameters->ImagePathName.MaximumLength
+                 );
+    ProcessParameters->CommandLine.Buffer = Dst;
+    ProcessParameters->CommandLine.MaximumLength = DOS_MAX_PATH_LENGTH * sizeof( WCHAR );
+
+    QueryInitConfig( &ProcessParameters->ImagePathName,
+                     &ProcessParameters->CommandLine );
 
     if (NT_SUCCESS(RtlAnsiStringToUnicodeString( &UnicodeSystemPathString,
                         &NtSystemPathString, TRUE)) == FALSE) {
@@ -1533,7 +1561,6 @@ Phase1Initialization(
             }
         }
 
-    ProcessParameters->CommandLine = ProcessParameters->ImagePathName;
     SessionManager = ProcessParameters->ImagePathName;
     Status = RtlCreateUserProcess(
                 &SessionManager,

@@ -37,7 +37,8 @@ CFLAGS := \
     -m32 -Os -Wall -Wextra \
     -ffreestanding -fno-builtin \
     -fno-asynchronous-unwind-tables \
-    -fno-stack-protector
+    -fno-stack-protector \
+    -Irt
 
 # Linker flags, passed via -Wl:
 #   --subsystem native           → IMAGE_SUBSYSTEM_NATIVE (1)
@@ -66,14 +67,24 @@ LDFLAGS := \
 #   -lgcc      — compiler helpers (__divdi3 etc. for 64-bit math)
 LIBS := -lntdllcrt -lntdll -lmingwex -lgcc
 
-# Iteration loop: which of the built .exes boots as smss's InitialCommand.
-# Override on the command line, e.g.  make boot LAUNCH=other-test.exe
-LAUNCH ?= luajit.exe
+# Iteration loop: which of the built .exes runs as the initial user-mode
+# process. LAUNCH is the host-side filename (the artifact from the build);
+# INIT_EXE is its SystemRoot-relative path on disk. The lua\ dir is self-
+# contained: run.exe + main.lua + nt\init.lua all live together.
+# Control\InitArgs carries the argv tail — main.lua is what run.exe eats
+# on startup.
+LAUNCH     ?= luajit.exe
+INIT_EXE   ?= lua\run.exe
+INIT_ARGS  ?= \SystemRoot\lua\main.lua
+
+# Pure-Lua standard library tree — whole dir staged at \SystemRoot\lua\
+# via mkdisk's -x dir:dest mode. Set after MKFILE_DIR below.
 
 # Anchor paths to this Makefile's own location so `make -f .../cr/Makefile`
 # or `make -C src/cr` both work from any cwd.
 MKFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 REPO       := $(abspath $(MKFILE_DIR)/../..)
+LUA_DIR    := $(MKFILE_DIR)lua
 SRC        := $(REPO)/src
 TOOLS      := $(SRC)/tools
 BOOT_EFI   := $(SRC)/boot-efi
@@ -81,18 +92,15 @@ BUILD      := $(REPO)/build/micront
 
 all: luajit
 
-# libkernel32.a — Win32 API shim on ntdll. Links into native-NT binaries
-# that want to pretend kernel32 exists (mainly so unpatched sources like
-# LuaJIT's lj_clib.c Just Work). Stdcall symbols produce `_Name@N`
-# decorations that match a mingw build's kernel32 imports.
-libkernel32.a: kernel32.o
-	$(AR) rcs $@ $^
+# librt.a — the whole runtime: NtProcessStartup trampoline (entry.o),
+# CRT-shaped API (libc_*.o), and Win32 API shim (k32_*.o). Split by
+# concern into small translation units inside rt/; see rt/nt.h,
+# rt/libc_internal.h, rt/k32_internal.h for the shared internal layout.
+RT_OBJS := rt/entry.o \
+           $(patsubst %.c,%.o,$(wildcard rt/libc_*.c)) \
+           $(patsubst %.c,%.o,$(wildcard rt/k32_*.c))
 
-# libntshim.a — CRT-shaped API + NtProcessStartup wrapper. When a
-# consumer wants a classic `int main()` entry, it links -lntshim and
-# gets malloc/printf/stdio/exit from ntshim.o plus start.o's
-# NtProcessStartup → main() trampoline.
-libntshim.a: ntshim.o start.o
+librt.a: $(RT_OBJS)
 	$(AR) rcs $@ $^
 
 # ---------------- LuaJIT (mingw cross-build, native-NT target) --------
@@ -103,11 +111,11 @@ libntshim.a: ntshim.o start.o
 #   TARGET_SYS=Windows  — picks the peobj ljvm mode and the Windows
 #                          clib path (which libkernel32.a backs).
 #   BUILDMODE=static    — no lua51.dll. One monolithic luajit.exe.
-#   TARGET_FLAGS         — inject ntshim.h ahead of LuaJIT's system
-#                          includes so <stdio.h>/<stdlib.h>/<string.h>
-#                          get *our* declarations instead of mingw's.
+#   TARGET_FLAGS         — macro overrides below that disable mingw's
+#                          dllimport CRT/kernel32 decls; LuaJIT calls
+#                          resolve to our static libs instead.
 #   TARGET_LDFLAGS       — subsystem=native, entry = NtProcessStartup
-#                          wrapper from start.o, OS 3.50 stamp.
+#                          (from rt/entry.o), OS 3.50 stamp.
 #   TARGET_XLIBS         — replace default `-lm` with our full link set.
 LUAJIT_SRC   := $(MKFILE_DIR)luajit/src
 LUAJIT_EXE   := $(LUAJIT_SRC)/luajit.exe
@@ -137,9 +145,9 @@ LUAJIT_TLDFLAGS := -nostdlib -nostartfiles -nodefaultlibs \
                    -Wl,--file-alignment,0x200,--section-alignment,0x1000 \
                    -L$(MKFILE_DIR)
 
-LUAJIT_TLIBS := -lntshim -lkernel32 -lmingwex -lntdllcrt -lntdll -lgcc
+LUAJIT_TLIBS := -lrt -lmingwex -lntdllcrt -lntdll -lgcc
 
-$(LUAJIT_EXE): libntshim.a libkernel32.a
+$(LUAJIT_EXE): librt.a
 	# Force relink: LuaJIT's Makefile sees its own luajit.exe as up-to-
 	# date vs its own deps and won't notice that our static libs got
 	# rebuilt. Blowing away the final target makes it relink (all
@@ -183,12 +191,15 @@ clean:
 # precious. Boot-EFI itself is assumed already built (via build.sh boot).
 disk: $(LAUNCH)
 	mkdir -p $(BUILD)
-	python3 $(TOOLS)/mkhive.py --profile micront --launch $(LAUNCH) \
+	python3 $(TOOLS)/mkhive.py --profile micront \
+	    --init-exe '$(INIT_EXE)' \
+	    --init-args '$(INIT_ARGS)' \
 	    $(BUILD)/SYSTEM
 	python3 $(TOOLS)/mkdisk.py --profile micront \
 	    --output-dir $(BUILD) \
 	    --efi-binary $(BOOT_EFI)/BOOTX64.EFI \
-	    -x $(MKFILE_DIR)$(LAUNCH):System32/$(LAUNCH)
+	    -x $(LUA_DIR):lua \
+	    -x $(MKFILE_DIR)$(LAUNCH):lua/run.exe
 
 boot: disk
 	$(BOOT_EFI)/boot.sh micront
