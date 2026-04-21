@@ -39,4 +39,48 @@ static __inline__ int _k32_wcsicmp_ascii(const unsigned short *a,
     }
 }
 
+/* ---------- TEB direct access ---------------------------------------- */
+/*
+ * Canonical per-thread data lives in the TEB (Thread Environment Block),
+ * reached via the FS segment register. Offsets verified against NT 3.5's
+ * ntpsapi.h TEB struct (pack 4); same as modern x86 Windows:
+ *
+ *   fs:0x18      TEB.Self             (points back at TEB base)
+ *   fs:0x30      TEB.ProcessEnvironmentBlock
+ *   fs:0x34      TEB.LastErrorValue
+ *   fs:0xE10     TEB.TlsSlots[64]     (TLS_MINIMUM_AVAILABLE)
+ *
+ * We access each slot with a direct segment-prefixed load/store — no
+ * dereference of TEB base required. Kernel zeroes TlsSlots on thread
+ * creation, so TlsGetValue returns NULL for a freshly-allocated index
+ * without explicit init work.
+ */
+
+#define TEB_TLS_SLOT_COUNT   64
+
+static __inline__ DWORD _k32_last_error_read(void)
+{
+    DWORD v;
+    __asm__ ("movl %%fs:0x34, %0" : "=r"(v));
+    return v;
+}
+
+static __inline__ void _k32_last_error_write(DWORD v)
+{
+    __asm__ volatile ("movl %0, %%fs:0x34" : : "r"(v) : "memory");
+}
+
+static __inline__ void *_k32_tls_get(unsigned idx)
+{
+    void *v;
+    __asm__ ("movl %%fs:0xE10(,%1,4), %0" : "=r"(v) : "r"(idx));
+    return v;
+}
+
+static __inline__ void _k32_tls_set(unsigned idx, void *val)
+{
+    __asm__ volatile ("movl %0, %%fs:0xE10(,%1,4)"
+                      : : "r"(val), "r"(idx) : "memory");
+}
+
 #endif /* RT_K32_INTERNAL_H */

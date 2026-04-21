@@ -3,19 +3,16 @@
  * GetModuleFileNameA. All three sit at the "error / diagnostics"
  * corner of the Win32 surface.
  *
- * LastError is a process-global here (NT stores it in TEB+0x34);
- * single-threaded safe, trivially promotable to TEB-backed when we
- * add threads.
+ * LastError sits in TEB+0x34 (the canonical slot every Win32 caller
+ * expects). Direct fs:0x34 access keeps it thread-safe without any
+ * locking and coexists with ntdll internals that may also read the
+ * TEB-side value (unlike a kernel32-local global).
  */
 
 #include "k32_internal.h"
 
-/* ntdll walking not needed here; GetModuleFileNameA walks PEB->Ldr. */
-
-static DWORD g_last_error = 0;
-
-DWORD WINAPI GetLastError(void)       { return g_last_error; }
-void  WINAPI SetLastError(DWORD err)  { g_last_error = err; }
+DWORD WINAPI GetLastError(void)       { return _k32_last_error_read(); }
+void  WINAPI SetLastError(DWORD err)  { _k32_last_error_write(err); }
 
 /* FormatMessageA — LuaJIT's package loader uses this to turn error
  * codes into human-readable strings. Real impl walks per-DLL per-locale

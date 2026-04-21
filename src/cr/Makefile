@@ -76,6 +76,7 @@ LIBS := -lntdllcrt -lntdll -lmingwex -lgcc
 LAUNCH     ?= luajit.exe
 INIT_EXE   ?= lua\run.exe
 INIT_ARGS  ?= \SystemRoot\lua\main.lua
+INIT_STDIO ?= \Device\Serial0
 
 # Pure-Lua standard library tree — whole dir staged at \SystemRoot\lua\
 # via mkdisk's -x dir:dest mode. Set after MKFILE_DIR below.
@@ -194,6 +195,7 @@ disk: $(LAUNCH)
 	python3 $(TOOLS)/mkhive.py --profile micront \
 	    --init-exe '$(INIT_EXE)' \
 	    --init-args '$(INIT_ARGS)' \
+	    --init-stdio '$(INIT_STDIO)' \
 	    $(BUILD)/SYSTEM
 	python3 $(TOOLS)/mkdisk.py --profile micront \
 	    --output-dir $(BUILD) \

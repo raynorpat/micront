@@ -398,7 +398,8 @@ PROFILES = ("micront", "headless", "gui")
 
 def build_micront_system_hive(profile: str = "headless",
                               init_exe: str | None = None,
-                              init_args: str | None = None) -> Hive:
+                              init_args: str | None = None,
+                              init_stdio: str | None = None) -> Hive:
     """Return a Hive populated with the minimum NT 3.5 needs to boot.
 
     `profile` selects how much of the Win32 subsystem gets wired up:
@@ -430,17 +431,26 @@ def build_micront_system_hive(profile: str = "headless",
 
     control = h["ControlSet001\\Control"]
 
-    # MicroNT: Control\InitExe overrides the kernel's hardcoded initial
-    # user-mode process path. The kernel (INIT.C QueryInitConfig) reads
-    # this REG_SZ verbatim as a full NT path. `init_exe` is a SystemRoot-
-    # relative path (e.g. "lua\\jit.exe"); mkhive prepends \SystemRoot\.
-    # Control\InitArgs is the argv tail appended to CommandLine after a
-    # space separator. Only set for micront — headless/gui leave them
-    # unset so the kernel falls back to \SystemRoot\System32\smss.exe.
+    # MicroNT: Control\Init\* overrides the kernel's initial user-mode
+    # process configuration (INIT.C QueryInitConfig, which opens this
+    # subkey once and queries three values):
+    #
+    #   Exe    SystemRoot-relative path (mkhive prepends \SystemRoot\).
+    #          Written as a full NT path to the registry.
+    #   Args   Verbatim argv tail, appended to CommandLine after a space.
+    #   Stdio  NT device path (e.g. "\Device\Serial0"). Kernel opens
+    #          inheritable + raw-mode timeouts; handle lands in
+    #          ProcessParameters.Standard{Input,Output,Error}.
+    #
+    # Absent → kernel falls back to \SystemRoot\System32\smss.exe with
+    # no args and no stdio.
     if init_exe:
-        control.set_sz("InitExe", f"\\SystemRoot\\{init_exe}")
+        init = control["Init"]
+        init.set_sz("Exe", f"\\SystemRoot\\{init_exe}")
         if init_args:
-            control.set_sz("InitArgs", init_args)
+            init.set_sz("Args", init_args)
+        if init_stdio:
+            init.set_sz("Stdio", init_stdio)
 
     # Session Manager minimal config so smss.exe doesn't try to spawn
     # programs we don't have (autochk.exe, csrss.exe, etc.).
@@ -783,9 +793,14 @@ def main() -> None:
                          "'lua\\jit.exe'). Control\\InitExe is written as "
                          "\\SystemRoot\\<PATH>.")
     ap.add_argument("--init-args", default=None, metavar="ARGS",
-                    help="micront only: Control\\InitArgs value — argv tail "
-                         "appended to InitExe's command line, whitespace-"
+                    help="micront only: Control\\Init\\Args — argv tail "
+                         "appended to Exe's command line, whitespace-"
                          "separated. Only meaningful with --init-exe.")
+    ap.add_argument("--init-stdio", default=None, metavar="NTPATH",
+                    help="micront only: Control\\Init\\Stdio — NT device "
+                         "path (e.g. \\Device\\Serial0) opened inheritable "
+                         "by the kernel and wired into the init process's "
+                         "stdin/stdout/stderr handles.")
     args = ap.parse_args()
 
     # Banner the stamp we're building against so CI logs pin hive <-> binary
@@ -801,7 +816,8 @@ def main() -> None:
 
     h = build_micront_system_hive(profile=args.profile,
                                   init_exe=args.init_exe,
-                                  init_args=args.init_args)
+                                  init_args=args.init_args,
+                                  init_stdio=args.init_stdio)
     size = h.write(args.output)
     print(f"SYSTEM hive ({args.profile}): {size} bytes -> {args.output}")
 

@@ -77,7 +77,6 @@ ExBurnMemory(
 #pragma alloc_text(INIT,ExBurnMemory)
 #endif
 
-
 //
 // Define global static data used during initialization.
 //
@@ -128,7 +127,7 @@ BOOLEAN PsWatchEnabled = TRUE;
 #else
 BOOLEAN PsWatchEnabled = FALSE;
 #endif // DBG
-
+
 #if DEVL
 #if i386
 
@@ -310,7 +309,6 @@ ExBurnMemory(
 
 }
 
-
 VOID
 ExpInitializeExecutive(
     IN ULONG Number,
@@ -776,21 +774,40 @@ Return Value:
     }
 }
 
-
+
 
 //
-// MicroNT: the initial user-mode process image and argv are configurable via
-//     \Registry\Machine\System\CurrentControlSet\Control\InitExe   (REG_SZ)
-//     \Registry\Machine\System\CurrentControlSet\Control\InitArgs  (REG_SZ)
-// InitExe is a full NT path used for both ImagePathName and as the first
-// token of CommandLine. If absent, falls back to \SystemRoot\System32\smss.exe.
-// InitArgs, when non-empty, is appended to CommandLine prefixed by a space —
-// so the process sees argv as "<InitExe> <InitArgs>".
+// MicroNT: the initial user-mode process is configured via a registry
+// group under \Registry\Machine\System\CurrentControlSet\Control\Init:
 //
+//     Exe    (REG_SZ)  full NT path to initial image. Fallback:
+//                      \SystemRoot\System32\smss.exe
+//     Args   (REG_SZ)  argv tail appended to CommandLine after a space
+//     Stdio  (REG_SZ)  NT device path opened inheritable, placed into
+//                      ProcessParameters.Standard{Input,Output,Error}.
+//                      Raw-mode serial timeouts applied automatically —
+//                      a REPL can fread(1) without further configuration.
+//
+// Caller must ZwClose the returned StdioHandle after RtlCreateUserProcess
+// (with InheritHandles=TRUE) has duplicated it into the child.
+//
+
+/* IOCTL_SERIAL_SET_TIMEOUTS + SERIAL_TIMEOUTS from NTDDSER.H, redeclared
+ * locally so we don't pull the whole serial header into INIT.C. */
+#define INIT_IOCTL_SERIAL_SET_TIMEOUTS   0x001B001C
+typedef struct _INIT_SERIAL_TIMEOUTS {
+    ULONG ReadIntervalTimeout;
+    ULONG ReadTotalTimeoutMultiplier;
+    ULONG ReadTotalTimeoutConstant;
+    ULONG WriteTotalTimeoutMultiplier;
+    ULONG WriteTotalTimeoutConstant;
+} INIT_SERIAL_TIMEOUTS;
+
 static VOID
 QueryInitConfig(
-    IN OUT PUNICODE_STRING ImagePathName,
-    IN OUT PUNICODE_STRING CommandLine
+    IN OUT PRTL_USER_PROCESS_PARAMETERS ProcessParameters,
+    OUT    PHANDLE StdioHandle,
+    OUT    PUNICODE_STRING StdioPath    /* caller inits Buffer + MaximumLength */
     )
 {
     OBJECT_ATTRIBUTES objectAttributes;
@@ -805,47 +822,241 @@ QueryInitConfig(
         (PKEY_VALUE_PARTIAL_INFORMATION)buffer;
     BOOLEAN exeFromRegistry = FALSE;
 
+    *StdioHandle = NULL;
+    StdioPath->Length = 0;
+
     RtlInitUnicodeString(&keyPath,
-        L"\\Registry\\Machine\\System\\CurrentControlSet\\Control");
+        L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\Init");
     InitializeObjectAttributes(&objectAttributes, &keyPath,
                                OBJ_CASE_INSENSITIVE, NULL, NULL);
 
     if (NT_SUCCESS(ZwOpenKey(&key, KEY_READ, &objectAttributes))) {
-        RtlInitUnicodeString(&valueName, L"InitExe");
+        /* Exe */
+        RtlInitUnicodeString(&valueName, L"Exe");
         status = ZwQueryValueKey(key, &valueName,
                                  KeyValuePartialInformation,
                                  buffer, sizeof(buffer), &length);
         if (NT_SUCCESS(status) &&
             info->Type == REG_SZ &&
             info->DataLength >= sizeof(WCHAR)) {
-            RtlAppendUnicodeToString(ImagePathName, (PCWSTR)info->Data);
+            RtlAppendUnicodeToString(&ProcessParameters->ImagePathName,
+                                     (PCWSTR)info->Data);
             exeFromRegistry = TRUE;
         }
     }
 
     if (!exeFromRegistry) {
-        RtlAppendUnicodeToString(ImagePathName,
+        RtlAppendUnicodeToString(&ProcessParameters->ImagePathName,
                                  L"\\SystemRoot\\System32\\smss.exe");
     }
 
-    RtlCopyUnicodeString(CommandLine, ImagePathName);
+    RtlCopyUnicodeString(&ProcessParameters->CommandLine,
+                         &ProcessParameters->ImagePathName);
 
-    if (key) {
-        RtlInitUnicodeString(&valueName, L"InitArgs");
-        status = ZwQueryValueKey(key, &valueName,
-                                 KeyValuePartialInformation,
-                                 buffer, sizeof(buffer), &length);
-        if (NT_SUCCESS(status) &&
-            info->Type == REG_SZ &&
-            info->DataLength > sizeof(WCHAR)) {
-            RtlAppendUnicodeToString(CommandLine, L" ");
-            RtlAppendUnicodeToString(CommandLine, (PCWSTR)info->Data);
+    if (!key) {
+        return;
+    }
+
+    /* Args */
+    RtlInitUnicodeString(&valueName, L"Args");
+    status = ZwQueryValueKey(key, &valueName,
+                             KeyValuePartialInformation,
+                             buffer, sizeof(buffer), &length);
+    if (NT_SUCCESS(status) &&
+        info->Type == REG_SZ &&
+        info->DataLength > sizeof(WCHAR)) {
+        RtlAppendUnicodeToString(&ProcessParameters->CommandLine, L" ");
+        RtlAppendUnicodeToString(&ProcessParameters->CommandLine,
+                                 (PCWSTR)info->Data);
+    }
+
+    /* Stdio — open device inheritable; place handle in all three stdio
+     * slots of ProcessParameters. Child inherits on RtlCreateUserProcess
+     * with InheritHandles=TRUE; the numeric handle value is preserved. */
+    RtlInitUnicodeString(&valueName, L"Stdio");
+    status = ZwQueryValueKey(key, &valueName,
+                             KeyValuePartialInformation,
+                             buffer, sizeof(buffer), &length);
+    if (NT_SUCCESS(status) &&
+        info->Type == REG_SZ &&
+        info->DataLength > sizeof(WCHAR)) {
+        UNICODE_STRING    devicePath;
+        OBJECT_ATTRIBUTES stdioObja;
+        IO_STATUS_BLOCK   iosb;
+        HANDLE            h;
+
+        RtlInitUnicodeString(&devicePath, (PCWSTR)info->Data);
+        /* Copy path into caller's buffer for later display by DumpInitConfig. */
+        if (devicePath.Length <= StdioPath->MaximumLength - sizeof(WCHAR)) {
+            RtlCopyMemory(StdioPath->Buffer, devicePath.Buffer, devicePath.Length);
+            StdioPath->Buffer[devicePath.Length / sizeof(WCHAR)] = 0;
+            StdioPath->Length = devicePath.Length;
         }
-        ZwClose(key);
+        InitializeObjectAttributes(&stdioObja, &devicePath,
+                                   OBJ_CASE_INSENSITIVE | OBJ_INHERIT,
+                                   NULL, NULL);
+        status = ZwCreateFile(&h,
+                              /* DesiredAccess: GENERIC_READ|GENERIC_WRITE|SYNCHRONIZE */
+                              0xC0100000,
+                              &stdioObja, &iosb,
+                              NULL,                  /* AllocationSize */
+                              0x80,                  /* FileAttributes = NORMAL */
+                              FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              FILE_OPEN,
+                              FILE_SYNCHRONOUS_IO_NONALERT,
+                              NULL, 0);              /* EaBuffer */
+        if (NT_SUCCESS(status)) {
+            INIT_SERIAL_TIMEOUTS t;
+            /* Raw mode: read returns as soon as any byte arrives. The
+             * per-call-first-byte block is what an interactive REPL
+             * wants — fread(1) blocks for a keystroke, fread(N) returns
+             * on the first byte with whatever's buffered. */
+            t.ReadIntervalTimeout         = (ULONG)-1;   /* MAXULONG */
+            t.ReadTotalTimeoutMultiplier  = (ULONG)-1;
+            t.ReadTotalTimeoutConstant    = 0;
+            t.WriteTotalTimeoutMultiplier = 0;
+            t.WriteTotalTimeoutConstant   = 0;
+            /* Best-effort: ignore failure (device may not be a serial
+             * port — e.g. stdio pointed at \Device\Null). */
+            ZwDeviceIoControlFile(h, NULL, NULL, NULL, &iosb,
+                                  INIT_IOCTL_SERIAL_SET_TIMEOUTS,
+                                  &t, sizeof(t),
+                                  NULL, 0);
+
+            ProcessParameters->StandardInput  = h;
+            ProcessParameters->StandardOutput = h;
+            ProcessParameters->StandardError  = h;
+            *StdioHandle = h;
+        }
+    }
+
+    ZwClose(key);
+}
+
+
+//
+// DumpInitConfig — dump the init-process configuration to the boot log,
+// matching the format IopDumpModuleVersion uses for drivers:
+//
+//   INIT: exe   \SystemRoot\lua\run.exe  3.50.0.1  (0x0002a7b4)
+//   INIT: args  \SystemRoot\lua\main.lua
+//   INIT: stdio \Device\Serial0  (handle 0x00000040)
+//
+// Version + PE checksum come from mapping the Exe as an image section
+// (SEC_IMAGE) into system space, reading OptionalHeader.CheckSum, and
+// walking the RT_VERSION resource via LdrFindResource_U / LdrAccessResource.
+//
+static VOID
+DumpInitConfig(
+    IN PRTL_USER_PROCESS_PARAMETERS ProcessParameters,
+    IN HANDLE StdioHandle,
+    IN PUNICODE_STRING StdioPath
+    )
+{
+    /* See IopDumpModuleVersion for struct provenance — fields we read
+     * from VS_VERSIONINFO's embedded VS_FIXEDFILEINFO. */
+    typedef struct {
+        ULONG dwSignature;
+        ULONG dwStrucVersion;
+        ULONG dwFileVersionMS;
+        ULONG dwFileVersionLS;
+    } KERN_VS_FIXEDFILEINFO_HEAD;
+
+    NTSTATUS                   Status;
+    HANDLE                     FileHandle = NULL;
+    HANDLE                     SectionHandle = NULL;
+    OBJECT_ATTRIBUTES          oa;
+    IO_STATUS_BLOCK            iosb;
+    PVOID                      Base = NULL;
+    ULONG                      ViewSize = 0;
+    PIMAGE_NT_HEADERS          NtHeader;
+    ULONG                      ResourceIdPath[3];
+    PIMAGE_RESOURCE_DATA_ENTRY ResourceDataEntry;
+    PVOID                      ResourceBase;
+    ULONG                      ResourceSize;
+    KERN_VS_FIXEDFILEINFO_HEAD *ffi;
+    ULONG                      CheckSum = 0;
+    ULONG                      FileVerMS = 0, FileVerLS = 0;
+    UNICODE_STRING             Args;
+
+    /* Map the Exe image to read PE header fields and resources. */
+    InitializeObjectAttributes(&oa, &ProcessParameters->ImagePathName,
+                               OBJ_CASE_INSENSITIVE, NULL, NULL);
+    Status = ZwOpenFile(&FileHandle,
+                        FILE_READ_DATA | FILE_EXECUTE | SYNCHRONIZE,
+                        &oa, &iosb,
+                        FILE_SHARE_READ,
+                        FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE);
+    if (NT_SUCCESS(Status)) {
+        Status = ZwCreateSection(&SectionHandle,
+                                 SECTION_MAP_READ | SECTION_MAP_EXECUTE,
+                                 NULL, NULL,
+                                 PAGE_EXECUTE_READ,
+                                 SEC_IMAGE,
+                                 FileHandle);
+        ZwClose(FileHandle);
+        if (NT_SUCCESS(Status)) {
+            Status = ZwMapViewOfSection(SectionHandle, NtCurrentProcess(),
+                                        &Base, 0, 0, NULL, &ViewSize,
+                                        ViewShare, 0, PAGE_READONLY);
+            if (NT_SUCCESS(Status)) {
+                NtHeader = RtlImageNtHeader(Base);
+                if (NtHeader) CheckSum = NtHeader->OptionalHeader.CheckSum;
+
+                ResourceIdPath[0] = 16;    /* RT_VERSION */
+                ResourceIdPath[1] = 1;
+                ResourceIdPath[2] = 0;
+                Status = LdrFindResource_U(Base, ResourceIdPath, 3,
+                                           &ResourceDataEntry);
+                if (NT_SUCCESS(Status)) {
+                    Status = LdrAccessResource(Base, ResourceDataEntry,
+                                               &ResourceBase, &ResourceSize);
+                    if (NT_SUCCESS(Status) && ResourceSize >= 64) {
+                        ffi = (KERN_VS_FIXEDFILEINFO_HEAD *)
+                              ((PUCHAR)ResourceBase + 40);
+                        if (ffi->dwSignature == 0xFEEF04BD) {
+                            FileVerMS = ffi->dwFileVersionMS;
+                            FileVerLS = ffi->dwFileVersionLS;
+                        }
+                    }
+                }
+                ZwUnmapViewOfSection(NtCurrentProcess(), Base);
+            }
+            ZwClose(SectionHandle);
+        }
+    }
+
+    DbgPrint("INIT: exe   %wZ  %u.%u.%u.%u  (0x%08lx)\n",
+             &ProcessParameters->ImagePathName,
+             (FileVerMS >> 16) & 0xFFFF, FileVerMS & 0xFFFF,
+             (FileVerLS >> 16) & 0xFFFF, FileVerLS & 0xFFFF,
+             CheckSum);
+
+    /* CommandLine was built as "<exe>[ <args>]". Slice past the exe
+     * portion for display; if there's no trailing space there were no args. */
+    if (ProcessParameters->CommandLine.Length >
+            ProcessParameters->ImagePathName.Length + sizeof(WCHAR)) {
+        Args.Buffer = (PWSTR)((PUCHAR)ProcessParameters->CommandLine.Buffer +
+                              ProcessParameters->ImagePathName.Length +
+                              sizeof(WCHAR));
+        Args.Length = ProcessParameters->CommandLine.Length -
+                      ProcessParameters->ImagePathName.Length -
+                      sizeof(WCHAR);
+        Args.MaximumLength = Args.Length;
+        DbgPrint("INIT: args  %wZ\n", &Args);
+    } else {
+        DbgPrint("INIT: args  (none)\n");
+    }
+
+    if (StdioHandle != NULL && StdioPath != NULL && StdioPath->Length > 0) {
+        DbgPrint("INIT: stdio %wZ  (handle 0x%08lx)\n",
+                 StdioPath, StdioHandle);
+    } else {
+        DbgPrint("INIT: stdio (none)\n");
     }
 }
 
-
+
 VOID
 Phase1Initialization(
     IN PVOID Context
@@ -886,6 +1097,9 @@ Phase1Initialization(
     PMESSAGE_RESOURCE_ENTRY MessageEntry1;
 #endif
     PCHAR MPKernelString;
+    HANDLE StdioHandle = NULL;
+    WCHAR StdioPathBuffer[128];
+    UNICODE_STRING StdioPath;
 
     //
     // Set the phase number and raise the priority of current thread to
@@ -1527,8 +1741,12 @@ Phase1Initialization(
     ProcessParameters->CommandLine.Buffer = Dst;
     ProcessParameters->CommandLine.MaximumLength = DOS_MAX_PATH_LENGTH * sizeof( WCHAR );
 
-    QueryInitConfig( &ProcessParameters->ImagePathName,
-                     &ProcessParameters->CommandLine );
+    StdioPath.Buffer = StdioPathBuffer;
+    StdioPath.Length = 0;
+    StdioPath.MaximumLength = sizeof(StdioPathBuffer);
+
+    QueryInitConfig( ProcessParameters, &StdioHandle, &StdioPath );
+    DumpInitConfig( ProcessParameters, StdioHandle, &StdioPath );
 
     if (NT_SUCCESS(RtlAnsiStringToUnicodeString( &UnicodeSystemPathString,
                         &NtSystemPathString, TRUE)) == FALSE) {
@@ -1569,11 +1787,19 @@ Phase1Initialization(
                 NULL,
                 NULL,
                 NULL,
-                FALSE,
+                TRUE,                 /* InheritHandles: duplicates our
+                                       * OBJ_INHERIT-marked Stdio handle
+                                       * into the child's handle table. */
                 NULL,
                 NULL,
                 &ProcessInformation
                 );
+
+    /* The child now holds its own duplicate of the stdio handle. Drop
+     * ours (noop if QueryInitConfig didn't open one). */
+    if (StdioHandle != NULL) {
+        ZwClose( StdioHandle );
+    }
     if ( !NT_SUCCESS(Status) ) {
 #if DBG
         sprintf(DebugBuffer,
@@ -1685,7 +1911,6 @@ Phase1Initialization(
         MmZeroPageThread();
     }
 }
-
 
 NTSTATUS
 CreateSystemRootLink(
@@ -1949,7 +2174,7 @@ Routine Description:
     *AddressOfEntryPoint = (PVOID)((ULONG)DllBase + Addr[Ordinal]);
     return STATUS_SUCCESS;
 }
-
+
 static USHORT
 NameToOrdinal (
     IN PSZ NameOfEntryPoint,
