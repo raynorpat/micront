@@ -97,7 +97,7 @@ ULONG NtBuildNumber = VER_PRODUCTBUILD | 0xF0000000;
 
 STRING NtSystemPathString;
 PUCHAR NtSystemPath;
-UCHAR NtSystemPathBuffer[ DOS_MAX_PATH_LENGTH ] = "C:\\NT";
+UCHAR NtSystemPathBuffer[ DOS_MAX_PATH_LENGTH ];
 
 ULONG InitializationPhase;  // bss 0
 
@@ -777,6 +777,55 @@ Return Value:
 }
 
 
+
+//
+// MicroNT: the initial user-mode process path is configurable via
+//     \Registry\Machine\System\CurrentControlSet\Control\InitExe  (REG_SZ)
+// If present, the value is expected to be a full NT path and is appended
+// to ImagePathName verbatim. Otherwise fall back to the historical
+// \SystemRoot\System32\smss.exe.
+//
+static VOID
+QueryInitExePath(
+    IN OUT PUNICODE_STRING ImagePathName
+    )
+{
+    OBJECT_ATTRIBUTES objectAttributes;
+    UNICODE_STRING    keyPath;
+    UNICODE_STRING    valueName;
+    HANDLE            key;
+    NTSTATUS          status;
+    ULONG             length = 0;
+    UCHAR             buffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) +
+                             DOS_MAX_PATH_LENGTH * sizeof(WCHAR)];
+    PKEY_VALUE_PARTIAL_INFORMATION info =
+        (PKEY_VALUE_PARTIAL_INFORMATION)buffer;
+
+    RtlInitUnicodeString(&keyPath,
+        L"\\Registry\\Machine\\System\\CurrentControlSet\\Control");
+    InitializeObjectAttributes(&objectAttributes, &keyPath,
+                               OBJ_CASE_INSENSITIVE, NULL, NULL);
+
+    status = ZwOpenKey(&key, KEY_READ, &objectAttributes);
+    if (NT_SUCCESS(status)) {
+        RtlInitUnicodeString(&valueName, L"InitExe");
+        status = ZwQueryValueKey(key, &valueName,
+                                 KeyValuePartialInformation,
+                                 buffer, sizeof(buffer), &length);
+        ZwClose(key);
+        if (NT_SUCCESS(status) &&
+            info->Type == REG_SZ &&
+            info->DataLength >= sizeof(WCHAR)) {
+            RtlAppendUnicodeToString(ImagePathName, (PCWSTR)info->Data);
+            return;
+        }
+    }
+
+    RtlAppendUnicodeToString(ImagePathName,
+                             L"\\SystemRoot\\System32\\smss.exe");
+}
+
+
 VOID
 Phase1Initialization(
     IN PVOID Context
@@ -1451,12 +1500,7 @@ Phase1Initialization(
                  );
     ProcessParameters->ImagePathName.Buffer = Dst;
     ProcessParameters->ImagePathName.MaximumLength = DOS_MAX_PATH_LENGTH * sizeof( WCHAR );
-    RtlAppendUnicodeToString( &ProcessParameters->ImagePathName,
-                              L"\\SystemRoot\\System32"
-                            );
-    RtlAppendUnicodeToString( &ProcessParameters->ImagePathName,
-                              L"\\smss.exe"
-                            );
+    QueryInitExePath( &ProcessParameters->ImagePathName );
 
     if (NT_SUCCESS(RtlAnsiStringToUnicodeString( &UnicodeSystemPathString,
                         &NtSystemPathString, TRUE)) == FALSE) {

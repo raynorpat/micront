@@ -429,6 +429,13 @@ def build_micront_system_hive(profile: str = "headless",
 
     control = h["ControlSet001\\Control"]
 
+    # MicroNT: Control\InitExe overrides the kernel's hardcoded initial
+    # user-mode process path. The kernel (INIT.C QueryInitExePath) reads
+    # this REG_SZ verbatim as a full NT path. Only set it for micront —
+    # headless/gui leave it unset so the kernel falls back to smss.exe.
+    if profile == "micront" and launch:
+        control.set_sz("InitExe", f"\\SystemRoot\\System32\\{launch}")
+
     # Session Manager minimal config so smss.exe doesn't try to spawn
     # programs we don't have (autochk.exe, csrss.exe, etc.).
     sm = control["Session Manager"]
@@ -799,10 +806,12 @@ def main() -> None:
     size = h.write(args.output)
     print(f"SYSTEM hive ({args.profile}): {size} bytes -> {args.output}")
 
-    sw = build_micront_software_hive(profile=args.profile)
-    sw_path = args.output.replace("SYSTEM", "SOFTWARE") if "SYSTEM" in args.output else "SOFTWARE"
-    size = sw.write(sw_path)
-    print(f"SOFTWARE hive ({args.profile}): {size} bytes -> {sw_path}")
+    # SOFTWARE hive is Win32-userland only; micront has no consumer of it.
+    if args.profile != "micront":
+        sw = build_micront_software_hive(profile=args.profile)
+        sw_path = args.output.replace("SYSTEM", "SOFTWARE") if "SYSTEM" in args.output else "SOFTWARE"
+        size = sw.write(sw_path)
+        print(f"SOFTWARE hive ({args.profile}): {size} bytes -> {sw_path}")
 
 
 if __name__ == "__main__":
