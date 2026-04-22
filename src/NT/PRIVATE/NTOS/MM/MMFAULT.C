@@ -576,6 +576,8 @@ Environment:
 
             UNLOCK_WS (CurrentProcess);
             KeLowerIrql (PreviousIrql);
+            DbgPrint("MM: fault@%p -> MiCheckForUserStackOverflow (path1, soft guard)\n",
+                     VirtualAddress);
             return MiCheckForUserStackOverflow (VirtualAddress);
         }
 
@@ -749,6 +751,8 @@ Environment:
             //
 
             if (status == STATUS_GUARD_PAGE_VIOLATION) {
+                DbgPrint("MM: fault@%p -> MiCheckForUserStackOverflow (path2, hard guard)\n",
+                         VirtualAddress);
                 return MiCheckForUserStackOverflow (VirtualAddress);
             }
 

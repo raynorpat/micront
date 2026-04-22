@@ -641,6 +641,7 @@ BOOL GreGetTextMetricsW
 
         DbgPrint("GRE: realizing font (RFONTOBJ)\n");
         RFONTOBJ rfo(dcof, FALSE);
+        DbgPrint("GRE: GreGetTextMetricsW post-vInit return\n");
         DbgPrint("GRE: RFONTOBJ valid=%d\n", rfo.bValid());
 
         if (rfo.bValid())

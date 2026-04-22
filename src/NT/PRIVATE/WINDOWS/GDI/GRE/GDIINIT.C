@@ -500,7 +500,7 @@ BOOL Initialize(VOID);          // init.cxx
 // messages.
 //
 
-#define GDISRV_INIT_MESSAGES 0
+#define GDISRV_INIT_MESSAGES 1
 
 /******************************Public*Routine******************************\
 *

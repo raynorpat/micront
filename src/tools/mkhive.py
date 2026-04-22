@@ -528,6 +528,7 @@ def build_micront_system_hive(profile: str = "headless",
             server_dlls += (
                 "ServerDll=winsrv:ConServerDllInitialization,2 "
                 "ServerDll=winsrv:UserServerDllInitialization,3 "
+                "ServerDll=winsrv:GdiServerDllInitialization,4 "
             )
         sm_sub.set_expand_sz(
             "Windows",

@@ -195,37 +195,122 @@ VOID RFONTOBJ::vInit(XDCOBJ &dco, BOOL bNeedPaths)
 // We start out with the currently selected RFONT.
 // That way, if we deselect it, we will unlock it!
 //
-    DbgPrint("GRE: RFONTOBJ::vInit entered, hdev=%p\n", dco.hdev());
+    {
+        PTEB teb = NtCurrentTeb();
+        ULONG esp_est;
+        __asm { mov esp_est, esp }
+        DbgPrint("GRE: vInit STACK tid=%p esp~=%p base=%p limit=%p headroom=%d\n",
+                 teb->GdiClientTID, esp_est,
+                 teb->NtTib.StackBase, teb->NtTib.StackLimit,
+                 (int)(esp_est - (ULONG)teb->NtTib.StackLimit));
+    }
+    DbgPrint("GRE: RFONTOBJ::vInit entered tid=%p hdc=%p hdev=%p pdc=%p\n",
+             NtCurrentTeb()->GdiClientTID, dco.hdc(), dco.hdev(), dco.u.pdc);
     prfnt = dco.u.font.prfnt();
-    DbgPrint("GRE: vInit prfnt=%p\n", prfnt);
+    DbgPrint("GRE: vInit tid=%p prfnt=%p\n",
+             NtCurrentTeb()->GdiClientTID, prfnt);
 
 // Early out--maybe the font has not changed.
+//
+// Probe the fast-path condition reads one-by-one so a fault pinpoints which
+// dco field access faulted. Each DbgPrint is preceded by its read.
 
-    if
-    (
-        bValid()                                            &&
-        (dco.u.font.hlfntNew() == dco.u.font.hlfntCur())
-    )
+    BOOL  bVal       = bValid();
+    DbgPrint("GRE: vInit.probe1 tid=%p bValid=%d\n",
+             NtCurrentTeb()->GdiClientTID, bVal);
+
+    HLFONT hlfntNew_ = dco.u.font.hlfntNew();
+    DbgPrint("GRE: vInit.probe2 tid=%p hlfntNew=%p\n",
+             NtCurrentTeb()->GdiClientTID, hlfntNew_);
+
+    HLFONT hlfntCur_ = dco.u.font.hlfntCur();
+    DbgPrint("GRE: vInit.probe3 tid=%p hlfntCur=%p\n",
+             NtCurrentTeb()->GdiClientTID, hlfntCur_);
+
+    if (bVal && (hlfntNew_ == hlfntCur_))
     {
-        if
-        (
-            (iGraphicsMode() == dco.u.attr.iGraphicsMode())     &&
-            (bNeedPaths == prfnt->bNeededPaths)                 &&
-            !dco.u.xform.bUseMetaPtoD()
-        )
+        INT  iGMprfnt   = iGraphicsMode();
+        DbgPrint("GRE: vInit.probe4 tid=%p prfnt->iGraphicsMode=%d\n",
+                 NtCurrentTeb()->GdiClientTID, iGMprfnt);
+
+        INT  iGMdc      = dco.u.attr.iGraphicsMode();
+        DbgPrint("GRE: vInit.probe5 tid=%p dco.attr.iGraphicsMode=%d\n",
+                 NtCurrentTeb()->GdiClientTID, iGMdc);
+
+        BOOL bPaths     = prfnt->bNeededPaths;
+        DbgPrint("GRE: vInit.probe6 tid=%p prfnt->bNeededPaths=%d (bNeedPaths=%d)\n",
+                 NtCurrentTeb()->GdiClientTID, bPaths, bNeedPaths);
+
+        BOOL bMetaPtoD  = dco.u.xform.bUseMetaPtoD();
+        DbgPrint("GRE: vInit.probe7 tid=%p dco.xform.bUseMetaPtoD=%d\n",
+                 NtCurrentTeb()->GdiClientTID, bMetaPtoD);
+
+        if ((iGMprfnt == iGMdc) && (bNeedPaths == bPaths) && !bMetaPtoD)
         {
         // bNeedPath clause is added to the above check since last time
         // this font could have been realized with bitmaps or metrics only
         // rather than with paths [bodind]
 
-            if (!dco.u.font.bXFormChange())
+            BOOL bXFC = dco.u.font.bXFormChange();
+            DbgPrint("GRE: vInit.probe8 tid=%p dco.font.bXFormChange=%d\n",
+                     NtCurrentTeb()->GdiClientTID, bXFC);
+
+            if (!bXFC)
             {
             // Since the LFONT  and xform have not changed, we know that we
             // already have the right RFONT selected into the DC
             // so we are just going to use it.  Remember that if it is
             // already selected it is also locked down.
 
+                {
+                    PVOID FsTeb;
+                    ULONG espNow;
+                    PTEB  Tfs;
+                    __asm {
+                        mov eax, fs:[018h]
+                        mov FsTeb, eax
+                        mov espNow, esp
+                    }
+                    Tfs = (PTEB)FsTeb;
+                    DbgPrint("GRE: vInit.fastpath-A tid=%p prfnt=%p esp=%p fs:Teb=%p Self=%p base=%p limit=%p\n",
+                             NtCurrentTeb()->GdiClientTID, prfnt,
+                             (PVOID)espNow, FsTeb, Tfs->NtTib.Self,
+                             Tfs->NtTib.StackBase, Tfs->NtTib.StackLimit);
+                    if (FsTeb != Tfs->NtTib.Self) {
+                        DbgPrint("GRE: *** fastpath-A fs/Self MISMATCH — fs clobbered ***\n");
+                    }
+                    if ((PVOID)espNow >= Tfs->NtTib.StackBase ||
+                        (PVOID)espNow <  Tfs->NtTib.StackLimit) {
+                        DbgPrint("GRE: *** fastpath-A esp=%p OUTSIDE fs-TEB stack [%p..%p] — stale fs ***\n",
+                                 (PVOID)espNow, Tfs->NtTib.StackLimit, Tfs->NtTib.StackBase);
+                    }
+                }
+                DbgPrint("GRE: vInit.pre-vGetCache tid=%p pid=%p\n",
+                         NtCurrentTeb()->GdiClientTID,
+                         NtCurrentTeb()->ClientId.UniqueProcess);
                 vGetCache();
+                DbgPrint("GRE: vInit.post-vGetCache tid=%p pid=%p\n",
+                         NtCurrentTeb()->GdiClientTID,
+                         NtCurrentTeb()->ClientId.UniqueProcess);
+                {
+                    ULONG ebpNow;
+                    PULONG pb;
+                    __asm { mov ebpNow, ebp }
+                    pb = (PULONG)ebpNow;
+                    DbgPrint("GRE: vInit.ret-area-PRE ebp=%p savedEbp=%p retAddr=%p arg0=%p arg1=%p\n",
+                             (PVOID)ebpNow,
+                             (PVOID)pb[0], (PVOID)pb[1], (PVOID)pb[2], (PVOID)pb[3]);
+                }
+                DbgPrint("GRE: vInit.about-to-ret tid=%p\n", NtCurrentTeb()->GdiClientTID);
+                {
+                    ULONG ebpNow;
+                    PULONG pb;
+                    __asm { mov ebpNow, ebp }
+                    pb = (PULONG)ebpNow;
+                    DbgPrint("GRE: vInit.ret-area-POST ebp=%p savedEbp=%p retAddr=%p arg0=%p arg1=%p\n",
+                             (PVOID)ebpNow,
+                             (PVOID)pb[0], (PVOID)pb[1], (PVOID)pb[2], (PVOID)pb[3]);
+                }
                 return;
             }
             else
@@ -240,6 +325,8 @@ VOID RFONTOBJ::vInit(XDCOBJ &dco, BOOL bNeedPaths)
 
                 if (bCompatible(xo))
                 {
+                    DbgPrint("GRE: vInit.fastpath-B tid=%p prfnt=%p -> vGetCache\n",
+                             NtCurrentTeb()->GdiClientTID, prfnt);
                     vGetCache();
                     dco.u.font.vXformChange(FALSE);
                     return;
@@ -630,7 +717,10 @@ LBOOL RFONTOBJ::bFindRFONT
     ASSERTGDI(prfnt == NULL,
         "gdisrv!RFONTOBJ:bFindRFONT - prfnt != NULL");
 
+    DbgPrint("GRE: bFindRFONT entry tid=%p ppfe=%p flSim=%x\n",
+             NtCurrentTeb()->GdiClientTID, ppfe, flSim);
     SEMOBJ so(ghsemRFONTList);
+    DbgPrint("GRE: bFindRFONT held-sem tid=%p\n", NtCurrentTeb()->GdiClientTID);
 
 //
 // Search active list.  If we find it, just increment selection
@@ -659,6 +749,9 @@ LBOOL RFONTOBJ::bFindRFONT
         )
         {
             prfnt->cSelected += 1;
+            DbgPrint("GRE: bFindRFONT active-hit tid=%p prfnt=%p cSelected %d->%d\n",
+                     NtCurrentTeb()->GdiClientTID, prfnt,
+                     prfnt->cSelected - 1, prfnt->cSelected);
 
             return TRUE;
         }
@@ -705,6 +798,8 @@ LBOOL RFONTOBJ::bFindRFONT
             pdo.prfntActive(prfntHead);     // vInsert changes head of list
 
             prfnt->cSelected = 1;
+            DbgPrint("GRE: bFindRFONT inactive->active tid=%p prfnt=%p cSelected=1\n",
+                     NtCurrentTeb()->GdiClientTID, prfnt);
 
             return TRUE;
         }
@@ -995,7 +1090,12 @@ VOID RFONTOBJ::vMakeInactive()
 // Quick out if NULL or already inactive.
 
     if ((prfnt == NULL) || (prfnt->cSelected == 0))
+    {
+        DbgPrint("GRE: vMakeInactive early-out tid=%p prfnt=%p cSelected=%d\n",
+                 NtCurrentTeb()->GdiClientTID, prfnt,
+                 prfnt ? prfnt->cSelected : -1);
         return;
+    }
 
 // If prfVictim is changed to a valid pointer, then a victim was selected
 // off the inactive list for deletion.
@@ -1008,12 +1108,16 @@ VOID RFONTOBJ::vMakeInactive()
     // Since RFONT is being deselected from a DC, remove a reference count.
 
         prfnt->cSelected -= 1;
+        DbgPrint("GRE: vMakeInactive tid=%p prfnt=%p cSelected %d->%d\n",
+                 NtCurrentTeb()->GdiClientTID, prfnt,
+                 prfnt->cSelected + 1, prfnt->cSelected);
 
     // If no more references, take the RFONT off the active list.
 
         if ( prfnt->cSelected == 0 )
         {
             PDEVOBJ pdo(prfnt->hdev);
+            DbgPrint("GRE: vMakeInactive prfnt=%p moving to inactive\n", prfnt);
 
         // Take it off the active list.
 
@@ -1087,6 +1191,7 @@ VOID RFONTOBJ::vMakeInactive()
 
     if ( prfVictim != PRFNTNULL )
     {
+        DbgPrint("GRE: vMakeInactive DELETING prfVictim=%p\n", prfVictim);
         RFONTTMPOBJ rfloVictim(prfVictim);
 
     // Need this so we can remove this from the PFF's RFONT list.
@@ -1195,6 +1300,8 @@ LBOOL RFONTOBJ::bRealizeFont
 // Create a default sized RFONT.
 
     prfnt = (RFONT *) ALLOCOBJ(sizeof(RFONT), RFONT_TYPE,TRUE);
+    DbgPrint("GRE: bRealizeFont ALLOCOBJ tid=%p prfnt=%p sizeof(RFONT)=%d\n",
+             NtCurrentTeb()->GdiClientTID, prfnt, sizeof(RFONT));
 
     if (prfnt == PRFNTNULL)
     {
@@ -1974,6 +2081,8 @@ LBOOL RFONTOBJ::bDelete (
     )
 {
     PRFONT prfntHead;
+    DbgPrint("GRE: bDelete entry tid=%p prfnt=%p\n",
+             NtCurrentTeb()->GdiClientTID, prfnt);
 
 // Tell font producer that font is going away.
 
@@ -2069,6 +2178,8 @@ LBOOL RFONTOBJ::bDelete (
 
 // Free object memory and invalidate pointer
 
+    DbgPrint("GRE: bDelete FREEOBJ tid=%p prfnt=%p\n",
+             NtCurrentTeb()->GdiClientTID, prfnt);
     FREEOBJ(prfnt,RFONT_TYPE);
     prfnt = PRFNTNULL;
     return (TRUE);

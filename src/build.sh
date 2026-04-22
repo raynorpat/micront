@@ -859,16 +859,17 @@ build_gui_import_stubs() {
     # user32 ↔ gdi32 circular import. Compile both to .obj (no link),
     # then generate decorated import libs from DEF + objs. Same pattern
     # as build_lsasrv_imports for samsrv ↔ lsasrv.
+    #
+    # Run the compile-only pass unconditionally: nmake's own dep tracking
+    # rebuilds only what changed. Skipping on "some objs exist" leaves
+    # missed/failed objs invisible and breaks _lib_from_def downstream.
+    # Show full output so a compile error isn't hidden behind `tail -3`.
     _ensure_user_headers
     echo ">>> GUI import stubs: compile-only pass"
     local user_obj="$USER/CLIENT/obj/i386/*.obj"
     local gdi_obj="$GDI/CLIENT/obj/i386/*.obj"
-    if ! compgen -G "$user_obj" > /dev/null 2>&1; then
-        run_nmake "$USER/CLIENT" "USER/CLIENT compile-only (pre-imports)" NTTARGETFILE0= NTTARGETFILE1= 2>&1 | tail -3 || true
-    fi
-    if ! compgen -G "$gdi_obj" > /dev/null 2>&1; then
-        run_nmake "$GDI/CLIENT" "GDI/CLIENT compile-only (pre-imports)" NTTARGETFILE0= NTTARGETFILE1= 2>&1 | tail -3 || true
-    fi
+    run_nmake "$USER/CLIENT" "USER/CLIENT compile-only (pre-imports)" NTTARGETFILE0= NTTARGETFILE1= || return 1
+    run_nmake "$GDI/CLIENT"  "GDI/CLIENT compile-only (pre-imports)"  NTTARGETFILE0= NTTARGETFILE1= || return 1
     echo ">>> GUI import stubs: generating user32p.lib + gdi32p.lib"
     # NT generates user32p.def from USER32.DEF via `cl -EP -DPRIVATE=`,
     # stripping the PRIVATE keyword so those exports become normal import

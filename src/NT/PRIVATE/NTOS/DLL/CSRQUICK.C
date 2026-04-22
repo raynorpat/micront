@@ -200,6 +200,9 @@ CsrClientSendMessage( VOID )
     Msg->Action = CsrQLpcCall;
     Msg->ServerSide = CsrServerProcess;
 
+    DbgPrint("CSRDLL: CsrClientSendMessage enter tid=%p ApiNumber=%08lx Msg=%p CsrServerProcess=%d\n",
+             Teb->ClientId.UniqueThread, Msg->ApiNumber, Msg, CsrServerProcess);
+
     while (TRUE) {
         if (!CsrServerProcess) {
 
@@ -209,6 +212,8 @@ CsrClientSendMessage( VOID )
                     int 0x2c
                     mov Status,eax
                 }
+            DbgPrint("CSRDLL: CsrClientSendMessage int 0x2c returned Status=%08x ReturnValue=%08x\n",
+                     Status, Msg->ReturnValue);
 
 #elif defined(MIPS) || defined(_ALPHA_) || defined(_PPC_)
 
@@ -258,6 +263,7 @@ CsrClientSendMessage( VOID )
             break;
             }
         }
+    DbgPrint("CSRDLL: CsrClientSendMessage exit ReturnValue=%08x\n", Msg->ReturnValue);
     if (MessageStack->LastErrorValue)
     {
         Teb->LastErrorValue = MessageStack->LastErrorValue;

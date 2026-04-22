@@ -480,6 +480,8 @@ BOOL RFONTOBJ::bInitCache()
 
     prfnt->fmCache.Count = 1;
     prfnt->fmCache.heveEvent = heveCreate();
+    DbgPrint("GRE: bInitCache prfnt=%p fmCache=%p heveEvent=%p Count=%d\n",
+             prfnt, &prfnt->fmCache, prfnt->fmCache.heveEvent, prfnt->fmCache.Count);
 
     if ( prfnt->fmCache.heveEvent == (HEVENT) 0 )
     {

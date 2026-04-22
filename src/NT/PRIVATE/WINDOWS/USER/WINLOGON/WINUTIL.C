@@ -487,11 +487,15 @@ PaintBitmapWindow(
     LONG cxWindow, cyWindow;
     LONG cxBorder, cyBorder;
 
+    DbgPrint("WINLOGON: PBW enter hDlg=%p pGlobals=%p ControlId=%d BitmapId=%d\n",
+             hDlg, pGlobals, ControlId, BitmapId);
+
     //
     // Get the bitmap control window
     //
 
     hwndWindow = GetDlgItem(hDlg, ControlId);
+    DbgPrint("WINLOGON: PBW after GetDlgItem hwndWindow=%p\n", hwndWindow);
     if (hwndWindow == NULL) {
         WLPrint(("PaintBitmapWindow: couldn't find bitmap window id = %d in dialog 0x%lx", ControlId, hDlg));
         return(FALSE);
@@ -502,16 +506,20 @@ PaintBitmapWindow(
     //
 
     GetWindowRect(hwndWindow, &rcWindow);
+    DbgPrint("WINLOGON: PBW after GetWindowRect\n");
     cxWindow = rcWindow.right - rcWindow.left;
     cyWindow = rcWindow.bottom - rcWindow.top;
     ScreenToClient(hDlg, &(((LPPOINT)&rcWindow)[0]));
     ScreenToClient(hDlg, &(((LPPOINT)&rcWindow)[1]));
+    DbgPrint("WINLOGON: PBW after ScreenToClient\n");
 
     //
     // Get a DC for the dialog window
     //
 
+    DbgPrint("WINLOGON: PBW pre-BeginPaint &PaintStruct=%p\n", &PaintStruct);
     hdcDlg = BeginPaint(hDlg, &PaintStruct);
+    DbgPrint("WINLOGON: PBW post-BeginPaint hdcDlg=%p\n", hdcDlg);
     if (hdcDlg == NULL) {
         WLPrint(("PaintBitmapWindow : Couldn't get DC for dialog window"));
         return(FALSE);
@@ -522,14 +530,22 @@ PaintBitmapWindow(
     //
 
     hdcBitmap = CreateCompatibleDC(hdcDlg);
+    DbgPrint("WINLOGON: PBW after CreateCompatibleDC hdcBitmap=%p\n", hdcBitmap);
+    DbgPrint("WINLOGON: PBW pre-LoadBitmap pGlobals=%p hInstance=%p\n",
+             pGlobals, pGlobals ? pGlobals->hInstance : 0);
     hbmBitmap = LoadBitmap(pGlobals->hInstance, (LPTSTR) MAKEINTRESOURCE(BitmapId));
+    DbgPrint("WINLOGON: PBW post-LoadBitmap hbmBitmap=%p\n", hbmBitmap);
     hbmSave = SelectObject(hdcBitmap, hbmBitmap);
+    DbgPrint("WINLOGON: PBW after SelectObject\n");
 
     //
     // Get bitmap size
     //
 
+    DbgPrint("WINLOGON: PBW pre-GetObject &BitmapInfo=%p\n", &BitmapInfo);
     GetObject(hbmBitmap, sizeof(BitmapInfo), (LPVOID)&BitmapInfo);
+    DbgPrint("WINLOGON: PBW post-GetObject bmWidth=%d bmHeight=%d\n",
+             BitmapInfo.bmWidth, BitmapInfo.bmHeight);
     cxBitmap = BitmapInfo.bmWidth;
     cyBitmap = BitmapInfo.bmHeight;
 

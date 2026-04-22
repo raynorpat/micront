@@ -287,16 +287,28 @@ WelcomeDlgProc(
 {
     PGLOBALS pGlobals = (PGLOBALS)GetWindowLong(hDlg, GWL_USERDATA);
     if (message == WM_INITDIALOG) {
-        DbgPrint("WINLOGON: WelcomeDlgProc WM_INITDIALOG\n");
+        PTEB teb = NtCurrentTeb();
+        ULONG espNow;
+        __asm { mov espNow, esp }
+        DbgPrint("WINLOGON: WelcomeDlgProc WM_INITDIALOG tid=%p esp=%p base=%p limit=%p\n",
+                 teb->ClientId.UniqueThread, (PVOID)espNow,
+                 teb->NtTib.StackBase, teb->NtTib.StackLimit);
+    } else {
+        DbgPrint("WINLOGON: WelcomeDlgProc msg=%x tid=%p\n",
+                 message, NtCurrentTeb()->ClientId.UniqueThread);
     }
 
     ProcessDialogTimeout(hDlg, message, wParam, lParam);
+    DbgPrint("WINLOGON: WelcomeDlgProc post-ProcessDialogTimeout msg=%x\n", message);
 
     switch (message) {
 
     case WM_INITDIALOG:
+        DbgPrint("WINLOGON: WelcomeDlgProc WM_INITDIALOG case begin\n");
         SetWindowLong(hDlg, GWL_USERDATA, lParam);
+        DbgPrint("WINLOGON: WelcomeDlgProc pre-CentreWindow\n");
         CentreWindow(hDlg);
+        DbgPrint("WINLOGON: WelcomeDlgProc post-CentreWindow\n");
         return(TRUE);
 
     case WM_SAS:
@@ -312,11 +324,21 @@ WelcomeDlgProc(
         return(TRUE);
 
     case WM_PAINT:
+        {
+            PTEB teb = NtCurrentTeb();
+            ULONG espNow;
+            __asm { mov espNow, esp }
+            DbgPrint("WINLOGON: WM_PAINT pre-PaintBitmapWindow tid=%p esp=%p limit=%p pGlobals=%p\n",
+                     teb->ClientId.UniqueThread, (PVOID)espNow,
+                     teb->NtTib.StackLimit, pGlobals);
+        }
         PaintBitmapWindow(hDlg, pGlobals, IDD_ICON, IDD_WELCOME_BITMAP);
+        DbgPrint("WINLOGON: WM_PAINT post-PaintBitmapWindow\n");
         break;  // Fall through to do default processing
                 // We may have validated part of the window.
     }
 
+    DbgPrint("WINLOGON: WelcomeDlgProc returning FALSE msg=%x\n", message);
     // We didn't process this message
     return FALSE;
 }
