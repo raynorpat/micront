@@ -118,59 +118,11 @@ CsrApiRequestThread(
 
 #endif // DBG
 
-        {
-            PVOID FsTeb;
-            PVOID TebSelf;
-            __asm {
-                mov  eax, fs:[018h]
-                mov  FsTeb, eax
-            }
-            TebSelf = NtCurrentTeb()->NtTib.Self;
-            DbgPrint("CSRSRV: pre-wait tid=%p fs:Teb=%p Teb->Self=%p StackBase=%p StackLimit=%p\n",
-                     NtCurrentTeb()->ClientId.UniqueThread,
-                     FsTeb, TebSelf,
-                     NtCurrentTeb()->NtTib.StackBase,
-                     NtCurrentTeb()->NtTib.StackLimit);
-            if (FsTeb != TebSelf) {
-                DbgPrint("CSRSRV: *** PRE-WAIT fs/Teb MISMATCH ***\n");
-            }
-        }
-
         Status = NtReplyWaitReceivePort( ReplyPortHandle,
                                          &PortContext,
                                          (PPORT_MESSAGE)ReplyMsg,
                                          (PPORT_MESSAGE)&ReceiveMsg
                                        );
-
-        {
-            PVOID FsTeb;
-            PVOID TebSelf;
-            ULONG esp_here;
-            PTEB  Teb2;
-            __asm {
-                mov  eax, fs:[018h]
-                mov  FsTeb, eax
-                mov  esp_here, esp
-            }
-            Teb2 = (PTEB)FsTeb;
-            TebSelf = NtCurrentTeb()->NtTib.Self;
-            DbgPrint("CSRSRV: post-wait tid=%p fs:Teb=%p Teb->Self=%p StackBase=%p StackLimit=%p esp=%p\n",
-                     NtCurrentTeb()->ClientId.UniqueThread,
-                     FsTeb, TebSelf,
-                     Teb2->NtTib.StackBase,
-                     Teb2->NtTib.StackLimit,
-                     (PVOID)esp_here);
-            if (FsTeb != TebSelf) {
-                DbgPrint("CSRSRV: *** POST-WAIT fs/Teb MISMATCH — context switch dropped fs ***\n");
-            }
-            if ((PVOID)esp_here >= Teb2->NtTib.StackBase ||
-                (PVOID)esp_here <  Teb2->NtTib.StackLimit) {
-                DbgPrint("CSRSRV: *** POST-WAIT esp=%p OUTSIDE TEB stack range [%p..%p] — stale fs ***\n",
-                         (PVOID)esp_here,
-                         Teb2->NtTib.StackLimit,
-                         Teb2->NtTib.StackBase);
-            }
-        }
         if (Status != 0) {
             if (NT_SUCCESS( Status )) {
                 continue;       // Try again if alerted or a failure

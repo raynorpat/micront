@@ -309,18 +309,12 @@ Environment:
         }
 
 retry:
-        DbgPrint("MM: MiCheckForUserStackOverflow fault=%p NextPage=%p Teb=%p Process=%p ImgName=%.16s\n",
-                 FaultingAddress, NextPage, Teb,
-                 PsGetCurrentProcess(),
-                 PsGetCurrentProcess()->ImageFileName);
         status = ZwAllocateVirtualMemory (NtCurrentProcess(),
                                           (PVOID *)&NextPage,
                                           0,
                                           &RegionSize,
                                           MEM_COMMIT,
                                           PAGE_READWRITE | PAGE_GUARD);
-        DbgPrint("MM: MiCheckForUserStackOverflow ZwAllocVM status=%08x NextPage=%p\n",
-                 status, NextPage);
 
         if (NT_SUCCESS(status) || (status == STATUS_ALREADY_COMMITTED)) {
 
@@ -330,8 +324,6 @@ retry:
             //
 
             Teb->NtTib.StackLimit = (PVOID)((PUCHAR)(NextPage + PAGE_SIZE));
-            DbgPrint("MM: MiCheckForUserStackOverflow extended StackLimit=%p\n",
-                     Teb->NtTib.StackLimit);
             return STATUS_PAGE_FAULT_GUARD_PAGE;
         }
         DbgPrint("MM: MiCheckForUserStackOverflow FAILED status=%08x\n", status);

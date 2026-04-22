@@ -200,9 +200,6 @@ CsrClientSendMessage( VOID )
     Msg->Action = CsrQLpcCall;
     Msg->ServerSide = CsrServerProcess;
 
-    DbgPrint("CSRDLL: CsrClientSendMessage enter tid=%p ApiNumber=%08lx Msg=%p CsrServerProcess=%d\n",
-             Teb->ClientId.UniqueThread, Msg->ApiNumber, Msg, CsrServerProcess);
-
     while (TRUE) {
         if (!CsrServerProcess) {
 
@@ -212,8 +209,6 @@ CsrClientSendMessage( VOID )
                     int 0x2c
                     mov Status,eax
                 }
-            DbgPrint("CSRDLL: CsrClientSendMessage int 0x2c returned Status=%08x ReturnValue=%08x\n",
-                     Status, Msg->ReturnValue);
 
 #elif defined(MIPS) || defined(_ALPHA_) || defined(_PPC_)
 
@@ -240,12 +235,15 @@ CsrClientSendMessage( VOID )
                 }
             }
         else {
-            DbgPrint("CSRDLL: IN-PROCESS CsrpProcessApiRequest Msg=%p ApiNumber=%08lx\n",
-                     Msg, Msg->ApiNumber);
             CsrpProcessApiRequest(Msg,p->MessageStack);
-            DbgPrint("CSRDLL: IN-PROCESS post-dispatch Msg=%p Action=%d (would overwrite)\n",
-                     Msg, Msg->Action);
-            Msg->Action = CsrQLpcReturn;
+            //
+            // Preserve the CsrQLpcError tag set on dispatch failure
+            // (see server-side CsrpProcessApiRequest); only rewrite to
+            // CsrQLpcReturn on the success path.
+            //
+            if (Msg->Action != CsrQLpcError) {
+                Msg->Action = CsrQLpcReturn;
+            }
             }
 
 
@@ -267,9 +265,6 @@ CsrClientSendMessage( VOID )
             break;
             }
         }
-    DbgPrint("CSRDLL: CsrClientSendMessage exit ReturnValue=%08x Action=%d\n",
-             Msg->ReturnValue, Msg->Action);
-
     //
     // Protocol-level dispatch failure: server couldn't route the message
     // (unregistered ServerDllIndex, out-of-range ApiTableIndex). Msg->

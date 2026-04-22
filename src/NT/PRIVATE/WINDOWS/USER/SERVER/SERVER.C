@@ -694,10 +694,6 @@ NTSTATUS UserServerDllInitialization(
      */
     ghheapSharedRO = psrvdll->SharedStaticServerData;
 
-    { PVOID _t = RtlAllocateHeap(RtlProcessHeap(),0,64);
-      DbgPrint("USERSRV: heap-check-A=%p\n", _t);
-      if (_t) RtlFreeHeap(RtlProcessHeap(),0,_t); }
-    DbgPrint("USERSRV: reading SharedSection profile\n");
     if (!FastGetProfileStringW(PMAP_SUBSYSTEMS, L"Windows", L"SharedSection,3072",
             achSubSystem, 512)) {
         DbgPrint("USERSRV: Windows subsystem definition not found\n");
@@ -724,7 +720,6 @@ NTSTATUS UserServerDllInitialization(
     /*
      * Create the heap for the logon desktop
      */
-    DbgPrint("USERSRV: creating desktop heap, size=%d\n", gdwDesktopSectionSize);
     ghsectionLogonDesktop = CreateDesktopHeap(&ghheapLogonDesktop,
             gdwDesktopSectionSize);
     if (ghsectionLogonDesktop == NULL) {
@@ -916,23 +911,14 @@ NTSTATUS UserServerDllInitialization(
      * Initialize GDI
      */
     OpenProfileUserMapping();
-    { PVOID _t = RtlAllocateHeap(RtlProcessHeap(),0,64);
-      DbgPrint("USERSRV: heap-check-B=%p\n", _t);
-      if (_t) RtlFreeHeap(RtlProcessHeap(),0,_t); }
-    DbgPrint("USERSRV: calling Initialize() (GDI init)\n");
     if ( !Initialize() ) {
         DbgPrint("USERSRV: Initialize() FAILED\n");
         Status = STATUS_DLL_INIT_FAILED;
         goto LeaveCritExit;
     }
-    { PVOID _t = RtlAllocateHeap(RtlProcessHeap(),0,64);
-      DbgPrint("USERSRV: heap-check-C=%p\n", _t);
-      if (_t) RtlFreeHeap(RtlProcessHeap(),0,_t); }
-    DbgPrint("USERSRV: Initialize() succeeded\n");
     CloseProfileUserMapping();
 
     fGdiEnabled = TRUE;
-    DbgPrint("USERSRV: GDI enabled, checking layered drivers\n");
 
     /*
      * Determine if a stub driver is installed in the machine.
@@ -967,7 +953,6 @@ NTSTATUS UserServerDllInitialization(
      * Repeat until we have reached the last one.
      */
 
-    DbgPrint("USERSRV: entering display driver loop, cphysDevInfo=%d\n", cphysDevInfo);
     for (i=1;
          ((!vgaInstalled) || (!displayInstalled) &&
              (i < cphysDevInfo));
@@ -1427,7 +1412,6 @@ TryNewRefresh:
                                               &ghsem,
                                               &hModuleDisplay);
 
-                DbgPrint("USERSRV: UserLoadDisplayDriver returned ghdev=%p\n", ghdev);
                 if (!ghdev) {
 
                     //
@@ -1517,15 +1501,7 @@ TryNewRefresh:
 
                 displayInstalled = TRUE;
 
-                { PVOID _t = RtlAllocateHeap(RtlProcessHeap(),0,64);
-      DbgPrint("USERSRV: heap-check-D=%p\n", _t);
-      if (_t) RtlFreeHeap(RtlProcessHeap(),0,_t); }
-    DbgPrint("USERSRV: display installed, calling UserInitScreen\n");
                 UserInitScreen();
-                { PVOID _t = RtlAllocateHeap(RtlProcessHeap(),0,64);
-                  DbgPrint("USERSRV: heap-check-E=%p\n", _t);
-                  if (_t) RtlFreeHeap(RtlProcessHeap(),0,_t); }
-                DbgPrint("USERSRV: UserInitScreen returned\n");
             }
         }
     }
@@ -2132,14 +2108,11 @@ UserInitScreen(void)
     /*
      * Create screen and memory dcs.
      */
-    DbgPrint("USERSRV: UserInitScreen — hdcOpenDisplayDC\n");
     ghdcScreen = hdcOpenDisplayDC(ghdev, DCTYPE_DIRECT);
-    DbgPrint("USERSRV: ghdcScreen=%p\n", ghdcScreen);
     GreSelectFont(ghdcScreen, GreGetStockObject(SYSTEM_FONT));
     bSetDCOwner(ghdcScreen, OBJECTOWNER_PUBLIC);
 
     hdcBits = GreCreateCompatibleDC(ghdcScreen);
-    DbgPrint("USERSRV: hdcBits=%p\n", hdcBits);
     GreSelectFont(hdcBits, GreGetStockObject(SYSTEM_FONT));
     bSetDCOwner(hdcBits, OBJECTOWNER_PUBLIC);
 
@@ -2155,7 +2128,6 @@ UserInitScreen(void)
      * which is before InitWinStaDevices is called
      */
 
-    DbgPrint("USERSRV: getting device caps\n");
     gcxPrimaryScreen = GreGetDeviceCaps(ghdcScreen, HORZRES);
     gcyPrimaryScreen = GreGetDeviceCaps(ghdcScreen, VERTRES);
     gcxScreen        = GreGetDeviceCaps(ghdcScreen, DESKTOPHORZRES);
@@ -2177,7 +2149,6 @@ UserInitScreen(void)
     else if (clBorder > 50)
         clBorder = 50;
 
-    DbgPrint("USERSRV: calling LW_DCInit\n");
     LW_DCInit();
 
     FastCloseProfileUserMapping();

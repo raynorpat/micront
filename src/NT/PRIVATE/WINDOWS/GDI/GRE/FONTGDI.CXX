@@ -630,8 +630,6 @@ BOOL GreGetTextMetricsW
     BOOL bRet = FALSE;
     DCOBJ       dcof (hdc);
 
-    DbgPrint("GRE: GreGetTextMetricsW hdc=%p dcValid=%d\n", hdc, dcof.bValid());
-
     if (dcof.bValid())
     {
         //
@@ -639,10 +637,7 @@ BOOL GreGetTextMetricsW
         // (may cause font to become realized)
         //
 
-        DbgPrint("GRE: realizing font (RFONTOBJ)\n");
         RFONTOBJ rfo(dcof, FALSE);
-        DbgPrint("GRE: GreGetTextMetricsW post-vInit return\n");
-        DbgPrint("GRE: RFONTOBJ valid=%d\n", rfo.bValid());
 
         if (rfo.bValid())
         {

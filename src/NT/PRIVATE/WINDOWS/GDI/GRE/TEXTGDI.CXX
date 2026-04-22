@@ -536,22 +536,18 @@ BOOL GreExtTextOutW
           // Locate the font cache.  Demand PATHOBJ's if we are in a path bracket.
           //
 
-          DbgPrint("GRE: ExtTextOutW pre-vInit cwc=%d\n", cwc);
           rfo.vInit(dco,
                     dco.u.path.bActive() ? TRUE  : FALSE
                    );
-          DbgPrint("GRE: ExtTextOutW post-vInit rfo.prfnt=%p\n", rfo.prfnt);
 
           if (rfo.bValid())
           {
-            DbgPrint("GRE: ExtTextOutW rfo.bValid TRUE — entering body\n");
             // The recording of the simulation flags and escapement must come AFTER
             // the rfont constructor since they're cached values that are copied from
             // the LFONT only when the font is realized.
 
             flControl = (dco.u.attr.flTextAlign() & TA_MASK)
                          | dco.u.font.flSimulationFlags();
-            DbgPrint("GRE: ExtTextOutW flControl=%x\n", flControl);
 
             // Get the reference point.
 
@@ -635,8 +631,6 @@ BOOL GreExtTextOutW
         flControl,(LONG *) NULL
     );
 #else
-    DbgPrint("GRE: ExtTextOutW pre-to.vInit pwsz=%p cwc=%d pdx=%p ptfx=%x,%x flControl=%x\n",
-             pwsz, cwc, pdx, ptfx.x, ptfx.y, flControl);
     to.vInit
     (
         pwsz,cwc,rfo,xo,(LONG *) pdx,
@@ -647,10 +641,8 @@ BOOL GreExtTextOutW
         ptfx.x,ptfx.y,
         flControl,(LONG *) NULL
     );
-    DbgPrint("GRE: ExtTextOutW post-to.vInit\n");
 #endif
 
-            DbgPrint("GRE: ExtTextOutW pre-to.bValid\n");
             if (to.bValid())
             {
               // Compute the bounding box and the background opaquing area.  The

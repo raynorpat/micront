@@ -143,7 +143,6 @@ Return Value:
     // Initialize the LSA's heap.
     //
 
-    DbgPrint("LSAINIT: LsapHeapInitialize\n");
     Status = LsapHeapInitialize();
 
     if (!NT_SUCCESS(Status)) {
@@ -157,7 +156,6 @@ Return Value:
     // the LSA.
     //
 
-    DbgPrint("LSAINIT: LsapDbInitializeWellKnownValues\n");
     Status = LsapDbInitializeWellKnownValues();
 
     if (!NT_SUCCESS(Status)) {
@@ -172,7 +170,6 @@ Return Value:
     // is created, an event created by the Reference Monitor is signalled,
     // so that the Reference Monitor can proceed to connect to the port.
 
-    DbgPrint("LSAINIT: LsapRmInitializeServer\n");
     Status = LsapRmInitializeServer();
 
     if (!NT_SUCCESS(Status)) {
@@ -191,7 +188,6 @@ Return Value:
     // This initializes the non-product-type-specific information.
     //
 
-    DbgPrint("LSAINIT: LsapDbInitializeServer(1)\n");
     Status = LsapDbInitializeServer(1);
 
     if (!NT_SUCCESS(Status)) {
@@ -203,7 +199,6 @@ Return Value:
     // Perform RPC Server Initialization.
     //
 
-    DbgPrint("LSAINIT: LsapRPCInit\n");
     Status = LsapRPCInit();
 
     if (!NT_SUCCESS(Status)) {
@@ -215,7 +210,6 @@ Return Value:
     // Perform Auditing Initialization - Pass 1.
     //
 
-    DbgPrint("LSAINIT: LsapAdtInitialize(1)\n");
     LsapAdtInitializationPass = 1;
 
     Status = LsapAdtInitialize(LsapAdtInitializationPass);
@@ -236,7 +230,6 @@ Return Value:
     // Initialize Authentication Services
     //
 
-    DbgPrint("LSAINIT: LsapAuInit\n");
     if (!LsapAuInit()) {
         DbgPrint("LSAINIT: LsapAuInit FAILED\n");
         Status = STATUS_UNSUCCESSFUL;
@@ -257,7 +250,6 @@ Return Value:
     //  Start processing RPC calls
     //
 
-    DbgPrint("LSAINIT: LsapActivateRpcServer\n");
     Status = LsapActivateRpcServer();
 
     if (!NT_SUCCESS(Status)) {
@@ -269,7 +261,6 @@ Return Value:
     // Pause for installation if necessary
     //
 
-    DbgPrint("LSAINIT: LsapInstallationPause\n");
     Status = LsapInstallationPause();
 
     if (!NT_SUCCESS(Status)) {
@@ -282,7 +273,6 @@ Return Value:
     // This initializes the product-type-specific information.
     //
 
-    DbgPrint("LSAINIT: LsapDbInitializeServer(2)\n");
     LsapAdtInitializationPass = 2;
 
     Status = LsapDbInitializeServer(LsapAdtInitializationPass);

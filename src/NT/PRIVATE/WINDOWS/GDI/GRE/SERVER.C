@@ -1854,12 +1854,8 @@ int  __ExtGetObjectW
 
     CHECKVAR(pj,cj,0);          // validate pj
 
-    DbgPrint("GRE: __ExtGetObjectW pmsg=%p h=%p c=%d offBuf=%d pj=%p\n",
-             pmsg, pmsg->h, pmsg->c, pmsg->offBuf, pj);
-
     cRet = GreExtGetObjectW((HANDLE) pmsg->h, cj, (LPVOID)pj);
 
-    DbgPrint("GRE: __ExtGetObjectW cRet=%d (cj=%d)\n", cRet, cj);
     if (cRet > (int)cj) {
         DbgPrint("GRE: *** __ExtGetObjectW cRet=%d > cj=%d -- CLAMPING ***\n",
                  cRet, cj);

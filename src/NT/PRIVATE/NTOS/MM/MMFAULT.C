@@ -456,8 +456,6 @@ Environment:
 
             } else {
                 if (TempPte.u.Hard.Write == 0) {
-                    DbgPrint("MM: write fault VA=%lx PTE=%08lx (Write=0 COW=0) — ACCESS_VIOLATION\n",
-                             VirtualAddress, TempPte.u.Long);
                     status = STATUS_ACCESS_VIOLATION;
                 }
             }
@@ -576,8 +574,6 @@ Environment:
 
             UNLOCK_WS (CurrentProcess);
             KeLowerIrql (PreviousIrql);
-            DbgPrint("MM: fault@%p -> MiCheckForUserStackOverflow (path1, soft guard)\n",
-                     VirtualAddress);
             return MiCheckForUserStackOverflow (VirtualAddress);
         }
 
@@ -751,8 +747,6 @@ Environment:
             //
 
             if (status == STATUS_GUARD_PAGE_VIOLATION) {
-                DbgPrint("MM: fault@%p -> MiCheckForUserStackOverflow (path2, hard guard)\n",
-                         VirtualAddress);
                 return MiCheckForUserStackOverflow (VirtualAddress);
             }
 

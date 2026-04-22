@@ -492,8 +492,6 @@ DbgPrint("CSRSS: CantHappen Teb %x... Spinning\n",Teb);while(1);DbgPrint("CSRSS:
                     ((PCHAR)p->MessageStack + p->MessageStack->Base);
 
 
-                DbgPrint("SRVQUICK: DedicatedClientThread pre-dispatch Msg=%p ApiNumber=%08lx\n",
-                         Msg, Msg->ApiNumber);
                 CsrpProcessApiRequest(Msg,p->MessageStack);
 
                 }
@@ -504,8 +502,6 @@ DbgPrint("CSRSS: CantHappen Teb %x... Spinning\n",Teb);while(1);DbgPrint("CSRSS:
             // was invalid. Preserve that tag; only convert the normal
             // success path to CsrQLpcReturn.
             //
-            DbgPrint("SRVQUICK: DedicatedClientThread post-dispatch Msg=%p Action=%d\n",
-                     Msg, Msg->Action);
             if (Msg->Action != CsrQLpcError) {
                 Msg->Action = CsrQLpcReturn;
             }
@@ -687,7 +683,6 @@ CsrClientCallback( VOID )
             Msg->Action = CsrQLpcReturn;
 
             if (p->MessageStack->BatchCount) { // Process any batch.
-                DbgPrint("SRVQUICK: CsrClientCallback(batch) CsrpProcessApiRequest\n");
                 CsrpProcessApiRequest(
                     (PCSR_QLPC_API_MSG)
                     ((PCHAR)p->MessageStack + p->MessageStack->Base),
@@ -718,14 +713,12 @@ CsrClientCallback( VOID )
                 ((PCHAR)p->MessageStack + p->MessageStack->Base);
 
             if (Msg->Action == CsrQLpcCall) {
-                DbgPrint("SRVQUICK: CsrClientCallback(inner) CsrpProcessApiRequest Msg=%p\n", Msg);
                 CsrpProcessApiRequest(Msg,p->MessageStack);
-                DbgPrint("SRVQUICK: CsrClientCallback(inner) post-dispatch Action=%d\n", Msg->Action);
                 //
                 // Preserve the CsrQLpcError tag set by CsrpProcessApiRequest
                 // on dispatch failure (STATUS_ILLEGAL_FUNCTION in ReturnValue).
-                // Without this guard, line 719's blanket CsrQLpcReturn assign
-                // would erase the error signal before the client could see it.
+                // Without this guard, the blanket CsrQLpcReturn assign would
+                // erase the error signal before the client could see it.
                 //
                 if (Msg->Action != CsrQLpcError) {
                     Msg->Action = CsrQLpcReturn;
@@ -884,15 +877,12 @@ CsrpProcessApiRequest(
         // server return value from a dispatch failure. LastReturnValue
         // holds the NTSTATUS explaining why dispatch bailed (e.g.
         // STATUS_ILLEGAL_FUNCTION when the target ServerDllIndex is not
-        // registered). The caller's reply-unblocker (line ~499 in this
-        // file) checks this flag before overwriting Action.
+        // registered). The caller's reply-unblocker checks this flag
+        // before overwriting Action.
         //
         Msg->Action = CsrQLpcError;
-        DbgPrint("SRVQUICK: CsrpProcessApiRequest tagged Msg=%p Msg->Action=%d Msg->ReturnValue=%08x\n",
-                 Msg, Msg->Action, Msg->ReturnValue);
     }
     Stack->BatchCount = 0;
-    DbgPrint("SRVQUICK: CsrpProcessApiRequest EXIT Msg=%p Action=%d\n", Msg, Msg->Action);
 }
 
 EXCEPTION_DISPOSITION
