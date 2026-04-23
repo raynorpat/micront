@@ -59,6 +59,56 @@ NTSTATUS __stdcall NtOpenSymbolicLinkObject(HANDLE *LinkHandle,
 NTSTATUS __stdcall NtQuerySymbolicLinkObject(HANDLE LinkHandle,
                                              UNICODE_STRING *LinkTarget,
                                              ULONG *ReturnedLength);
+
+NTSTATUS __stdcall NtQueryObject(HANDLE Handle,
+                                 int ObjectInformationClass,
+                                 void *ObjectInformation,
+                                 ULONG ObjectInformationLength,
+                                 ULONG *ReturnLength);
+
+typedef struct _OBJECT_BASIC_INFORMATION {
+    ULONG         Attributes;
+    ULONG         GrantedAccess;
+    ULONG         HandleCount;
+    ULONG         PointerCount;
+    ULONG         PagedPoolUsage;
+    ULONG         NonPagedPoolUsage;
+    ULONG         Reserved[3];
+    ULONG         NameInfoSize;
+    ULONG         TypeInfoSize;
+    ULONG         SecurityDescriptorSize;
+    LARGE_INTEGER CreationTime;
+} OBJECT_BASIC_INFORMATION;
+
+typedef struct _OBJECT_NAME_INFORMATION {
+    UNICODE_STRING Name;
+    /* variable-length wchar_t buffer follows */
+} OBJECT_NAME_INFORMATION;
+
+typedef struct _OBJECT_TYPE_INFORMATION {
+    UNICODE_STRING Name;
+    ULONG          TotalNumberOfObjects;
+    ULONG          TotalNumberOfHandles;
+    ULONG          TotalPagedPoolUsage;
+    ULONG          TotalNonPagedPoolUsage;
+    ULONG          TotalNamePoolUsage;
+    ULONG          TotalHandleTableUsage;
+    ULONG          HighWaterNumberOfObjects;
+    ULONG          HighWaterNumberOfHandles;
+    ULONG          HighWaterPagedPoolUsage;
+    ULONG          HighWaterNonPagedPoolUsage;
+    ULONG          HighWaterNamePoolUsage;
+    ULONG          HighWaterHandleTableUsage;
+    ULONG          InvalidAttributes;
+    ULONG          GenericMapping[4];
+    ULONG          ValidAccessMask;
+    unsigned char  SecurityRequired;
+    unsigned char  MaintainHandleCount;
+    USHORT         Reserved1;
+    ULONG          PoolType;
+    ULONG          DefaultPagedPoolCharge;
+    ULONG          DefaultNonPagedPoolCharge;
+} OBJECT_TYPE_INFORMATION;
 ]]
 
 local M = {}
@@ -155,6 +205,23 @@ function M.NtQuerySymbolicLinkObject(h)
     return str.from_utf16(ns.us)
 end
 
+-- Query generic object info. Size-query capable: caller provides buffer
+-- and length, we return (bytes_written, status). STATUS_INFO_LENGTH_MISMATCH
+-- (0xC0000004) is an error-severity NTSTATUS, so passes through is_error
+-- and raises — the caller should size appropriately up front.
+--
+-- info_class values (OBJECT_INFORMATION_CLASS):
+--   0 = ObjectBasicInformation  → OBJECT_BASIC_INFORMATION
+--   1 = ObjectNameInformation   → OBJECT_NAME_INFORMATION + wchar_t buffer
+--   2 = ObjectTypeInformation   → OBJECT_TYPE_INFORMATION + wchar_t buffer
+function M.NtQueryObject(h, info_class, buffer, length)
+    local ret = ffi.new('ULONG[1]')
+    local st = ntdll.NtQueryObject(handle.raw(h), info_class,
+                                   buffer, length, ret)
+    if err.is_error(st) then err.raise('NtQueryObject', st) end
+    return ret[0], err.normalize(st)
+end
+
 return M
 
 -- ----------------------------------------------------------------------
@@ -164,8 +231,6 @@ return M
 -- Size-query pattern (caller provides buffer; kernel fills and reports
 -- bytes used. Don't fit the uniform wrapper — hand-roll helpers or
 -- leave for raw `ntdll.<Foo>` access):
---   NtQueryObject                generic object info by OBJECT_INFORMATION_CLASS
---                                (handle type, full name, security, ...)
 --   NtSetInformationObject       set handle inherit/protect flags
 --
 -- Security / audit (NTOS/SE territory, exported by OB for handle-scoped calls):
