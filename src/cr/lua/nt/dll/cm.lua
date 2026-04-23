@@ -25,6 +25,26 @@ local str    = require('nt.dll.str')
 local handle = require('nt.dll.handle')
 
 ffi.cdef[[
+/* KEY_BASIC_INFORMATION / KEY_VALUE_FULL_INFORMATION are the two
+ * variable-length info classes the enumerators return. Name /
+ * wchar_t buffer follow in the caller's buffer at offset 0 after the
+ * fixed header (Shape 5). */
+typedef struct _KEY_BASIC_INFORMATION {
+    LARGE_INTEGER LastWriteTime;
+    ULONG         TitleIndex;
+    ULONG         NameLength;
+    wchar_t       Name[1];
+} KEY_BASIC_INFORMATION;
+
+typedef struct _KEY_VALUE_FULL_INFORMATION {
+    ULONG   TitleIndex;
+    ULONG   Type;
+    ULONG   DataOffset;
+    ULONG   DataLength;
+    ULONG   NameLength;
+    wchar_t Name[1];
+} KEY_VALUE_FULL_INFORMATION;
+
 NTSTATUS __stdcall NtOpenKey(HANDLE *KeyHandle,
                              ULONG DesiredAccess,
                              OBJECT_ATTRIBUTES *ObjectAttributes);
@@ -79,6 +99,37 @@ NTSTATUS __stdcall NtDeleteValueKey(HANDLE KeyHandle,
 ]]
 
 local M = {}
+
+-- KEY_INFORMATION_CLASS values (for NtQueryKey / NtEnumerateKey).
+M.KeyBasicInformation     = 0
+M.KeyNodeInformation      = 1
+M.KeyFullInformation      = 2
+M.KeyNameInformation      = 3
+M.KeyCachedInformation    = 4
+M.KeyFlagsInformation     = 5
+M.KeyVirtualizationInformation = 6
+M.KeyHandleTagsInformation = 7
+
+-- KEY_VALUE_INFORMATION_CLASS values (for NtQueryValueKey / NtEnumerateValueKey).
+M.KeyValueBasicInformation         = 0
+M.KeyValueFullInformation          = 1
+M.KeyValuePartialInformation       = 2
+M.KeyValueFullInformationAlign64   = 3
+M.KeyValuePartialInformationAlign64 = 4
+
+-- REG_* data-type codes (for KEY_VALUE_FULL_INFORMATION.Type).
+M.REG_NONE                       = 0
+M.REG_SZ                         = 1
+M.REG_EXPAND_SZ                  = 2
+M.REG_BINARY                     = 3
+M.REG_DWORD                      = 4
+M.REG_DWORD_LITTLE_ENDIAN        = 4
+M.REG_DWORD_BIG_ENDIAN           = 5
+M.REG_LINK                       = 6
+M.REG_MULTI_SZ                   = 7
+M.REG_RESOURCE_LIST              = 8
+M.REG_FULL_RESOURCE_DESCRIPTOR   = 9
+M.REG_RESOURCE_REQUIREMENTS_LIST = 10
 
 function M.NtOpenKey(access, oa)
     local h = ffi.new('HANDLE[1]')

@@ -13,12 +13,8 @@ local ob   = require('nt.dll.ob')
 local oa   = require('nt.dll.oa')
 local str  = require('nt.dll.str')
 
-ffi.cdef[[
-typedef struct _OBJECT_DIRECTORY_INFORMATION {
-    UNICODE_STRING Name;
-    UNICODE_STRING TypeName;
-} OBJECT_DIRECTORY_INFORMATION;
-]]
+-- OBJECT_DIRECTORY_INFORMATION cdef lives in nt.dll.ob; ob is already
+-- required above, so the type is visible here without re-declaration.
 
 local DIR_ACCESS             = 0x3        -- DIRECTORY_QUERY | DIRECTORY_TRAVERSE
 local STATUS_NO_MORE_ENTRIES = 0x8000001A

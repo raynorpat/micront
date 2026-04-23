@@ -8,31 +8,9 @@ local str = require('nt.dll.str')
 
 t.suite("cm")
 
-local KEY_READ_ACCESS         = 0x9   -- QUERY_VALUE | ENUMERATE_SUB_KEYS
-local KeyBasicInformation     = 0
-local KeyValueFullInformation = 1
-local STATUS_NO_MORE_ENTRIES  = 0x8000001A
-local STATUS_BUFFER_OVERFLOW  = 0x80000005
-
--- Minimal KEY_*_INFORMATION cdefs for the test — not in nt.dll.cm
--- (which leaves info-class parsing to callers).
-ffi.cdef[[
-typedef struct _TEST_KEY_BASIC_INFORMATION {
-    LARGE_INTEGER LastWriteTime;
-    ULONG         TitleIndex;
-    ULONG         NameLength;
-    wchar_t       Name[1];
-} TEST_KEY_BASIC_INFORMATION;
-
-typedef struct _TEST_KEY_VALUE_FULL_INFORMATION {
-    ULONG   TitleIndex;
-    ULONG   Type;
-    ULONG   DataOffset;
-    ULONG   DataLength;
-    ULONG   NameLength;
-    wchar_t Name[1];
-} TEST_KEY_VALUE_FULL_INFORMATION;
-]]
+local KEY_READ_ACCESS        = 0x9   -- QUERY_VALUE | ENUMERATE_SUB_KEYS
+local STATUS_NO_MORE_ENTRIES = 0x8000001A
+local STATUS_BUFFER_OVERFLOW = 0x80000005
 
 t.test("NtOpenKey on \\Registry\\Machine\\System", function()
     local k = cm.NtOpenKey(KEY_READ_ACCESS,
@@ -55,11 +33,11 @@ t.test("NtEnumerateKey finds CurrentControlSet under \\Registry\\Machine\\System
     local seen = {}
     local i = 0
     while true do
-        local len, st = cm.NtEnumerateKey(k, i, KeyBasicInformation,
+        local len, st = cm.NtEnumerateKey(k, i, cm.KeyBasicInformation,
                                           buf, 1024)
         if st == STATUS_NO_MORE_ENTRIES then break end
         if st ~= STATUS_BUFFER_OVERFLOW then
-            local info = ffi.cast('TEST_KEY_BASIC_INFORMATION *', buf)
+            local info = ffi.cast('KEY_BASIC_INFORMATION *', buf)
             seen[str.from_wchars(info.Name, info.NameLength / 2)] = true
         end
         i = i + 1
@@ -75,11 +53,11 @@ t.test("NtEnumerateValueKey on Init key finds Exe and Stdio", function()
     local seen = {}
     local i = 0
     while true do
-        local len, st = cm.NtEnumerateValueKey(k, i, KeyValueFullInformation,
+        local len, st = cm.NtEnumerateValueKey(k, i, cm.KeyValueFullInformation,
                                                buf, 1024)
         if st == STATUS_NO_MORE_ENTRIES then break end
         if st ~= STATUS_BUFFER_OVERFLOW then
-            local info = ffi.cast('TEST_KEY_VALUE_FULL_INFORMATION *', buf)
+            local info = ffi.cast('KEY_VALUE_FULL_INFORMATION *', buf)
             seen[str.from_wchars(info.Name, info.NameLength / 2)] = info.Type
         end
         i = i + 1
@@ -94,10 +72,10 @@ t.test("NtQueryValueKey reads a DWORD from an atdisk service key", function()
     local k = cm.NtOpenKey(KEY_READ_ACCESS,
         oa.path("\\Registry\\Machine\\System\\CurrentControlSet\\Services\\atdisk").oa)
     local buf = ffi.new('char[256]')
-    local len, st = cm.NtQueryValueKey(k, "Type", KeyValueFullInformation,
+    local len, st = cm.NtQueryValueKey(k, "Type", cm.KeyValueFullInformation,
                                        buf, 256)
     t.eq(st, 0, "STATUS_SUCCESS from NtQueryValueKey")
-    local info = ffi.cast('TEST_KEY_VALUE_FULL_INFORMATION *', buf)
+    local info = ffi.cast('KEY_VALUE_FULL_INFORMATION *', buf)
     t.eq(info.Type, 4 --[[ REG_DWORD ]])
     t.eq(info.DataLength, 4)
     local data = ffi.cast('uint32_t *',
@@ -113,7 +91,7 @@ t.test("NtQueryValueKey on missing value raises", function()
         oa.path("\\Registry\\Machine\\System\\CurrentControlSet\\Control\\Init").oa)
     local buf = ffi.new('char[256]')
     t.raises(function()
-        cm.NtQueryValueKey(k, "NoSuchValue", KeyValueFullInformation,
+        cm.NtQueryValueKey(k, "NoSuchValue", cm.KeyValueFullInformation,
                            buf, 256)
     end)
     k:close()

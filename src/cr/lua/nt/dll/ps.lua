@@ -159,10 +159,16 @@ end
 -- ------------------------------------------------------------------
 
 -- High-level thread creator. Returns (NT_HANDLE, tid). `entry` is a
--- native function pointer with signature `ULONG __stdcall fn(PVOID)` —
--- typically an export exposed via LuaJIT FFI (ffi.C.<name> or a
--- ffi.cast of a DLL-imported pointer). `param` is a cdata value
--- (PVOID) passed to the entry function.
+-- native function pointer with signature `ULONG __stdcall fn(HANDLE)` —
+-- typically either an ffi.C export from rt/ or an ntdll export
+-- (accessed via require('nt.dll').NtFoo) whose shape matches.
+--
+-- `handle_param` is an NT_HANDLE the thread operates on (the signal-
+-- target for an Event thread, the EventPair the thread rendezvouses
+-- on, etc.) — or nil if the entry doesn't need a handle. Raw pointer
+-- params are NOT supported: the thread-entry ABI here is "operate on
+-- an NT object", which is always an NT_HANDLE. Passing anything else
+-- raises.
 --
 -- `opts` table (all optional):
 --   .stack_max      = reserved stack size (default 64K)
@@ -176,8 +182,17 @@ end
 -- When the entry function returns, ntdll's trampoline calls
 -- NtTerminateThread automatically — no explicit termination needed
 -- for well-behaved entries.
-function M.create_thread(entry, param, opts)
+function M.create_thread(entry, handle_param, opts)
     opts = opts or {}
+    local raw_param
+    if handle_param == nil then
+        raw_param = nil
+    elseif ffi.istype('NT_HANDLE', handle_param) then
+        raw_param = ffi.cast('void *', handle.raw(handle_param))
+    else
+        error("create_thread: handle_param must be nil or NT_HANDLE, got "
+              .. tostring(handle_param), 2)
+    end
     local h   = ffi.new('HANDLE[1]')
     local cid = ffi.new('CLIENT_ID')
     local st = ntdll.RtlCreateUserThread(
@@ -188,7 +203,7 @@ function M.create_thread(entry, param, opts)
         opts.stack_max    or 0x10000,              -- 64K reserved
         opts.stack_commit or 0x2000,               -- 8K committed
         entry,
-        param,
+        raw_param,
         h,
         cid)
     if err.is_error(st) then err.raise('RtlCreateUserThread', st) end

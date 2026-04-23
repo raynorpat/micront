@@ -6,16 +6,6 @@ local ob  = require('nt.dll.ob')
 local oa  = require('nt.dll.oa')
 local str = require('nt.dll.str')
 
--- OBJECT_DIRECTORY_INFORMATION lives in the Directory type handler
--- (nt.tree.types.dir) — lazy-loaded there. Redefine it locally so
--- this suite doesn't depend on the tree module's load order.
-ffi.cdef[[
-typedef struct _TEST_OBJECT_DIRECTORY_INFORMATION {
-    UNICODE_STRING Name;
-    UNICODE_STRING TypeName;
-} TEST_OBJECT_DIRECTORY_INFORMATION;
-]]
-
 t.suite("ob")
 
 local DIR_ACCESS           = 0x3   -- DIRECTORY_QUERY | DIRECTORY_TRAVERSE
@@ -45,7 +35,7 @@ t.test("NtQueryDirectoryObject enumerates root", function()
                                                   true, first, ctx)
         first = false
         if st == STATUS_NO_MORE_ENTRIES or len == 0 then break end
-        local info = ffi.cast('TEST_OBJECT_DIRECTORY_INFORMATION *', buf)
+        local info = ffi.cast('OBJECT_DIRECTORY_INFORMATION *', buf)
         seen[str.from_utf16(info.Name)] = str.from_utf16(info.TypeName)
     end
     h:close()

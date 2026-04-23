@@ -66,6 +66,14 @@ NTSTATUS __stdcall NtQueryObject(HANDLE Handle,
                                  ULONG ObjectInformationLength,
                                  ULONG *ReturnLength);
 
+/* Per-entry record returned by NtQueryDirectoryObject. Array of these
+ * plus variable-length wchar data for the Name/TypeName buffers all
+ * live in the caller's output buffer (Shape 5). */
+typedef struct _OBJECT_DIRECTORY_INFORMATION {
+    UNICODE_STRING Name;
+    UNICODE_STRING TypeName;
+} OBJECT_DIRECTORY_INFORMATION;
+
 typedef struct _OBJECT_BASIC_INFORMATION {
     ULONG         Attributes;
     ULONG         GrantedAccess;

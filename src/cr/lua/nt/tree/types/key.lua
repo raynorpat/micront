@@ -17,27 +17,11 @@ local cm   = require('nt.dll.cm')
 local oa   = require('nt.dll.oa')
 local str  = require('nt.dll.str')
 
-ffi.cdef[[
-typedef struct _KEY_BASIC_INFORMATION {
-    LARGE_INTEGER LastWriteTime;
-    ULONG TitleIndex;
-    ULONG NameLength;
-    wchar_t Name[1];
-} KEY_BASIC_INFORMATION;
-
-typedef struct _KEY_VALUE_FULL_INFORMATION {
-    ULONG TitleIndex;
-    ULONG Type;
-    ULONG DataOffset;
-    ULONG DataLength;
-    ULONG NameLength;
-    wchar_t Name[1];
-} KEY_VALUE_FULL_INFORMATION;
-]]
+-- KEY_BASIC_INFORMATION / KEY_VALUE_FULL_INFORMATION + info-class
+-- constants + REG_* type codes all live in nt.dll.cm; cm is already
+-- required above, so they're visible here.
 
 local KEY_READ_ACCESS         = 0x9   -- KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS
-local KeyBasicInformation     = 0
-local KeyValueFullInformation = 1
 local STATUS_NO_MORE_ENTRIES  = 0x8000001A
 local STATUS_BUFFER_OVERFLOW  = 0x80000005
 
@@ -63,7 +47,7 @@ function M.children(node)
         local vidx = 0
         while true do
             local len, st = cm.NtEnumerateValueKey(
-                key, vidx, KeyValueFullInformation, vbuf, 4096)
+                key, vidx, cm.KeyValueFullInformation, vbuf, 4096)
             if st == STATUS_NO_MORE_ENTRIES then break end
             if st ~= STATUS_BUFFER_OVERFLOW then
                 local info = ffi.cast('KEY_VALUE_FULL_INFORMATION *', vbuf)
@@ -84,7 +68,7 @@ function M.children(node)
         local kidx = 0
         while true do
             local len, st = cm.NtEnumerateKey(
-                key, kidx, KeyBasicInformation, kbuf, 4096)
+                key, kidx, cm.KeyBasicInformation, kbuf, 4096)
             if st == STATUS_NO_MORE_ENTRIES then break end
             if st ~= STATUS_BUFFER_OVERFLOW then
                 local info = ffi.cast('KEY_BASIC_INFORMATION *', kbuf)

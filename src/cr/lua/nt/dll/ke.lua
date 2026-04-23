@@ -109,4 +109,84 @@ function M.NtAlertThread(thread_handle)
     if err.is_error(st) then err.raise('NtAlertThread', st) end
 end
 
+-- ------------------------------------------------------------------
+-- Timeouts
+-- ------------------------------------------------------------------
+
+-- Convert a Lua seconds value to a LARGE_INTEGER suitable for any NT
+-- wait / sleep / timer API. nil → nil (caller passes nil for infinite).
+-- Positive seconds → negative 100ns count, i.e. relative delay (the
+-- almost-always-wanted form). For an absolute deadline (rare) build
+-- the LARGE_INTEGER yourself and set a positive QuadPart.
+--
+-- Held as a cdata local by the caller so it's alive across the syscall:
+--     local t = ke.timeout(5.0)
+--     ke.NtWaitForSingleObject(h, false, t)
+function M.timeout(seconds)
+    if seconds == nil then return nil end
+    local li = ffi.new('LARGE_INTEGER')
+    li.QuadPart = -math.floor(seconds * 1e7)
+    return li
+end
+
+-- ------------------------------------------------------------------
+-- Lua-idiomatic Event wrapper
+-- ------------------------------------------------------------------
+--
+-- Wraps NtCreateEvent + the NtSet/Reset/Pulse/Clear/Wait family in an
+-- object with method access and GC-backed cleanup. The returned table
+-- holds an NT_HANDLE in self._h — dropping all references to the
+-- wrapper lets the handle's own __gc fire NtClose.
+--
+-- Constructor:
+--   ke.event{
+--       notify    = true|false,   -- true (default) = NotificationEvent
+--                                    (manual reset), false = SynchronizationEvent
+--                                    (auto-reset on single waiter release)
+--       signaled  = true|false,   -- initial state, default false
+--       access    = EVENT_ALL_ACCESS by default
+--       oa        = OBJECT_ATTRIBUTES for a named event
+--   } → Event
+--
+-- Methods: :signal() :reset() :pulse() :clear()
+--          :wait(seconds)   -- returns true if signaled, false on timeout
+--          :handle()        -- underlying NT_HANDLE (for cross-object waits)
+--          :close()
+
+local Event = {}
+Event.__index = Event
+
+function Event:signal() return M.NtSetEvent(self._h)   end
+function Event:reset()  return M.NtResetEvent(self._h) end
+function Event:pulse()  return M.NtPulseEvent(self._h) end
+function Event:clear()  return M.NtClearEvent(self._h) end
+
+function Event:wait(seconds)
+    local t = M.timeout(seconds)
+    local st = M.NtWaitForSingleObject(self._h, false, t)
+    return st == 0   -- 0 = STATUS_SUCCESS (signaled); 0x102 = timeout
+end
+
+function Event:handle() return self._h end
+
+function Event:close()
+    if self._h then self._h:close(); self._h = nil end
+end
+
+local EVENT_ALL_ACCESS = 0x1F0003
+
+function M.event(opts)
+    opts = opts or {}
+    local event_type = 0   -- NotificationEvent
+    if opts.notify == false then event_type = 1 end   -- SynchronizationEvent
+    local h = M.NtCreateEvent(
+        opts.access or EVENT_ALL_ACCESS,
+        opts.oa,
+        event_type,
+        opts.signaled or false)
+    return setmetatable({ _h = h }, Event)
+end
+
+M.Event = Event   -- exposed so callers can extend the metatable if needed
+
 return M
