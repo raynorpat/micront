@@ -137,6 +137,44 @@ function render.Value(n)
     return string.format("  = %-20s %s", n.name, render_value(n))
 end
 
+function render.Process(n)
+    return string.format("%-6s <Process>     %-20s  threads=%-3d  rss=%dK  virt=%dK  faults=%d",
+        n.name, n.image or "(?)", n.threads or 0,
+        math.floor((n.working_set  or 0) / 1024),
+        math.floor((n.virtual_size or 0) / 1024),
+        n.page_faults or 0)
+end
+
+function render.Thread(n)
+    return string.format("%-6s <Thread>      state=%-11s  reason=%-14s  prio=%d  ctx=%d",
+        n.name, tostring(n.thread_state), tostring(n.wait_reason),
+        n.priority or 0, n.context_switches or 0)
+end
+
+function render.Module(n)
+    return string.format("%-24s <Module>  base=0x%08x  size=%dK  %s",
+        n.name, n.image_base or 0,
+        math.floor((n.image_size or 0) / 1024),
+        n.image_path or "")
+end
+
+function render.Event(n)
+    local ok, sig = pcall(function() return n.signaled end)
+    if not ok then return string.format("%-24s <Event>", n.name) end
+    return string.format("%-24s <Event>  %s  (%s)", n.name,
+        sig and "SIGNALED" or "not signaled",
+        tostring((ok and n.event_type) or ""))
+end
+
+function render.Section(n)
+    local ok, size = pcall(function() return n.maximum_size end)
+    if not ok then return string.format("%-24s <Section>", n.name) end
+    -- size is int64_t (LARGE_INTEGER.QuadPart) cdata; coerce to Lua number.
+    return string.format("%-24s <Section>  size=%dK  attrs=0x%x",
+        n.name, math.floor(tonumber(size) / 1024),
+        n.allocation_attributes or 0)
+end
+
 local function render_node(n)
     local r = render[n.type_name] or render._default
     return r(n)
@@ -211,13 +249,39 @@ local ok, plist = pcall(tree.resolve, "\\Processes")
 if not ok then
     print("  resolve failed: " .. tostring(plist))
 else
-    print(string.format("  %-5s %-5s %-20s %-8s %-8s",
-                        "PID", "PPID", "Image", "Threads", "Handles"))
+    print(string.format("  %-5s %-5s %-20s %-8s %-10s %-10s %-8s",
+                        "PID", "PPID", "Image", "Threads",
+                        "VirtSize", "WorkingSet", "Faults"))
     for p in plist:iter() do
-        print(string.format("  %-5d %-5d %-20s %-8d %-8d",
-            p.pid, p.parent_pid, p.image, p.threads, p.handles))
+        print(string.format("  %-5d %-5d %-20s %-8d %-10d %-10d %-8d",
+            p.pid, p.parent_pid, p.image, p.threads,
+            p.virtual_size, p.working_set, p.page_faults))
     end
 end
+
+-- Filesystem enumeration via NtQueryDirectoryFile. \SystemRoot is a
+-- SymbolicLink; opening "\SystemRoot\" (trailing backslash) routes the
+-- name resolver through the link AND through the FS driver, returning
+-- a directory handle on the mounted volume. Without the trailing
+-- backslash the resolver stops at the raw partition device, which
+-- NtQueryDirectoryFile doesn't accept.
+local function walk_fs(path, depth)
+    local indent = string.rep("  ", depth)
+    local node = tree.Node.new(nil, "", path, "File")
+    for f in node:iter() do
+        local is_dir = f.is_directory
+        print(string.format("%s%-32s %s  %d bytes",
+            indent, f.name, is_dir and "<DIR>" or "     ", f.size or 0))
+        if is_dir and depth < 2 then
+            walk_fs(path .. f.name .. "\\", depth + 1)
+        end
+    end
+end
+
+print("")
+print("demo: \\SystemRoot\\ (filesystem enumeration)")
+print("---")
+walk_fs("\\SystemRoot\\", 0)
 
 -- Open the current process (run.exe) via the synthetic path. PID 0 is
 -- the idle pseudo-process — NtOpenProcess rejects it with

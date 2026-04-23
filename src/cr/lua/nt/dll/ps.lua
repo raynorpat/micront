@@ -11,11 +11,6 @@ local err    = require('nt.dll.errors')
 local handle = require('nt.dll.handle')
 
 ffi.cdef[[
-typedef struct _CLIENT_ID {
-    HANDLE UniqueProcess;
-    HANDLE UniqueThread;
-} CLIENT_ID;
-
 NTSTATUS __stdcall NtOpenProcess(HANDLE *h, ULONG Access,
                                  OBJECT_ATTRIBUTES *oa, CLIENT_ID *cid);
 NTSTATUS __stdcall NtOpenThread (HANDLE *h, ULONG Access,

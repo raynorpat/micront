@@ -47,6 +47,11 @@ typedef union _LARGE_INTEGER {
     struct { ULONG LowPart; long HighPart; };
     long long QuadPart;
 } LARGE_INTEGER;
+
+typedef struct _CLIENT_ID {
+    HANDLE UniqueProcess;
+    HANDLE UniqueThread;
+} CLIENT_ID;
 ]]
 
 return ffi.load('ntdll')

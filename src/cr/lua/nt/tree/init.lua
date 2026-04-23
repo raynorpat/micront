@@ -261,6 +261,10 @@ local TYPE_MODULE = {
     IoCompletion = "iocomp",
     Process      = "process",
     ProcessList  = "proclist",
+    Thread       = "thread",
+    SystemDir    = "sysdir",
+    ModuleList   = "modlist",
+    Module       = "module",
 }
 
 local handler_cache = {}
@@ -293,6 +297,7 @@ local M = {}
 -- by path lookup (e.g. the process list via NtQuerySystemInformation).
 local ROOT_VIRTUALS = {
     { name = "Processes", type_name = "ProcessList" },
+    { name = "System",    type_name = "SystemDir"   },
 }
 
 -- Root of the unified namespace. \ is a Directory object; iteration

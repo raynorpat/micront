@@ -27,7 +27,41 @@ local ntdll  = require('nt.dll')
 local err    = require('nt.dll.errors')
 local handle = require('nt.dll.handle')
 
+-- Pack(4) for LARGE_INTEGER-bearing structs; see nt.dll.sys for the
+-- NT 3.5 alignment discussion.
 ffi.cdef[[
+#pragma pack(push, 4)
+typedef struct _FILE_BASIC_INFORMATION {
+    LARGE_INTEGER CreationTime;
+    LARGE_INTEGER LastAccessTime;
+    LARGE_INTEGER LastWriteTime;
+    LARGE_INTEGER ChangeTime;
+    ULONG         FileAttributes;
+} FILE_BASIC_INFORMATION;
+
+typedef struct _FILE_STANDARD_INFORMATION {
+    LARGE_INTEGER AllocationSize;
+    LARGE_INTEGER EndOfFile;
+    ULONG         NumberOfLinks;
+    unsigned char DeletePending;
+    unsigned char Directory;
+} FILE_STANDARD_INFORMATION;
+
+typedef struct _FILE_DIRECTORY_INFORMATION {
+    ULONG         NextEntryOffset;
+    ULONG         FileIndex;
+    LARGE_INTEGER CreationTime;
+    LARGE_INTEGER LastAccessTime;
+    LARGE_INTEGER LastWriteTime;
+    LARGE_INTEGER ChangeTime;
+    LARGE_INTEGER EndOfFile;
+    LARGE_INTEGER AllocationSize;
+    ULONG         FileAttributes;
+    ULONG         FileNameLength;
+    wchar_t       FileName[1];
+} FILE_DIRECTORY_INFORMATION;
+#pragma pack(pop)
+
 NTSTATUS __stdcall NtCreateFile(HANDLE *FileHandle,
                                 ULONG DesiredAccess,
                                 OBJECT_ATTRIBUTES *ObjectAttributes,
@@ -39,6 +73,24 @@ NTSTATUS __stdcall NtCreateFile(HANDLE *FileHandle,
                                 ULONG CreateOptions,
                                 void *EaBuffer,
                                 ULONG EaLength);
+
+NTSTATUS __stdcall NtQueryInformationFile(HANDLE FileHandle,
+                                          IO_STATUS_BLOCK *IoStatusBlock,
+                                          void *FileInformation,
+                                          ULONG Length,
+                                          int FileInformationClass);
+
+NTSTATUS __stdcall NtQueryDirectoryFile(HANDLE FileHandle,
+                                        HANDLE Event,
+                                        void *ApcRoutine,
+                                        void *ApcContext,
+                                        IO_STATUS_BLOCK *IoStatusBlock,
+                                        void *FileInformation,
+                                        ULONG Length,
+                                        int FileInformationClass,
+                                        unsigned char ReturnSingleEntry,
+                                        UNICODE_STRING *FileName,
+                                        unsigned char RestartScan);
 
 NTSTATUS __stdcall NtOpenFile  (HANDLE *FileHandle,
                                 ULONG DesiredAccess,
@@ -136,6 +188,44 @@ function M.NtDeviceIoControlFile(h, ioctl,
     return iosb.Information
 end
 
+-- FILE_INFORMATION_CLASS subset used below.
+local FileBasicInformation    = 4
+local FileStandardInformation = 5
+
+-- Query fixed-size file info. Returns a freshly-allocated cdata of the
+-- requested class. NT 3.5 strict-checks Length == sizeof for fixed
+-- classes (same rule as NtQueryObject), so size is taken from the cdef.
+local function make_file_query(struct_name, info_class)
+    local size = ffi.sizeof(struct_name)
+    return function(h)
+        local info = ffi.new(struct_name)
+        local iosb = ffi.new('IO_STATUS_BLOCK')
+        local st = ntdll.NtQueryInformationFile(handle.raw(h), iosb,
+                                                info, size, info_class)
+        if err.is_error(st) then err.raise('NtQueryInformationFile', st) end
+        return info
+    end
+end
+
+M.query_basic    = make_file_query('FILE_BASIC_INFORMATION',    FileBasicInformation)
+M.query_standard = make_file_query('FILE_STANDARD_INFORMATION', FileStandardInformation)
+
+-- Directory enumeration. Caller provides buffer; each call returns one
+-- or more FILE_DIRECTORY_INFORMATION records (linked via NextEntryOffset).
+-- Returns (bytes_written, status). STATUS_NO_MORE_FILES (0x80000006) is
+-- WARNING-severity so it passes through is_error; end-of-dir signal.
+function M.NtQueryDirectoryFile(h, buffer, length, restart_scan)
+    local iosb = ffi.new('IO_STATUS_BLOCK')
+    local st = ntdll.NtQueryDirectoryFile(handle.raw(h), nil, nil, nil, iosb,
+                                          buffer, length,
+                                          1 --[[ FileDirectoryInformation ]],
+                                          0 --[[ ReturnSingleEntry=false ]],
+                                          nil --[[ no filter ]],
+                                          restart_scan and 1 or 0)
+    if err.is_error(st) then err.raise('NtQueryDirectoryFile', st) end
+    return iosb.Information, err.normalize(st)
+end
+
 return M
 
 -- ----------------------------------------------------------------------
@@ -153,11 +243,9 @@ return M
 -- Size-query pattern (caller typically invokes twice: probe length,
 -- alloc buffer, call for real). Don't fit the uniform wrapper — add
 -- hand-rolled helpers, or leave for raw `ntdll.<Foo>` access:
---   NtQueryInformationFile       FILE_*_INFORMATION classes
---   NtSetInformationFile         "
+--   NtSetInformationFile         set FILE_*_INFORMATION
 --   NtQueryVolumeInformationFile FILE_FS_*_INFORMATION classes
 --   NtSetVolumeInformationFile   "
---   NtQueryDirectoryFile         enumerate directory contents
 --   NtQueryAttributesFile        cheap stat(2) without opening the file
 --   NtQueryFullAttributesFile    "  with more fields
 --
