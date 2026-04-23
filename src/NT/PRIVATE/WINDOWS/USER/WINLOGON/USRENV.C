@@ -166,7 +166,10 @@ SetupUserEnvironment(
     // Load the user's profile into the registry
     //
 
+    DbgPrint("WINLOGON: SetupUserEnvironment — calling RestoreUserProfile\n");
     Status = RestoreUserProfile(pGlobals);
+    DbgPrint("WINLOGON: SetupUserEnvironment — RestoreUserProfile status=%08lx flags=%08lx\n",
+             Status, pGlobals->UserProfile.UserProfileFlags);
     if (Status != STATUS_SUCCESS) {
         WLPrint(("restoring the user profile failed"));
         ReportWinlogonEvent(pGlobals,
@@ -203,17 +206,13 @@ SetupUserEnvironment(
 
        }
 
-       // If they continue they will reference the default registry hive.
-       // This should never happen, but who knows. Don't tell them they
-       // have been given the default because they haven't - they are directly
-       // editting the default i.e. the system is broken.
-       //
-       // This will also occur if their hive is already in place - this
-       // is still due to a bug in the system, but they can continue
-       // with no problem and will reference the correct hive.
-       //
-
-       return(FALSE);
+       // MicroNT: the stock behavior is to bail out here (return FALSE),
+       // which bounces the user back to the Welcome dialog. We have no
+       // per-user profile hive and no default-profile ntuser.dat staged,
+       // so RestoreUserProfile always fails — every login would bounce.
+       // Continue with no HKCU instead; apps that try HKCU see the
+       // default/system hive and gracefully degrade.
+       DbgPrint("WINLOGON: SetupUserEnvironment — profile load failed, continuing anyway\n");
     }
 
     //

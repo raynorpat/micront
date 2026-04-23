@@ -403,6 +403,7 @@ LogonSuccessfulDlgInit(
 
     LockWindowStation(pGlobals->hwinsta);
     
+    DbgPrint("WINLOGON: Loggedon — ExecProcesses(Userinit=userinit.exe)\n");
     ProcessesStarted = ExecProcesses(TEXT("Userinit"),
                                      TEXT("userinit.exe"),
                                      APPLICATION_DESKTOP_PATH,
@@ -410,6 +411,7 @@ LogonSuccessfulDlgInit(
                                      HIGH_PRIORITY_CLASS,
                                      0 // Normal startup feedback
                                      );
+    DbgPrint("WINLOGON: Loggedon — userinit ProcessesStarted=%d\n", ProcessesStarted);
 
     DeleteLogonScriptVariables(pGlobals);
 
@@ -430,16 +432,20 @@ LogonSuccessfulDlgInit(
         (VOID)WriteLog( LogFileHandle, TEXT("Winlogon: Userinit exec failed, starting progman"));
 #endif
 
+        DbgPrint("WINLOGON: Loggedon — userinit.exe FAILED to start, falling back to progman\n");
         WLPrint(("Failed to start userinit app, starting shell manually"));
 
         NtCurrentPeb()->ProcessParameters->Flags |= RTL_USER_PROC_DISABLE_HEAP_DECOMMIT;
-        ExecProcesses(TEXT("shell"),
-                       TEXT("progman"),
-                       APPLICATION_DESKTOP_PATH,
-                       &pGlobals->UserProcessData,
-                       HIGH_PRIORITY_CLASS,
-                       0 // Normal startup feedback
-                       );
+        {
+            DWORD _shellStarted = ExecProcesses(TEXT("shell"),
+                           TEXT("progman"),
+                           APPLICATION_DESKTOP_PATH,
+                           &pGlobals->UserProcessData,
+                           HIGH_PRIORITY_CLASS,
+                           0 // Normal startup feedback
+                           );
+            DbgPrint("WINLOGON: Loggedon — progman ProcessesStarted=%d\n", _shellStarted);
+        }
         NtCurrentPeb()->ProcessParameters->Flags &= ~RTL_USER_PROC_DISABLE_HEAP_DECOMMIT;
 #ifdef LOGGING
         (VOID) WriteLog( LogFileHandle, TEXT("Winlogon: progman exec'd"));
@@ -980,19 +986,26 @@ LoggedonDlgProc(
         pGlobals = (PGLOBALS)lParam;
 
         if (!LoggedonDlgInit(hDlg)) {
+            DbgPrint("WINLOGON: Loggedon DlgInit FAILED\n");
             EndDialog(hDlg, DLG_FAILURE);
             return(TRUE);
         }
+        DbgPrint("WINLOGON: Loggedon DlgInit OK; userinit/shell launched\n");
 
         // Send ourselves a message so we can hide ourselves without the
         // dialog code trying to force us to be visible
         PostMessage(hDlg, WM_HIDEOURSELVES, 0, 0);
-        
+
         //
         //
         // Switch to app desktop and release lock
         //
-        SwitchDesktop(pGlobals->hdeskApplications);
+        DbgPrint("WINLOGON: SwitchDesktop -> hdeskApplications (%p)\n",
+                 pGlobals->hdeskApplications);
+        if (!SwitchDesktop(pGlobals->hdeskApplications)) {
+            DbgPrint("WINLOGON: SwitchDesktop -> hdeskApplications FAILED, gle=%lu\n",
+                     GetLastError());
+        }
         UnlockWindowStation(pGlobals->hwinsta);
 
         //

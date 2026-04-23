@@ -752,6 +752,49 @@ build_bochsvga(){
 build_framebuf(){
     run_nmake "$GDI/DISPLAYS/FRAMEBUF" "FRAMEBUF - generic framebuffer display driver" makedll=1
 }
+build_kbdus(){
+    # kbdus SOURCES has TARGETPATH=..\obj (the KBDLYOUT-shared obj dir),
+    # but nmake/build only auto-creates per-target obj dirs — not the
+    # shared one. Make it here so fresh checkouts build cleanly.
+    mkdir -p "$USER/KBDLYOUT/obj/i386"
+    run_nmake "$USER/KBDLYOUT/US" "USER/KBDLYOUT/US - US keyboard layout DLL" makedll=1
+}
+build_mpr(){
+    # MPR = Multiple Provider Router, the Win32 abstraction over network
+    # filesystems (Lanman/NetWare/etc). On MicroNT we don't have network
+    # providers yet, but userinit.exe imports MPR.dll for the one call to
+    # WNetRestoreConnection (which walks HKCU\Network and re-mounts saved
+    # drive letters — a no-op here). MPR.dll is still needed for the
+    # import-table resolution at userinit startup.
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/MPR" "WINDOWS/MPR - mpr.dll" makedll=1
+}
+build_pwin32(){
+    # Win16 → Win32 portability-layer static lib. Progman (ported from
+    # Windows 3.1) references its PWIN32_* macros via pwin32.lib, so
+    # without this progman won't link.
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/PORT1632" "WINDOWS/PORT1632 - pwin32.lib"
+}
+build_userpri(){
+    # SHELL/USERPRI — shared Unicode C-runtime helpers (unicrt.obj,
+    # unifile.obj). Progman links a single .obj (unicrt.obj) from here.
+    # TARGETPATH=lib (relative, per SOURCES); lib/i386 isn't auto-created.
+    mkdir -p "$NT_ROOT/PRIVATE/WINDOWS/SHELL/USERPRI/lib/i386"
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/USERPRI" "SHELL/USERPRI - userpri.lib"
+}
+build_shell32(){
+    build_pwin32   || return 1
+    build_userpri  || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/LIBRARY" "SHELL/LIBRARY - shell32.dll" makedll=1
+}
+build_progman(){
+    build_shell32  || return 1
+    # SOURCES builds progman.lib first then UMAPPL links to progman.exe —
+    # KEEP_UMAPPL=1 tells our run_nmake wrapper to run the UMAPPL pass.
+    KEEP_UMAPPL=1 run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/PROGMAN" "SHELL/PROGMAN - progman.exe"
+}
+build_cmd(){
+    KEEP_UMAPPL=1 run_nmake "$NT_ROOT/PRIVATE/WINDOWS/CMD" "WINDOWS/CMD - cmd.exe"
+}
 # --- GUI userland (USER + GDI + console + winsrv + winlogon) ----------------
 #
 # GDI dependency chain: efloat (FP math) + font drivers (fscaler, ttfd, bmfd,
@@ -1257,8 +1300,23 @@ USERLAND_GUI_TARGETS=(
     lsadll winregsrv
     # Framebuffer display driver (pairs with bochsvga.sys miniport)
     framebuf
+    # US keyboard layout DLL — USERSRV xxLoadKeyboardLayoutEx loads
+    # kbdus.dll to translate i8042 scancodes → VKEY + WCHAR. Without
+    # this, edit controls receive WM_KEYDOWN but no WM_CHAR.
+    kbdus
+    # MPR — network-provider router. userinit.exe imports it for a
+    # single no-op WNetRestoreConnection call; without MPR.dll present,
+    # userinit aborts with STATUS_DLL_NOT_FOUND and the shell never
+    # launches.
+    mpr
+    # Shell libs: pwin32 (Win16→Win32 port layer, macro-only but progman
+    # pulls it), userpri (unicrt.obj for shell32), shell32 (ShellExecute/
+    # DragAcceptFiles/env helpers used by progman and most classic apps).
+    pwin32 userpri shell32
     # Login + shell
     winlogon userinit
+    # Program Manager (the default NT 3.5 shell) and cmd.exe.
+    progman cmd
 )
 
 build_group() {

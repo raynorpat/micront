@@ -215,7 +215,6 @@ int WINAPI WinMain(
 
         DealWithAutochkLogs();
 
-        DbgPrint("WINLOGON: calling Logon\n");
         Result = Logon(&Globals);
 
         if (Result == DLG_SUCCESS) {

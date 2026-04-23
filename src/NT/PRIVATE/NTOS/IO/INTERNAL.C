@@ -2729,6 +2729,7 @@ Notes:
     status = driverObject->DriverInit( driverObject, &registryPath->Name );
     ExFreePool( registryPath );
     if (!NT_SUCCESS( status )) {
+        DbgPrint("IOSYS: DriverEntry FAILED status=%08lx\n", status);
         MmUnloadSystemImage( driverObject->DriverSection );
         ObMakeTemporaryObject( driverObject );
         ObDereferenceObject( driverObject );

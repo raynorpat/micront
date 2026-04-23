@@ -5606,13 +5606,28 @@ Return Value:
             if (V1aFixed.UserId != DOMAIN_USER_RID_ADMIN) {
 
                 //
+                // MicroNT: users created via BLDSAM (Administrator, Guest,
+                // ...) don't write a LogonHours attribute, and the MIDL
+                // workaround in SampRetrieveUserLogonHours isn't reached
+                // from every caller path. A zero UnitsPerWeek means "no
+                // restriction info available" → treat as "any hour
+                // allowed" rather than rejecting with STATUS_INVALID_-
+                // LOGON_HOURS. Matches the semantics of all-0xff that
+                // NTDETECT / setup would have set.
+                //
+                if (LogonHours->UnitsPerWeek == 0 || LogonHours->LogonHours == NULL) {
+                    SampReleaseReadLock();
+                    return STATUS_SUCCESS;
+                }
+
+                //
                 // Scan to make sure the workstation being logged into is in the
                 // list of valid workstations - or if the list of valid workstations
                 // is null, which means that all are valid.
                 //
-            
+
                 NtStatus = SampMatchworkstation( LogonWorkStation, WorkStations );
-            
+
                 if ( NT_SUCCESS( NtStatus ) ) {
             
                     //

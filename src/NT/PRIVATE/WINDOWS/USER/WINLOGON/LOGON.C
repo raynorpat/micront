@@ -1055,6 +1055,7 @@ AttemptLogon(
     pGlobals->LogonId = LogonId;
 
     if (!SecurityChangeUser(pGlobals, UserToken, &Quotas, LogonSid, TRUE)) {
+        DbgPrint("WINLOGON: AttemptLogon — SecurityChangeUser FAILED; returning DLG_FAILURE\n");
 
         //
         // Set up security info for new user (system) - this clears out
@@ -1073,7 +1074,7 @@ AttemptLogon(
 
     }
 
-
+    DbgPrint("WINLOGON: logon OK for %ws (SecurityChangeUser succeeded)\n", UserName);
     return(DLG_SUCCESS);
 }
 

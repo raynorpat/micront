@@ -698,11 +698,20 @@ def build_micront_system_hive(profile: str = "headless",
             .set_dword("Start",        1) \
             .set_dword("ErrorControl", 1) \
             .set_sz("Group", "Keyboard Class")
+        # kbdclass's KbdConfiguration opens Services\kbdclass\Parameters
+        # to read KeyboardDataQueueSize / MaximumPortsServiced /
+        # KeyboardDeviceBaseName / ConnectMultiplePorts. All values are
+        # RTL_QUERY_REGISTRY_OPTIONAL — but the subkey itself must exist
+        # or RtlQueryRegistryValues returns STATUS_OBJECT_NAME_NOT_FOUND
+        # before DriverEntry can fall back to defaults. Presence alone
+        # is enough; no values needed.
+        services["kbdclass\\Parameters"]
         services["mouclass"] \
             .set_dword("Type",         1) \
             .set_dword("Start",        1) \
             .set_dword("ErrorControl", 1) \
             .set_sz("Group", "Pointer Class")
+        services["mouclass\\Parameters"]
 
     return h
 
@@ -740,8 +749,8 @@ def build_micront_software_hive(profile: str = "headless") -> Hive:
         wl.set_sz("Userinit", "userinit.exe,")
 
         # "Shell" is what userinit launches as the user's desktop shell.
-        # We don't have progman/explorer yet — leave empty for now.
-        wl.set_sz("Shell", "")
+        # progman.exe = NT 3.5's Program Manager (staged in System32/).
+        wl.set_sz("Shell", "progman.exe")
 
         # ServiceControllerStart — winlogon starts this before lsass.
         # We don't have services.exe yet; winlogon logs a warning but

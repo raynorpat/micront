@@ -1269,6 +1269,10 @@ LogonUser(
                  Quotas,
                  pSubStatus
                  );
+    if (!NT_SUCCESS(Status)) {
+        DbgPrint("WINLOGON: LsaLogonUser FAILED status=%08lx subStatus=%08lx\n",
+                 Status, pSubStatus ? *pSubStatus : 0);
+    }
 
 #ifdef LOGGING
     (VOID) WriteLog( LogFileHandle, TEXT("Winlogon: After LsaLogonUser"));

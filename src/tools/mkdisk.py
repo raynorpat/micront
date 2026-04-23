@@ -521,6 +521,25 @@ _GUI_FILES: list[tuple[str, Path]] = [
     ("System32/Drivers/i8042prt.sys", SDK_LIB / "i8042prt.sys"),
     ("System32/Drivers/kbdclass.sys", SDK_LIB / "kbdclass.sys"),
     ("System32/Drivers/mouclass.sys", SDK_LIB / "mouclass.sys"),
+    # US keyboard-layout DLL — USERSRV::xxxLoadKeyboardLayout LoadLibrary's
+    # this to translate i8042prt scancodes into virtual keys + WCHARs.
+    # Without it, edit controls get WM_KEYDOWN but no WM_CHAR.
+    ("System32/kbdus.dll",           OBJ("WINDOWS/USER/KBDLYOUT") / "kbdus.dll"),
+    # MPR — Multiple Provider Router. userinit.exe imports WNetRestoreConnection
+    # to re-mount saved HKCU\Network drive letters. No providers are registered
+    # on MicroNT so it's a no-op at runtime, but userinit won't load without
+    # the import being resolvable.
+    ("System32/mpr.dll",             SDK_LIB / "mpr.dll"),
+    # Shell32 — NT 3.5's lighter-weight shell helper DLL (ShellExecute,
+    # DragAcceptFiles, Extract*Icon, About-box, environment helpers).
+    # Progman and most classic-NT apps import it.
+    ("System32/shell32.dll",         SDK_LIB / "shell32.dll"),
+    # Progman — Program Manager. Default NT 3.5 shell (HKLM\...\Winlogon\Shell).
+    # Winlogon/userinit execs it after successful logon; groups + icons +
+    # Program/File/Options/Window menus.
+    ("System32/progman.exe",         OBJ("WINDOWS/SHELL/PROGMAN") / "progman.exe"),
+    # cmd.exe — Console shell. Reachable via progman File → Run → cmd.exe.
+    ("System32/cmd.exe",             OBJ("WINDOWS/CMD") / "cmd.exe"),
     # Login
     ("System32/winlogon.exe",       OBJ("WINDOWS/USER/WINLOGON/DAYTONA") / "winlogon.exe"),
     ("System32/userinit.exe",       OBJ("WINDOWS/USER/USERINIT") / "userinit.exe"),

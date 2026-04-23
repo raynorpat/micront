@@ -205,11 +205,14 @@ HalpAdjustResourceListLimits(
     return STATUS_SUCCESS;
 }
 
+extern VOID HalpReportPs2Devices(VOID);
+
 VOID
 HalReportResourceUsage(VOID)
 {
     HalpSerialPrint("HAL: ReportResourceUsage\r\n");
     HalpInitializePciBus();
+    HalpReportPs2Devices();
 }
 
 /* HalGetInterruptVector is in interrupt.c */

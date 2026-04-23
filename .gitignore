@@ -12,6 +12,8 @@
 # Build artifacts in NT source tree
 **/obj/
 _objects.mac
+# SHELL/USERPRI static lib output (TARGETPATH=lib per its SOURCES)
+src/NT/PRIVATE/WINDOWS/SHELL/USERPRI/lib/
 # .sys driver outputs (all built from in-tree sources)
 *.sys
 
@@ -268,6 +270,20 @@ src/NT/PUBLIC/SDK/LIB/I386/lsadll.lib
 src/NT/PUBLIC/SDK/LIB/I386/framebuf.dll
 src/NT/PUBLIC/SDK/LIB/I386/framebuf.exp
 src/NT/PUBLIC/SDK/LIB/I386/framebuf.lib
+# MPR (network provider router) — built from WINDOWS/MPR
+src/NT/PUBLIC/SDK/LIB/I386/mpr.dll
+src/NT/PUBLIC/SDK/LIB/I386/mpr.exp
+src/NT/PUBLIC/SDK/LIB/I386/mpr.lib
+# pwin32 (Win16→Win32 portability layer static lib) — WINDOWS/PORT1632
+src/NT/PUBLIC/SDK/LIB/I386/pwin32.lib
+# shell32 — built from WINDOWS/SHELL/LIBRARY
+src/NT/PUBLIC/SDK/LIB/I386/shell32.dll
+src/NT/PUBLIC/SDK/LIB/I386/shell32.exp
+src/NT/PUBLIC/SDK/LIB/I386/shell32.lib
+
+# OVMF NVRAM scratch file (per-checkout copy of /usr/share OVMF_VARS_4M.fd)
+/src/OVMF_VARS_4M.fd
+/OVMF_VARS_4M.fd
 # RPC named pipe transport DLLs (server + client)
 src/NT/PUBLIC/SDK/LIB/I386/rpclts1.dll
 src/NT/PUBLIC/SDK/LIB/I386/rpclts1.exp
