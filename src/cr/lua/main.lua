@@ -235,6 +235,10 @@ for tn, n in pairs(unhandled) do
 end
 if not any then print("  (none — every type has a handler)") end
 
+-- (Smoke tests for LPC / MM / etc. previously inlined here have
+-- moved into test/<module>.lua — run via `make selftest`. main.lua
+-- is now just the namespace walk + introspection demos.)
+
 -- ---------------------------------------------------------------------
 -- Process list demo — walks the synthetic \Processes virtual. For each
 -- Process Node, opens a live handle and queries it via NtQueryObject

@@ -206,4 +206,10 @@ disk: $(LAUNCH)
 boot: disk
 	$(BOOT_EFI)/boot.sh micront
 
-.PHONY: all clean info disk boot luajit luajit-clean
+# selftest: same as boot, but run.exe is pointed at selftest.lua
+# instead of main.lua. INIT_ARGS is target-specific so the override
+# propagates into disk/boot without affecting plain `make boot`.
+selftest: INIT_ARGS = \SystemRoot\lua\selftest.lua
+selftest: boot
+
+.PHONY: all clean info disk boot selftest luajit luajit-clean
