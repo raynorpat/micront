@@ -29,6 +29,11 @@ jobs:
         #               LuaJIT's buildvm insists on host/target pointer
         #               size match (host x86_64, target i386) so minilua
         #               + buildvm must compile under `gcc -m32`.
+        # Plus qemu-system-x86 + ovmf for `make -C src/cr selftest` at
+        # the end of the job. --no-install-recommends keeps the VM
+        # binary without pulling qemu-system-gui (GTK / SDL / VNC /
+        # spice) — none of which boot.sh needs when running -display
+        # none for the selftest profile.
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
@@ -37,7 +42,8 @@ jobs:
             gnu-efi \
             gcc-mingw-w64-i686 binutils-mingw-w64-i686 \
             mingw-w64-i686-dev \
-            python3
+            python3 \
+            qemu-system-x86 ovmf
 
       - uses: actions/checkout@v4
         with:
@@ -64,6 +70,27 @@ jobs:
         # Independent from the wibo toolchain — pure mingw cross-compile.
         # Produces src/cr/luajit.exe (subsystem=native 3.50, ntdll-only).
         run: make -C src/cr all
+
+      - name: run cr selftest under QEMU
+        # Boot micront under OVMF/QEMU with INIT_ARGS pointed at
+        # selftest.lua; the Lua harness prints a summary and shuts
+        # down cleanly. TCG-only (no /dev/kvm in containers); selftest
+        # is ~1min on a GitHub runner. 5-minute wall timeout prevents
+        # a hung VM from stalling the whole workflow.
+        #
+        # Tee to selftest.log and grep for the harness's ALL PASSED
+        # sentinel. Any failed tests print FAILURES instead so grep -q
+        # returns non-zero and the step fails. The `tee` exit status
+        # doesn't matter for pass/fail — grep is the signal.
+        #
+        # </dev/null: boot.sh uses -chardev stdio,mux=on for the VM's
+        # serial console. Under `act`-style Docker containers without
+        # an interactive TTY, qemu can block waiting on stdin. Feeding
+        # /dev/null makes the input stream close immediately so the
+        # mux doesn't stall.
+        run: |
+          timeout 300 make -C src/cr selftest < /dev/null 2>&1 | tee selftest.log
+          grep -q '^ALL PASSED' selftest.log
 
       - uses: actions/upload-artifact@v4
         with:

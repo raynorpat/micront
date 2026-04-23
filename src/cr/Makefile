@@ -38,7 +38,16 @@ CFLAGS := \
     -ffreestanding -fno-builtin \
     -fno-asynchronous-unwind-tables \
     -fno-stack-protector \
+    -D_CRTBLD \
     -Irt
+
+# -D_CRTBLD: tells mingw's <corecrt.h> etc. we're building the CRT
+# itself, which collapses _CRTIMP (the __declspec(dllimport) marker on
+# C-runtime entry points) to empty. Without this, rt/libc_string.c's
+# local definition of _errno() conflicts with the dllimport-tagged
+# mingw prototype and gcc warns "redeclared without dllimport". The
+# LuaJIT cross-build already passes this flag for the same reason
+# (see LUAJIT_TFLAGS below).
 
 # Linker flags, passed via -Wl:
 #   --subsystem native           → IMAGE_SUBSYSTEM_NATIVE (1)
