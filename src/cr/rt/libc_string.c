@@ -199,5 +199,64 @@ char *strerror(int err)
 }
 
 /* ---------- env --------------------------------------------------- */
-/* TODO: walk PEB->ProcessParameters->Environment for real env reads. */
-char *getenv(const char *name) { (void)name; return 0; }
+/* getenv — walk PEB->ProcessParameters->Environment. The block is
+ * UTF-16 KEY=VAL\0KEY=VAL\0\0. Match `name` (ASCII) case-insensitively
+ * against the key, and return the value flattened to ASCII in a small
+ * static buffer. ASCII-only because every env value cr produces (and
+ * every value LuaJIT actually reads) is ASCII; non-ASCII codepoints
+ * get '?' rather than mojibake. Returns NULL if PEB / params /
+ * environment is missing, the key isn't found, or the value would
+ * overflow the buffer. */
+static char _getenv_buf[512];
+
+static int _ci_eq_ascii_w(const char *a, const unsigned short *w, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n; i++) {
+        unsigned ca = (unsigned char)a[i], cw = w[i];
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cw >= 'A' && cw <= 'Z') cw += 32;
+        if (ca != cw) return 0;
+    }
+    return 1;
+}
+
+char *getenv(const char *name)
+{
+    PPEB peb = nt_peb();
+    PRTL_USER_PROCESS_PARAMETERS pp;
+    const unsigned short *p;
+    size_t name_len, i;
+
+    if (!peb || !peb->ProcessParameters) return 0;
+    pp = peb->ProcessParameters;
+    p = (const unsigned short *)pp->Environment;
+    if (!p || !name) return 0;
+
+    name_len = strlen(name);
+
+    /* Each entry: KEY=VAL\0. Block ends at \0\0 (a zero-length entry). */
+    while (*p) {
+        const unsigned short *eq = p, *end;
+        while (*eq && *eq != '=') eq++;
+        if (*eq == '=' &&
+            (size_t)(eq - p) == name_len &&
+            _ci_eq_ascii_w(name, p, name_len))
+        {
+            const unsigned short *v = eq + 1;
+            end = v;
+            while (*end) end++;
+            if ((size_t)(end - v) >= sizeof(_getenv_buf)) return 0;
+            for (i = 0; v + i < end; i++) {
+                unsigned short c = v[i];
+                _getenv_buf[i] = (c < 0x80) ? (char)c : '?';
+            }
+            _getenv_buf[end - v] = 0;
+            return _getenv_buf;
+        }
+        /* skip to end of this entry, then past its NUL */
+        while (*p) p++;
+        p++;
+    }
+    return 0;
+}

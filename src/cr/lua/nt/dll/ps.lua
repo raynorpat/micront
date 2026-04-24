@@ -2,10 +2,20 @@
 --
 -- Opens take CLIENT_ID (pid/tid pair) rather than namespace paths.
 -- Creation goes through RtlCreateUserThread (Rtl wrapper over raw
--- NtCreateThread — handles stack alloc, CONTEXT, INITIAL_TEB and the
--- RtlUserThreadStart trampoline so the entry function receives its
--- PVOID parameter in the standard __stdcall calling convention and
--- auto-terminates cleanly on return).
+-- NtCreateThread — handles stack alloc, CONTEXT and INITIAL_TEB so the
+-- entry function receives its PVOID parameter in the standard __stdcall
+-- calling convention).
+--
+-- WARNING — thread entries on native-NT do NOT auto-terminate on return.
+-- RtlInitializeContext (rtl/i386/context.c) sets up [esp+4] = parameter
+-- and [esp+0] = (uninitialized) return-address slot. If the entry's
+-- final `ret` executes, EIP becomes 0 and the thread crashes with
+-- STATUS_ACCESS_VIOLATION at NULL. Win32's kernel32 hides this by
+-- wrapping entries in BaseThreadStartThunk → ExitThread; ntdll callers
+-- get no such trampoline. Every entry must call NtTerminateThread before
+-- returning, OR the caller must accept that the thread terminates via
+-- unhandled-exception (visible as `UMODE EXC code=c0000005 eip=0` in the
+-- kernel log; harmless but noisy).
 --
 -- Lifecycle:
 --   ps.create_thread(entry, param, opts) → (NT_HANDLE, tid)
@@ -179,9 +189,10 @@ end
 --
 -- On return, the new thread is either already running (suspended=false,
 -- the default) or waiting at its entry point until ps.NtResumeThread.
--- When the entry function returns, ntdll's trampoline calls
--- NtTerminateThread automatically — no explicit termination needed
--- for well-behaved entries.
+-- The entry MUST call NtTerminateThread before returning (see WARNING
+-- at the top of this file) — direct ntdll thread creation has no
+-- ExitThread wrapper. Letting the entry fall through `ret` produces a
+-- harmless-but-noisy STATUS_ACCESS_VIOLATION at EIP=0 in the log.
 function M.create_thread(entry, handle_param, opts)
     opts = opts or {}
     local raw_param

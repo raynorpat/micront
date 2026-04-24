@@ -125,6 +125,7 @@ typedef struct _RTL_USER_PROCESS_PARAMETERS {
     UNICODE_STRING DllPath;
     UNICODE_STRING ImagePathName;
     UNICODE_STRING CommandLine;
+    PVOID          Environment;       /* UTF-16 KEY=VAL\0KEY=VAL\0\0 */
     /* further fields ignored */
 } RTL_USER_PROCESS_PARAMETERS, *PRTL_USER_PROCESS_PARAMETERS;
 

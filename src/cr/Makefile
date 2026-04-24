@@ -153,11 +153,26 @@ LUAJIT_TLDFLAGS := -nostdlib -nostartfiles -nodefaultlibs \
                    -Wl,--major-subsystem-version,3,--minor-subsystem-version,50 \
                    -Wl,--image-base,0x00400000 \
                    -Wl,--file-alignment,0x200,--section-alignment,0x1000 \
+                   -Wl,--add-stdcall-alias \
                    -L$(MKFILE_DIR)
 
-LUAJIT_TLIBS := -lrt -lmingwex -lntdllcrt -lntdll -lgcc
+# --add-stdcall-alias: emit both the @-decorated and the plain export
+# names for stdcall functions. LuaJIT's ffi.C does GetProcAddress on
+# the bare cdef'd name; without this, our `__stdcall TlsAlloc` exports
+# as "TlsAlloc@0" only, and `ffi.C.TlsAlloc` fails to resolve.
 
-$(LUAJIT_EXE): librt.a
+LUAJIT_TLIBS := $(MKFILE_DIR)cr_thread.o -lrt -lmingwex -lntdllcrt -lntdll -lgcc
+
+# cr_thread.o — top-level C escape-hatch (LuaJIT-aware bring-up
+# trampoline for nt.thread). Doesn't belong in librt.a, which is the
+# freestanding NT runtime with no LuaJIT knowledge. Built as a single
+# .o and prepended positionally to TARGET_XLIBS. Needs LuaJIT headers
+# (lua.h / lualib.h / lauxlib.h) for the lua_State bring-up; -Irt is
+# already in $(CFLAGS) so "nt.h" resolves.
+cr_thread.o: cr_thread.c
+	$(CC) $(CFLAGS) -I$(LUAJIT_SRC) -c -o $@ $<
+
+$(LUAJIT_EXE): librt.a cr_thread.o
 	# Force relink: LuaJIT's Makefile sees its own luajit.exe as up-to-
 	# date vs its own deps and won't notice that our static libs got
 	# rebuilt. Blowing away the final target makes it relink (all
@@ -199,7 +214,11 @@ clean:
 # with $(LAUNCH) as smss's InitialCommand, then boot under OVMF32/QEMU.
 # Reuses $(REPO)/build/micront/ — quick to rebuild, not treated as
 # precious. Boot-EFI itself is assumed already built (via build.sh boot).
-disk: $(LAUNCH)
+#
+# Depend on `luajit` (phony) rather than the bare $(LAUNCH) file, so we
+# always re-enter the build path: librt.a + cr_thread.o changes feed the
+# LuaJIT relink, otherwise stale luajit.exe gets staged silently.
+disk: luajit
 	mkdir -p $(BUILD)
 	python3 $(TOOLS)/mkhive.py --profile micront \
 	    --init-exe '$(INIT_EXE)' \

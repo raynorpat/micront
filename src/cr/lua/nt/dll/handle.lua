@@ -23,6 +23,15 @@
 --   handle.wrap(raw)      Take ownership of a raw HANDLE. __gc will
 --                         NtClose when the wrapper is collected.
 --
+--   handle.borrow(raw)    Wrap a raw HANDLE WITHOUT taking ownership.
+--                         __gc and :close() are no-ops; the kernel
+--                         handle's lifetime stays with whatever owns
+--                         the original. Used when an NT_HANDLE wrapper
+--                         is needed (e.g. to pass through nt.dll.* APIs
+--                         that take NT_HANDLE) but the underlying
+--                         handle is owned by something else (a parent
+--                         object, another process, our own ctx).
+--
 --   handle.raw(h)         Extract the raw HANDLE value from an
 --                         NT_HANDLE. Used by sub-modules to pass
 --                         through to ntdll. The returned value is a
@@ -102,6 +111,20 @@ function M.wrap(raw_handle)
     local h    = ffi.new('NT_HANDLE')
     h.__raw    = raw_handle
     h.__owned  = 1
+    return h
+end
+
+-- Wrap a raw HANDLE WITHOUT taking ownership. __gc and :close() are
+-- no-ops on the resulting wrapper — the kernel handle stays alive
+-- (and gets closed) under whoever owns it. Use when an nt.dll.* API
+-- needs an NT_HANDLE but the underlying kernel handle is owned by
+-- something else: a parent object, another process via DuplicateObject,
+-- or in cr_thread.c's case, the CR_THREAD ctx that we want to wait on
+-- without disturbing its own lifetime management.
+function M.borrow(raw_handle)
+    local h    = ffi.new('NT_HANDLE')
+    h.__raw    = raw_handle
+    h.__owned  = 0
     return h
 end
 
