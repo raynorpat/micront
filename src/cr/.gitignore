@@ -3,3 +3,4 @@
 *.fd
 *.a
 NOTES.md
+.exes-built

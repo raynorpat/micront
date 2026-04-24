@@ -105,6 +105,9 @@ static int parse_cmdline(USHORT *wbuf, USHORT wide_bytes, char **argv)
     return argc;
 }
 
+/* used: LTO has no visible caller (only the linker --entry references
+ * this), so without the attribute -flto would dead-code-eliminate it. */
+__attribute__((used))
 void NTAPI NtProcessStartup(PPEB Peb)
 {
     static char  fallback_argv0[] = "run";

@@ -185,42 +185,6 @@ t.test("nt.thread.run: thread that crashes (NtTerminateThread inside "
     th:close()
 end)
 
-t.test("nt.thread.run: TLS indices allocated by chunk are reclaimed on "
-       .. "thread exit (otherwise we'd exhaust 64 indices in seconds)",
-function()
-    -- Spawn many threads each consuming a TLS index without freeing.
-    -- Without per-thread TLS auto-cleanup in cr_thread.c, this exhausts
-    -- the 64 process-wide indices well before iteration 100.
-    -- TlsAlloc/TlsFree are exported from run.exe (rt/k32_memory.c with
-    -- __declspec(dllexport)); the child VM can ffi.cdef + ffi.C them.
-    local TLS_OUT_OF_INDEXES = 0xFFFFFFFF
-    for i = 1, 100 do
-        local th = thread.run([==[
-            local ffi = require('ffi')
-            ffi.cdef[[
-            unsigned long __stdcall TlsAlloc(void);
-            ]]
-            -- Two allocs per spawn: stresses the bitmap, also covers
-            -- the case where the chunk allocates more than one and
-            -- forgets all of them.
-            local a = ffi.C.TlsAlloc()
-            local b = ffi.C.TlsAlloc()
-            return string.format("%d,%d", a, b)
-        ]==])
-        th:wait(2.0)
-        local s, v = th:result()
-        t.eq(s, "ok", "iter " .. i .. ": status=" .. s .. " v=" .. v)
-        local a, b = v:match("^(%d+),(%d+)$")
-        t.ok(a and b,
-             "iter " .. i .. ": malformed result: " .. v)
-        t.ok(tonumber(a) ~= TLS_OUT_OF_INDEXES,
-             "iter " .. i .. ": first TlsAlloc exhausted: " .. v)
-        t.ok(tonumber(b) ~= TLS_OUT_OF_INDEXES,
-             "iter " .. i .. ": second TlsAlloc exhausted: " .. v)
-        th:close()
-    end
-end)
-
 t.test("nt.thread.run: :close() on a still-running thread returns "
        .. "immediately (cooperative cancellation, no terminate)", function()
     -- Spawn a thread that blocks on an event. :close() must NOT call

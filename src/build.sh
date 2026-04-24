@@ -1406,6 +1406,20 @@ build_efi() {
     make -C "$SCRIPT_DIR/boot-efi" BOOTX64.EFI
 }
 
+# cr — LuaJIT-on-NT runtime. Builds three subsystem-specialised .exes
+# from the same VM source: run.exe (native, Control\InitExe-direct),
+# runc.exe (console, csrss-allocated console), runw.exe (windows GUI,
+# csrss-registered for user32/gdi32 access). All staged at
+# \SystemRoot\lua\ by mkdisk's _lua_tree_files(). gui profile's
+# Winlogon\Shell points at runw.exe (Lua-based shell replacing progman).
+build_cr() {
+    echo ""
+    echo "========================================"
+    echo "Building: cr (LuaJIT runtime + lua/ tree)"
+    echo "========================================"
+    make -C "$SCRIPT_DIR/cr"
+}
+
 build_disk() {
     local profile="${1:-${PROFILE:-headless}}"
     local out_dir="$(dirname "$SCRIPT_DIR")/build/$profile"
@@ -1442,6 +1456,7 @@ _compile_micront() {
     build_ntoskrnl
     build_drivers
     build_userland_micront
+    build_cr
 }
 
 _compile_headless() {

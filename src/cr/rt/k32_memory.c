@@ -90,24 +90,13 @@ SIZE_T WINAPI VirtualQuery(LPCVOID addr, PMEMORY_BASIC_INFORMATION buf,
 
 static UCHAR g_tls_used[TEB_TLS_SLOT_COUNT];
 
-/* Optional hooks called on every TlsAlloc / TlsFree. Set to non-NULL by
- * code that wants to track which TLS indices were allocated within some
- * scope (e.g. cr_thread.c maintains a per-thread bitmap so it can
- * release indices the chunk leaked). NULL by default — librt.a stays
- * standalone; the hooks are an opt-in observation point. Idempotent and
- * race-free for our use because the only writers are atomic flag-set
- * operations during process bring-up. */
-void (*_k32_tls_alloc_hook)(DWORD idx) = 0;
-void (*_k32_tls_free_hook) (DWORD idx) = 0;
-
-__declspec(dllexport) DWORD WINAPI TlsAlloc(void)
+DWORD WINAPI TlsAlloc(void)
 {
     int i;
     for (i = 0; i < TEB_TLS_SLOT_COUNT; i++) {
         if (!g_tls_used[i]) {
             g_tls_used[i] = 1;
             _k32_tls_set((unsigned)i, 0);    /* clear our thread's slot */
-            if (_k32_tls_alloc_hook) _k32_tls_alloc_hook((DWORD)i);
             return (DWORD)i;
         }
     }
@@ -118,25 +107,22 @@ __declspec(dllexport) DWORD WINAPI TlsAlloc(void)
  * slot is cleared; other threads keep their stale values until the
  * index is reallocated (at which point readers should be expecting
  * a NULL from the fresh allocation anyway). */
-__declspec(dllexport) BOOL WINAPI TlsFree(DWORD idx)
+BOOL WINAPI TlsFree(DWORD idx)
 {
     if (idx >= TEB_TLS_SLOT_COUNT || !g_tls_used[idx]) return FALSE;
-    /* Hook fires BEFORE we clear g_tls_used: gives observers a chance
-     * to drop tracking state while the index is still live. */
-    if (_k32_tls_free_hook) _k32_tls_free_hook(idx);
     g_tls_used[idx] = 0;
     _k32_tls_set(idx, 0);
     return TRUE;
 }
 
-__declspec(dllexport) LPVOID WINAPI TlsGetValue(DWORD idx)
+LPVOID WINAPI TlsGetValue(DWORD idx)
 {
     if (idx >= TEB_TLS_SLOT_COUNT) { SetLastError(87); return 0; }
     SetLastError(0);
     return _k32_tls_get(idx);
 }
 
-__declspec(dllexport) BOOL WINAPI TlsSetValue(DWORD idx, LPVOID v)
+BOOL WINAPI TlsSetValue(DWORD idx, LPVOID v)
 {
     if (idx >= TEB_TLS_SLOT_COUNT) { SetLastError(87); return FALSE; }
     _k32_tls_set(idx, v);

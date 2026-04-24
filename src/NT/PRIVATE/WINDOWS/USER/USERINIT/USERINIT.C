@@ -157,13 +157,37 @@ ExecApplication(
     STARTUPINFO si;
     PROCESS_INFORMATION ProcessInformation;
     BOOL Result;
+    TCHAR szExpanded[ MAX_PATH * 2 ];
+    LPTSTR pchExpanded;
+    DWORD cchExpanded;
+
+    //
+    // Expand environment-variable references (e.g. %SystemRoot%) in the
+    // input before handing to CreateProcess, which treats its arguments
+    // as literal paths. Modern Windows expands the Winlogon\Shell value
+    // this way; NT 3.5's stock userinit didn't, forcing absolute paths
+    // in every consumer of GetProfileString. ExpandEnvironmentStrings
+    // returns the byte/char count actually written including the NUL
+    // (or the size required if our buffer is too small). On failure or
+    // overflow, fall back to the raw input — that preserves the
+    // previous behaviour for callers that don't use env-var syntax.
+    //
+    cchExpanded = ExpandEnvironmentStrings(
+        pch, szExpanded, sizeof(szExpanded) / sizeof(TCHAR));
+    pchExpanded = (cchExpanded > 0 &&
+                   cchExpanded <= sizeof(szExpanded) / sizeof(TCHAR))
+                  ? szExpanded
+                  : pch;
+
+    DbgPrint("USERINIT: ExecApplication: raw='%ws' expanded='%ws' fileNameOnly=%d\n",
+             pch, pchExpanded, bFileNameOnly);
 
     //
     // Initialize process startup info
     //
     si.cb = sizeof(STARTUPINFO);
-    si.lpReserved = pch; // This tells progman it's the shell!
-    si.lpTitle = pch;
+    si.lpReserved = pchExpanded; // This tells progman it's the shell!
+    si.lpTitle = pchExpanded;
     si.lpDesktop = NULL; // Not used
     si.dwX = si.dwY = si.dwXSize = si.dwYSize = 0L;
     si.dwFlags = 0;
@@ -176,8 +200,8 @@ ExecApplication(
     // Start the app
     //
     Result = CreateProcess(
-                      bFileNameOnly ? pch : NULL,   // Image name
-                      bFileNameOnly ? NULL : pch,   // Command line
+                      bFileNameOnly ? pchExpanded : NULL,   // Image name
+                      bFileNameOnly ? NULL : pchExpanded,   // Command line
                       NULL,  // Default process protection
                       NULL,  // Default thread protection
                       FALSE, // Don't inherit handles
@@ -189,8 +213,12 @@ ExecApplication(
                       );
 
     if (!Result) {
-        VerbosePrint(("Failed to execute <%S>, error = %d", pch, GetLastError()));
+        DbgPrint("USERINIT: CreateProcess FAILED for '%ws' (last_error=%d)\n",
+                 pchExpanded, GetLastError());
+        VerbosePrint(("Failed to execute <%S>, error = %d", pchExpanded, GetLastError()));
     } else {
+        DbgPrint("USERINIT: CreateProcess OK '%ws' pid=%d\n",
+                 pchExpanded, ProcessInformation.dwProcessId);
 
         //
         // Close our handles to the process and thread
@@ -240,30 +268,62 @@ ExecProcesses(
     if ((pchData = (PTCHAR)Alloc( cb * sizeof (TCHAR) )) == NULL)
         return(0);
 
-    while (TRUE) {
-        /*
-         * Grab a buffer and load up the keydata under the keyname currently
-         * pointed to by pchKeyNames.
-         */
-        if ((cbCopied = GetProfileString(TEXT("winlogon"), pszKeyName, pszDefault, // LATER put in res file
-                (LPTSTR)pchData, cb)) == 0) {
+    //
+    // MicroNT: read directly from the registry instead of GetProfileString.
+    // GetProfileString routes through the IniFileMapping → WIN.INI →
+    // registry redirection layer (a Win3.1 compatibility shim we don't
+    // fully implement), which silently returns the caller-supplied
+    // default for every lookup. winlogon's ExecProcesses (SECURITY.C)
+    // was patched the same way for the same reason.
+    //
+    {
+        HKEY hkWinlogon;
+        DWORD dwType, dwSize;
+        LONG rc;
+
+        rc = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+                0, KEY_READ, &hkWinlogon);
+        if (rc == ERROR_SUCCESS) {
+            dwSize = cb * sizeof(TCHAR);
+            rc = RegQueryValueExW(hkWinlogon, pszKeyName, NULL, &dwType,
+                                  (LPBYTE)pchData, &dwSize);
+            if (rc == ERROR_MORE_DATA) {
+                /* Resize and retry once. */
+                cb = (dwSize / sizeof(TCHAR)) + 1;
+                pchData = (PTCHAR)ReAlloc(pchData, cb * sizeof(TCHAR));
+                if (pchData) {
+                    dwSize = cb * sizeof(TCHAR);
+                    rc = RegQueryValueExW(hkWinlogon, pszKeyName, NULL, &dwType,
+                                          (LPBYTE)pchData, &dwSize);
+                }
+            }
+            if (rc == ERROR_SUCCESS && dwType == REG_SZ && dwSize > sizeof(TCHAR)) {
+                cbCopied = (dwSize / sizeof(TCHAR)) - 1;
+            } else {
+                cbCopied = 0;
+            }
+            RegCloseKey(hkWinlogon);
+        } else {
+            cbCopied = 0;
+        }
+
+        /* Fall back to caller-supplied default if registry read missed. */
+        if (cbCopied == 0 && pszDefault != NULL && pszDefault[0] != 0) {
+            lstrcpyW((LPTSTR)pchData, pszDefault);
+            cbCopied = lstrlenW(pszDefault);
+        }
+
+        DbgPrint("USERINIT: ExecProcesses(%ws) -> '%ws' (cbCopied=%d, default='%ws')\n",
+                 pszKeyName,
+                 cbCopied > 0 ? (LPTSTR)pchData : L"(empty)",
+                 cbCopied,
+                 pszDefault ? pszDefault : L"(none)");
+
+        if (cbCopied == 0) {
             LocalFree((HLOCAL)pchData);
             return(0);
         }
-
-        /*
-         * If the returned value is our passed size - 1 (weird way for error)
-         * then our buffer is too small. Make it bigger and start over again.
-         */
-        if (cbCopied == cb - 1) {
-            cb += 128;
-            if ((pchData = (PTCHAR)ReAlloc(pchData, cb * sizeof (TCHAR) )) == NULL) {
-                return(0);
-            }
-            continue;
-        }
-
-        break;
     }
 
     pchCmdLine = pchData;

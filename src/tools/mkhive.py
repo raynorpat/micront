@@ -768,11 +768,27 @@ def build_micront_software_hive(profile: str = "headless") -> Hive:
         wl.set_sz("Userinit", "userinit.exe,")
 
         # "Shell" is what userinit launches as the user's desktop shell.
-        # progman.exe = NT 3.5's Program Manager (staged in System32/).
-        # Switched to cmd.exe temporarily while debugging progman's
-        # invisible-window issue — cmd goes through csrss's console
-        # code path instead of USER/GDI, so it's a good control.
-        wl.set_sz("Shell", "cmd.exe")
+        # Points at the cr Lua runtime's Win32-GUI stub (runw.exe,
+        # subsystem=windows). The native-subsystem run.exe is rejected
+        # by kernel32!CreateProcess with ERROR_CHILD_NOT_COMPLETE
+        # (PROCESS.C:1141 — Win32 only accepts WINDOWS_GUI / WINDOWS_CUI
+        # subsystems). runw.exe has the same Lua VM and lua/ surface;
+        # only its PE subsystem field differs, so csrss registers it
+        # as a GUI process and chunks can ffi.load("user32"/"gdi32").
+        # All three (run/runc/runw) are staged at \SystemRoot\lua\ by
+        # mkdisk's _lua_tree_files().
+        # Note the asymmetry between the two paths in the value:
+        #   - EXE path uses C:\ — CreateProcess (kernel32) needs Win32-
+        #     style paths to find the image to load.
+        #   - Script-arg path uses \SystemRoot\ — argv[1] gets fed to
+        #     cr's fopen, which calls NtCreateFile verbatim (no DOS
+        #     path translation, per cr's NOTES.md "DosDevices — not
+        #     used"). NtCreateFile wants NT-namespace paths.
+        # Once shell.lua is loaded, require() uses package.path which
+        # defaults to \SystemRoot\lua\?.lua (LuaJIT fork patch), so
+        # all subsequent module loads stay on NT paths.
+        wl.set_sz("Shell",
+                  "C:\\lua\\runw.exe \\SystemRoot\\lua\\shell.lua")
 
         # ServiceControllerStart — winlogon starts this before lsass.
         # We don't have services.exe yet; winlogon logs a warning but

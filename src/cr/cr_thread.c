@@ -48,32 +48,27 @@
  *   lua_State). If the parent reads 3 it knows the thread terminated
  *   without running its exit path — i.e. crashed.
  *
- * TLS hygiene:
+ * TLS:
  *
- *   nt.thread.run makes thread spawn cheap. A chunk that calls
- *   TlsAlloc and either forgets TlsFree or crashes would otherwise
- *   leak one of the 64 process-wide TLS indices per spawn — exhausted
- *   in seconds under any workload. We hook k32_memory.c's
- *   TlsAlloc/TlsFree to record per-thread which indices the chunk
- *   allocated (in ctx->tls_owned). _free_all walks the bitmap and
- *   TlsFrees any survivors before releasing ctx. Cleanup runs whether
- *   the thread exited normally or the parent claimed the ref via the
- *   crash path above.
- *
- *   Hooks find "current thread's CR_THREAD*" via TEB.ArbitraryUserPointer
- *   (fs:0x14), which cr reserves for this purpose. _entry stores ctx
- *   there immediately on entry. Threads not spawned by us read NULL
- *   from that slot (kernel zeroes the TEB), so their TlsAlloc/TlsFree
- *   activity is unaffected.
+ *   Chunks have no TLS surface — TlsAlloc/TlsFree are not exposed via
+ *   the cr Lua API. lua_State is per-thread by construction; nothing
+ *   inside cr_thread or the standard nt.* modules calls TlsAlloc.
+ *   Defensive auto-cleanup machinery (per-spawn bitmap, hooks into
+ *   librt's TlsAlloc) was removed once we confirmed there is no
+ *   consumer to track. If a future cr feature needs per-spawn TLS
+ *   tracking, an opt-in cr.tls_alloc wrapper is the right shape;
+ *   don't reintroduce the always-on hooks.
  */
 
 #include "nt.h"          /* rt/nt.h via -Irt: NTSTATUS, HANDLE, BOOLEAN, ... */
-#include "kernel32.h"    /* rt/kernel32.h: BOOL/DWORD, TlsFree decl */
 #include "lua.h"
 #include "lualib.h"
 #include "lauxlib.h"
 
-#define EXPORT __declspec(dllexport)
+/* dllexport puts these in the PE export table; used keeps LTO from
+ * dropping them since callers are the dynamic loader / chunks via
+ * ffi.C, not visible C call sites. */
+#define EXPORT __declspec(dllexport) __attribute__((used))
 
 /* ---- ntdll bits we need (kept local — see rt/nt.h policy) ---------- */
 
@@ -88,10 +83,6 @@ extern NTSTATUS NTAPI NtClose       (HANDLE Object);
 extern NTSTATUS NTAPI NtWaitForSingleObject(HANDLE Object, BOOLEAN Alertable,
                                             PLARGE_INTEGER Timeout);
 extern NTSTATUS NTAPI NtTerminateThread(HANDLE Thread, NTSTATUS ExitStatus);
-
-/* k32_memory.c hooks (function pointers, NULL by default). */
-extern void (*_k32_tls_alloc_hook)(DWORD idx);
-extern void (*_k32_tls_free_hook) (DWORD idx);
 
 extern NTSTATUS NTAPI RtlCreateUserThread(HANDLE Process,
                                           PVOID  ThreadSecurityDescriptor,
@@ -128,8 +119,6 @@ extern HANDLE _libc_heap;
 #define STATUS_PANIC        2     /* couldn't create lua_State */
 #define STATUS_CRASH        3     /* thread died before exit path */
 
-#define TLS_BITMAP_BYTES    8     /* TEB_TLS_SLOT_COUNT (64) bits */
-
 /* ---- internal structure (opaque to Lua) ---------------------------- */
 
 struct CR_THREAD {
@@ -141,78 +130,14 @@ struct CR_THREAD {
     int    status;           /* one of STATUS_* */
     LONG   refcount;         /* parent + thread = 2 at spawn */
     volatile UCHAR thread_released;  /* CAS-flag: thread has called _release */
-    UCHAR  tls_owned[TLS_BITMAP_BYTES]; /* bits: TLS indices owned by chunk */
 };
-
-/* ---- TEB.ArbitraryUserPointer (fs:0x14) — current-thread ctx ------- */
-/*
- * cr stores the spawned thread's CR_THREAD* here so the TlsAlloc/TlsFree
- * hooks (which run inside arbitrary call sites) can find it without a
- * thread-table lookup. Threads not spawned by cr leave the slot at the
- * kernel's zero-init value of NULL; hooks no-op for those.
- */
-static __inline__ struct CR_THREAD *_get_thread_ctx(void)
-{
-    void *p;
-    __asm__ ("movl %%fs:0x14, %0" : "=r"(p));
-    return (struct CR_THREAD *)p;
-}
-
-static __inline__ void _set_thread_ctx(struct CR_THREAD *t)
-{
-    __asm__ volatile ("movl %0, %%fs:0x14" : : "r"(t) : "memory");
-}
-
-/* ---- TLS-tracking hooks -------------------------------------------- */
-
-static void _on_tls_alloc(DWORD idx)
-{
-    struct CR_THREAD *t = _get_thread_ctx();
-    if (t && idx < (TLS_BITMAP_BYTES * 8)) {
-        t->tls_owned[idx >> 3] |= (UCHAR)(1u << (idx & 7));
-    }
-}
-
-static void _on_tls_free(DWORD idx)
-{
-    struct CR_THREAD *t = _get_thread_ctx();
-    if (t && idx < (TLS_BITMAP_BYTES * 8)) {
-        t->tls_owned[idx >> 3] &= (UCHAR)~(1u << (idx & 7));
-    }
-}
-
-/* Install the TlsAlloc/TlsFree hooks once. CAS-guarded so concurrent
- * first-spawns from multiple threads don't double-install (idempotent
- * either way; the CAS just avoids redundant writes). */
-static volatile LONG _hooks_installed = 0;
-static void _ensure_hooks(void)
-{
-    if (__sync_lock_test_and_set(&_hooks_installed, 1) == 0) {
-        _k32_tls_alloc_hook = _on_tls_alloc;
-        _k32_tls_free_hook  = _on_tls_free;
-    }
-}
 
 /* ---- helpers -------------------------------------------------------- */
 
 /* Free every kernel handle and heap block in ctx, then ctx itself.
- * Caller must have proven nobody else will dereference t.
- *
- * Reclaims any TLS indices the chunk allocated and didn't release —
- * runs whether the thread exited normally (thread does the final
- * decrement) or the parent claimed the thread's ref via the crash
- * path. TlsFree's hook will re-enter _on_tls_free, which clears bits
- * in t->tls_owned via _get_thread_ctx — but the calling context's
- * fs:0x14 may or may not be t (parent thread = NULL; spawned thread =
- * t). Either way harmless: the bitmap is going away with t. */
+ * Caller must have proven nobody else will dereference t. */
 static void _free_all(struct CR_THREAD *t)
 {
-    int i;
-    for (i = 0; i < (TLS_BITMAP_BYTES * 8); i++) {
-        if (t->tls_owned[i >> 3] & (UCHAR)(1u << (i & 7))) {
-            TlsFree((DWORD)i);
-        }
-    }
     if (t->thread_handle) NtClose(t->thread_handle);
     if (t->done_event)    NtClose(t->done_event);
     if (t->chunk)   RtlFreeHeap(HEAP, 0, t->chunk);
@@ -254,14 +179,7 @@ static void _copy_result(struct CR_THREAD *t, lua_State *L, int lua_status)
 static ULONG NTAPI _entry(PVOID raw)
 {
     struct CR_THREAD *t = (struct CR_THREAD *)raw;
-    lua_State *L;
-
-    /* Stash ctx in TEB.ArbitraryUserPointer FIRST — before any TlsAlloc
-     * the chunk might trigger via require()/luaL_openlibs/etc. The
-     * hooks find it here. */
-    _set_thread_ctx(t);
-
-    L = luaL_newstate();
+    lua_State *L = luaL_newstate();
     if (L == 0) {
         t->status  = STATUS_PANIC;
         t->out_len = 0;
@@ -297,9 +215,6 @@ static ULONG NTAPI _entry(PVOID raw)
     __sync_lock_test_and_set(&t->thread_released, 1);
     _release(t);
 
-    /* Clear ctx pointer in TEB before exiting — defensive only; the
-     * TEB is about to be freed by the kernel. */
-    _set_thread_ctx(0);
     NtTerminateThread((HANDLE)(long)-2 /* NtCurrentThread */, 0);
     return 0;                 /* unreachable */
 }
@@ -313,10 +228,6 @@ EXPORT struct CR_THREAD *_cr_thread_spawn(const char *chunk,   ULONG chunk_len,
     NTSTATUS st;
     HANDLE   h;
     ULONG    i;
-
-    /* Install the TLS hooks the first time we're called. Cheap CAS;
-     * idempotent across re-entries. */
-    _ensure_hooks();
 
     t = (struct CR_THREAD *)RtlAllocateHeap(HEAP, HEAP_ZERO_MEMORY, sizeof(*t));
     if (t == 0) return 0;

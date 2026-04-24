@@ -79,8 +79,10 @@ void _pei386_runtime_relocator(void) {}
 
 /* mingw's C++ SEH cleanup helper. lj_err.c's __try/__except pull this
  * in via libgcc's personality routine even when no C++ is involved.
- * Stub — our exception path is longjmp-based. */
-void __DestructExceptionObject(void *obj) { (void)obj; }
+ * Stub — our exception path is longjmp-based. Signature matches
+ * LuaJIT's lj_err.c declaration (void *rec, int nothrow) — must agree
+ * exactly under LTO or the link fails ODR. */
+void __DestructExceptionObject(void *rec, int nothrow) { (void)rec; (void)nothrow; }
 
 /* libmingwex math error hook (SVR4-style). Fired by every math function
  * in libmingwex on domain/range errors. Real impl lives in libmingw32.a
