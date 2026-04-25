@@ -54,6 +54,10 @@ src/NT/PUBLIC/SDK/LIB/I386/advapi32.exp
 # nt.lib (URTL) + smdll.lib (SM/CLIENT) — built from source
 src/NT/PUBLIC/SDK/LIB/I386/nt.lib
 src/NT/PUBLIC/SDK/LIB/I386/smdll.lib
+# virtio.lib (NTOS/VIRTIO) — built from source, linked into our virtio
+# device drivers (viorng/vioser/etc). Pure build output, no bootstrap
+# chicken-egg, gitignored like the other built-from-source .libs above.
+src/NT/PUBLIC/SDK/LIB/I386/virtio.lib
 # csrsrv.dll + basesrv.dll — built from CSR/SERVER + WINDOWS/BASE/SERVER.
 # Unlike kernel32.lib / ntdll.lib / smdll.lib (which are linked against
 # by lots of in-tree components so we track the .lib import stubs),

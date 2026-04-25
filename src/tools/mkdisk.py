@@ -498,6 +498,9 @@ _CORE_FILES: list[tuple[str, Path]] = [
     ("System32/Drivers/mouclass.sys", SDK_LIB / "mouclass.sys"),
     ("System32/Drivers/videoprt.sys", SDK_LIB / "videoprt.sys"),
     ("System32/Drivers/bochsvga.sys", SDK_LIB / "bochsvga.sys"),
+    # Virtio device drivers (link against the shared virtio.lib).
+    ("System32/Drivers/viorng.sys",   SDK_LIB / "viorng.sys"),
+    ("System32/Drivers/vioser.sys",   SDK_LIB / "vioser.sys"),
 ]
 
 

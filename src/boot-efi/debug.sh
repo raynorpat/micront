@@ -17,7 +17,7 @@ pkill -9 -f 'qemu-system-i386 .* -s '       2>/dev/null || true
 sleep 1
 
 # Start QEMU paused; redirect serial+log so they don't pollute terminal.
-GDB=1 ./boot.sh > debug.out 2>&1 &
+"$(dirname "$0")/../boot.sh" --gdb > debug.out 2>&1 &
 QEMU_PID=$!
 trap 'kill -9 $QEMU_PID 2>/dev/null' EXIT INT TERM
 

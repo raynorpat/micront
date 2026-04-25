@@ -1,7 +1,7 @@
 # MicroNT UEFI loader — gdb stub helpers.
 #
 # Use:
-#   shell 1: GDB=1 ./boot.sh
+#   shell 1: ../boot.sh --gdb
 #   shell 2: gdb -x gdb.init
 #
 # QEMU on i386 advertises x86_64 register layout; tell gdb we're 32-bit.

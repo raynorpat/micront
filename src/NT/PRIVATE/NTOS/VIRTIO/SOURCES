@@ -1,0 +1,25 @@
+!IF 0
+
+Copyright (c) 2026 MicroNT
+
+Module: virtio.lib — shared virtio bus + ring + PCI legacy transport.
+Linked into virtio device drivers (viorng.sys, vioser.sys, ...).
+
+Adapted from Unikraft's drivers/virtio/ tree (BSD-3-Clause). The
+algorithms come from the virtio specification; the OS bindings are
+NT 3.5 native (ntddk.h, HAL port-I/O, MmAllocateContiguousMemory*).
+
+!ENDIF
+
+MAJORCOMP=ntos
+MINORCOMP=virtio
+
+TARGETNAME=virtio
+TARGETPATH=$(BASEDIR)\public\sdk\lib
+TARGETTYPE=LIBRARY
+
+INCLUDES=inc;..\inc
+
+SOURCES=ring.c \
+        bus.c  \
+        pci.c

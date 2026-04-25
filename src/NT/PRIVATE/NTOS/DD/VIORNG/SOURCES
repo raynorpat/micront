@@ -1,0 +1,26 @@
+!IF 0
+
+Copyright (c) 2026 MicroNT
+
+Module: viorng.sys — virtio-rng entropy device driver. Surfaces
+\Device\VirtioRng0 with IRP_MJ_READ; reads return random bytes from
+the host hypervisor via the virtio-rng protocol. Links against the
+shared virtio.lib (NTOS/VIRTIO).
+
+QEMU device: virtio-rng-pci, vendor 0x1AF4 device 0x1005 (legacy).
+
+!ENDIF
+
+MAJORCOMP=ntos
+MINORCOMP=dd
+
+TARGETNAME=viorng
+TARGETPATH=$(BASEDIR)\public\sdk\lib
+TARGETTYPE=DRIVER
+
+INCLUDES=..\..\inc;..\..\virtio\inc
+
+TARGETLIBS=$(BASEDIR)\public\sdk\lib\*\virtio.lib
+
+SOURCES=viorng.c \
+        viorng.rc

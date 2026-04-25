@@ -181,7 +181,7 @@ disk: all
 	    --efi-binary $(BOOT_EFI)/BOOTX64.EFI
 
 boot: disk
-	$(BOOT_EFI)/boot.sh
+	$(SRC)/boot.sh
 
 selftest: INIT_ARGS = \SystemRoot\lua\selftest.lua
 selftest: boot

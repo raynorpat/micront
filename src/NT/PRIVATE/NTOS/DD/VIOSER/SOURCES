@@ -1,0 +1,26 @@
+!IF 0
+
+Copyright (c) 2026 MicroNT
+
+Module: vioser.sys — virtio-console (single-port virtio-serial) driver.
+Surfaces \Device\VirtioCon0 with IRP_MJ_READ and IRP_MJ_WRITE; reads
+return bytes the host pushed into the chardev, writes surface on the
+host's chardev sink. Links against the shared virtio.lib (NTOS/VIRTIO).
+
+QEMU device: virtio-serial-pci, vendor 0x1AF4 device 0x1003 (legacy).
+
+!ENDIF
+
+MAJORCOMP=ntos
+MINORCOMP=dd
+
+TARGETNAME=vioser
+TARGETPATH=$(BASEDIR)\public\sdk\lib
+TARGETTYPE=DRIVER
+
+INCLUDES=..\..\inc;..\..\virtio\inc
+
+TARGETLIBS=$(BASEDIR)\public\sdk\lib\*\virtio.lib
+
+SOURCES=vioser.c \
+        vioser.rc

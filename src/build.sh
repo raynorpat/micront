@@ -542,6 +542,16 @@ build_bochsvga(){
     run_nmake "$NTOS/VIDEO/BOCHSVGA" "BOCHSVGA - Bochs VGA miniport (QEMU stdvga)"
 }
 
+# --- Virtio shared library --------------------------------------------------
+# Shared bus + ring + PCI legacy transport. Linked into all virtio device
+# drivers (viorng.sys, vioser.sys, future virtionet.sys, ...). Adapted
+# from Unikraft (BSD-3); algorithms from the virtio spec.
+build_virtio() { run_nmake "$NTOS/VIRTIO" "VIRTIO - bus + ring + PCI legacy (virtio.lib)"; }
+
+# Virtio device drivers — each links against virtio.lib.
+build_viorng() { run_nmake "$NTOS/DD/VIORNG" "VIORNG - virtio-rng entropy driver"; }
+build_vioser() { run_nmake "$NTOS/DD/VIOSER" "VIOSER - virtio-console driver"; }
+
 # --- Userland (native NT) ----------------------------------------------------
 
 build_rtl_user() {
@@ -693,11 +703,16 @@ NTOSKRNL_TARGETS=(
 # Every driver we ship. Core storage/FS/COM plus the input + video
 # stack the eventual pure-Lua UI will drive directly via
 # NtDeviceIoControlFile on \Device\{KeyboardClass0,PointerClass0}
-# and the framebuffer miniport.
+# and the framebuffer miniport. virtio is a shared static library
+# (virtio.lib) that future virtio device drivers link against — built
+# here so dependents always see a current copy.
 DRIVER_TARGETS=(
     atdisk null fastfat npfs msfs serial
     i8042prt kbdclass mouclass
     vga_miniport bochsvga
+    virtio
+    viorng
+    vioser
 )
 
 # Userland: just the native-NT runtime. rtl_user (user-mode RTL),

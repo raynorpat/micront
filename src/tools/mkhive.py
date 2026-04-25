@@ -483,11 +483,14 @@ def build_system_hive(init_exe: str | None = None,
     # they're omitted.)
 
     # ServiceGroupOrder controls the order system-start drivers are loaded.
-    # Video Init (port driver) must load before Video (miniports).
+    # Video Init (port driver) must load before Video (miniports). Virtio
+    # group sits after Extended base so PCI bus-walk drivers (viorng,
+    # vioser, ...) load once the kernel + HAL are fully up.
     control["ServiceGroupOrder"] \
         .set_multi_sz("List", [
             "Base",
             "Extended base",
+            "Virtio",
             "File System",
             "Video Init",
             "Video",
@@ -546,6 +549,25 @@ def build_system_hive(init_exe: str | None = None,
         .set_dword("Start",        1) \
         .set_dword("ErrorControl", 1) \
         .set_sz("Group", "Extended base")
+
+    # virtio-rng — entropy device. Surfaces \Device\VirtioRng0; user
+    # mode reads bytes from it. SERVICE_AUTO_START (=1) so it loads
+    # alongside other Phase 1 drivers; depends on the HAL having
+    # already enumerated the PCI bus.
+    services["viorng"] \
+        .set_dword("Type",         1) \
+        .set_dword("Start",        1) \
+        .set_dword("ErrorControl", 1) \
+        .set_sz("Group", "Virtio")
+
+    # virtio-console — single-port virtio-serial. Surfaces
+    # \Device\VirtioCon0 with read + write paths; couples to QEMU's
+    # virtconsole chardev (configured in boot.sh).
+    services["vioser"] \
+        .set_dword("Type",         1) \
+        .set_dword("Start",        1) \
+        .set_dword("ErrorControl", 1) \
+        .set_sz("Group", "Virtio")
 
     # (Input + video drivers — i8042prt, kbdclass, mouclass, videoprt,
     # bochsvga — ship on disk but are not auto-started. The eventual

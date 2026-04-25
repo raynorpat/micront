@@ -9,14 +9,18 @@ Targets: QEMU `-machine pc` (i440fx + PIIX3) with `OVMF_CODE_4M.fd` firmware. Wo
 ## Build + run
 
 ```sh
-make            # builds BOOTX64.EFI
-./boot.sh       # runs under QEMU, COM1+COM2 muxed to stdio
-GDB=1 ./boot.sh # same, but freezes CPU and listens on :1234 for gdb
-TRACE=1 ./boot.sh # enables -d int,cpu_reset,in_asm to ./qemu.log
-./debug.sh      # one-shot: starts QEMU paused, runs gdb.script, captures
+make                        # builds BOOTX64.EFI
+../boot.sh                  # runs under QEMU, COM1+COM2 muxed to stdio
+../boot.sh --gdb            # same, but freezes CPU and listens on :1234 for gdb
+../boot.sh --trace          # enables -d int,cpu_reset,in_asm to ./qemu.log
+../boot.sh --vga            # add a VGA window (-display gtk -vga std)
+../boot.sh --mem 256        # bump guest RAM (default 128 MiB)
+./debug.sh                  # one-shot: starts QEMU paused, runs gdb.script, captures
 ```
 
-**Never run qemu directly** — use `boot.sh`. It sets the OVMF pflash vars, muxes COM1 + COM2 to stdio, handles `GDB=1` and `TRACE=1` toggling, and keeps the logs in sensible places. Running QEMU by hand will diverge from what CI + GDB expect.
+`boot.sh` lives at `src/boot.sh` (next to `build.sh`); flags can combine.
+
+**Never run qemu directly** — use `boot.sh`. It sets the OVMF pflash vars, muxes COM1 + COM2 to stdio, threads the `--gdb` / `--trace` flags through, and keeps the logs in sensible places. Running QEMU by hand will diverge from what CI + GDB expect.
 
 ## High-level flow
 
@@ -308,6 +312,6 @@ Check these when a bugcheck points at LPB dereference:
 | `lpb.[ch]`         | LOADER_PARAMETER_BLOCK struct + LDR entries + memory descriptor list + boot driver list |
 | `nt.h`             | NT kernel structure layouts in UINT32-wire form (no NT headers dragged in) |
 | `handoff.S`        | 64→32 mode drop + final segment/TSS/IDT install + `KiSystemStartup` tail call |
-| `boot.sh`          | QEMU launcher, COM1+COM2 muxed, `GDB=1` / `TRACE=1` / `MEM=` toggles |
+| `../boot.sh`       | QEMU launcher (lives in `src/`); flags: `--gdb`, `--trace`, `--vga`, `--mem N` |
 | `debug.sh`         | One-shot gdb session                                |
 | `gdb.init`         | Scripted gdb commands for `debug.sh`                |
