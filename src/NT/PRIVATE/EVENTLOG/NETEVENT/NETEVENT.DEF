@@ -1,7 +1,0 @@
-LIBRARY NETEVENT
-
-DESCRIPTION 'Network event messages'
-
-EXPORTS
-
-    DummyEntryPoint

@@ -1,9 +1,0 @@
-LIBRARY RPCLTCT3
-
-DESCRIPTION 'NT Remote Procedure Call TCP/IP Client Transport'
-
-
-EXPORTS
-
-    TransportLoad
-

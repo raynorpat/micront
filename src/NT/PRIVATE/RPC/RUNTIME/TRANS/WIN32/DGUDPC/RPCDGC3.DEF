@@ -1,9 +1,0 @@
-LIBRARY RPCDGC3
-
-DESCRIPTION 'NT Remote Procedure Call Datagram UDP Client Transport'
-
-
-EXPORTS
-
-    TransportLoad
-

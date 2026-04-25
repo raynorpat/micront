@@ -1,3 +1,0 @@
-NAME winapp WINDOWCOMPAT
-DESCRIPTION 'Winapp : DOSX32 Application'
-STUB 'ms32ldr.exe'

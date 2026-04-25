@@ -1,9 +1,0 @@
-LIBRARY RPCLTS3
-
-DESCRIPTION 'NT Remote Procedure Call TCP/IP Server Transport'
-
-
-EXPORTS
-
-    TransportLoad
-

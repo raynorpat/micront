@@ -1,5 +1,0 @@
-LIBRARY KBDCR
-
-EXPORTS
-    KbdLayerDescriptor @1
-

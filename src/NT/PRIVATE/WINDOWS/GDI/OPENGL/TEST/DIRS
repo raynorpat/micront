@@ -1,5 +1,0 @@
-DIRS=auxprogs   \
-     conform    \
-     demos      \
-     samples    \
-     simple 

@@ -1,8 +1,0 @@
-LIBRARY ibmppdsl
-
-DESCRIPTION 'IBM PPDS minidriver for RASDD'
-
-PROTMODE
-
-EXPORTS
-   bInitProc

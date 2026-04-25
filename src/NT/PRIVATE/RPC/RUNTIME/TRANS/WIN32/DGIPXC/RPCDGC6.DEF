@@ -1,9 +1,0 @@
-LIBRARY RPCDGC6
-
-DESCRIPTION 'NT Remote Procedure Call Datagram IPX Client Transport'
-
-
-EXPORTS
-
-    TransportLoad
-

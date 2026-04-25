@@ -46,10 +46,6 @@ NTDEBUGTYPE=coff
 
 SOURCES=\
         ..\curdir.c    \
-        ..\csrinit.c   \
-        ..\csrtask.c   \
-        ..\csrquick.c  \
-        ..\csrutil.c   \
         ..\dllssstb.c  \
         ..\dlluistb.c  \
         ..\ldrinit.c   \

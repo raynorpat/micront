@@ -1,8 +1,0 @@
-# @@ COPY_RIGHT_HERE
-# @@ ROADMAP :: Makefile for Windows NT Server Manager
-
-UI=..\..
-
-#!include rules.mk
-
-!include $(NTMAKEENV)\makefile.def

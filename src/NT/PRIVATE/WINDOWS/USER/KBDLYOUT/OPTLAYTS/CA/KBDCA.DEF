@@ -1,4 +1,0 @@
-LIBRARY KBDCA
-
-EXPORTS
-    KbdLayerDescriptor @1

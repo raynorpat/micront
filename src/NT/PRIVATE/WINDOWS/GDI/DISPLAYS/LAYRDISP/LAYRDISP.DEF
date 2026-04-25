@@ -1,9 +1,0 @@
-LIBRARY layrdisp
-
-DESCRIPTION 'Layered Display Driver Library'
-
-EXPORTS
-    DrvEnableDriver
-    DrvDisableDriver
-
-PROTMODE

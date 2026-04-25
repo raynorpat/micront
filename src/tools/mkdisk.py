@@ -11,8 +11,8 @@ High-level API:
     img = DiskImage(size_mb=16, signature=0x12345678)
     img.add_file("System32/ntoskrnl.exe", "path/to/ntoskrnl.exe")
     img.add_file("System32/hal.dll",      "path/to/hal.dll")
-    img.add_file("System32/config/SYSTEM", "build/headless/SYSTEM")
-    img.write("build/headless/esp.img")
+    img.add_file("System32/config/SYSTEM", "build/disk/SYSTEM")
+    img.write("build/disk/esp.img")
 
 On-disk layout (chosen for NT 3.5 compatibility):
 
@@ -439,8 +439,10 @@ def _dir_entry(name11: bytes, attr: int, first_cluster: int,
 # MicroNT boot disk — fixed layout, no command-line flexibility
 # ---------------------------------------------------------------------------
 #
-# Disk file lists per profile. Each profile is a strict superset of the
-# previous: micront ⊂ headless ⊂ gui.
+# Disk file list. Single profile — kernel, HAL, NLS tables ntdll/kernel
+# case-folding uses, the full driver set (storage + FS + serial + input
+# + video), ntdll, the SYSTEM hive, and the cr Lua tree. No Win32
+# subsystem, no advapi32/csrss/winlogon/user32/gdi32.
 #
 # Paths are relative to the repo's `src/` directory.
 
@@ -452,27 +454,16 @@ CR_DIR    = SRC_ROOT / "cr"
 def OBJ(comp:str):
     return NT / f"PRIVATE/{comp}/obj/i386"
 
-PROFILES = ("micront", "headless", "gui")
-
-NLS_DATA = NT / "PRIVATE/WINDOWS/WINNLS/DATA"
+NLS_DATA = NT / "PRIVATE/NLS"
 
 
 def _lua_tree_files() -> list[tuple[str, Path]]:
-    """Stage the cr Lua runtime — three subsystem-specialised .exes
-    (run.exe = native, runc.exe = console, runw.exe = windows) and every
-    file under `src/cr/lua/` — at `\\SystemRoot\\lua\\`. Baked into the
-    core so every profile picks them up:
-      - micront uses Control\\Init to boot run.exe straight to Lua.
-      - headless ignores the .exes at boot but they're available for
-        any userland code that wants `nt.thread`-style scripting.
-      - gui's userinit launches runw.exe as the Win32 GUI shell (csrss
-        registers it as a GUI process so chunks can ffi.load user32 /
-        gdi32).
-    Built by `make -C src/cr` (wired into build.sh's compile chain)."""
+    """Stage the cr Lua runtime at `\\SystemRoot\\lua\\`: run.exe (native
+    subsystem LuaJIT, imports ntdll only — the kernel spawns this as the
+    initial user-mode process via Control\\Init\\Exe) plus every file
+    under `src/cr/lua/`. Built by `make -C src/cr`."""
     out: list[tuple[str, Path]] = [
-        ("lua/run.exe",  CR_DIR / "run.exe"),
-        ("lua/runc.exe", CR_DIR / "runc.exe"),
-        ("lua/runw.exe", CR_DIR / "runw.exe"),
+        ("lua/run.exe", CR_DIR / "run.exe"),
     ]
     lua_root = CR_DIR / "lua"
     for f in sorted(lua_root.rglob("*")):
@@ -481,123 +472,42 @@ def _lua_tree_files() -> list[tuple[str, Path]]:
             out.append((f"lua/{rel}", f))
     return out
 
-# Core files present in every profile.
-#
-# Only the three NLS tables RtlInitNlsTables consumes (ANSI codepage, OEM
-# codepage, Unicode upcase) live here — kernel + ntdll case-fold via these.
-# UNICODE/LOCALE/CTYPE/SORTKEY/SORTTBLS are Win32-only (kernel32's NLS APIs)
-# and move into the headless tier.
+# Only the three NLS tables RtlInitNlsTables consumes (ANSI codepage,
+# OEM codepage, Unicode upcase) — kernel + ntdll case-fold via these.
+# UNICODE/LOCALE/CTYPE/SORTKEY/SORTTBLS were Win32-only (kernel32 NLS
+# APIs) and are dropped with the rest of the subsystem.
 _CORE_FILES: list[tuple[str, Path]] = [
-    ("System32/ntoskrnl.exe",       OBJ("NTOS/INIT/UP") / "ntoskrnl.exe"),
-    ("System32/hal.dll",            OBJ("NTOS/NTHALS/HAL") / "hal.dll"),
-    ("System32/c_1252.nls",         NLS_DATA / "C_1252.NLS"),
-    ("System32/c_437.nls",          NLS_DATA / "C_437.NLS"),
-    ("System32/l_intl.nls",         NLS_DATA / "L_INTL.NLS"),
-    # SYSTEM hive — path is rewritten per-profile in get_disk_files().
-    ("System32/ntdll.dll",          SDK_LIB / "ntdll.dll"),
-    ("System32/Drivers/atdisk.sys", SDK_LIB / "atdisk.sys"),
-    ("System32/Drivers/null.sys",   SDK_LIB / "null.sys"),
-    ("System32/Drivers/fastfat.sys",SDK_LIB / "fastfat.sys"),
-    ("System32/Drivers/npfs.sys",   SDK_LIB / "npfs.sys"),
-    ("System32/Drivers/msfs.sys",   SDK_LIB / "msfs.sys"),
-    ("System32/Drivers/serial.sys", SDK_LIB / "serial.sys"),
-]
-
-# Headless adds the Win32 subsystem base.
-_HEADLESS_FILES: list[tuple[str, Path]] = [
-    # Win32-only NLS: CompareStringW / LCMapStringW / GetStringTypeW / etc.
-    ("System32/unicode.nls",        NLS_DATA / "UNICODE.NLS"),
-    ("System32/locale.nls",         NLS_DATA / "LOCALE.NLS"),
-    ("System32/ctype.nls",          NLS_DATA / "CTYPE.NLS"),
-    ("System32/sortkey.nls",        NLS_DATA / "SORTKEY.NLS"),
-    ("System32/sorttbls.nls",       NLS_DATA / "SORTTBLS.NLS"),
-    ("System32/smss.exe",           OBJ("SM/SERVER") / "smss.exe"),
-    ("System32/CRTDLL.DLL",         SDK_LIB / "CRTDLL.DLL"),
-    ("System32/kernel32.dll",       SDK_LIB / "kernel32.dll"),
-    ("System32/advapi32.dll",       SDK_LIB / "advapi32.dll"),
-    ("System32/rpcrt4.dll",         SDK_LIB / "rpcrt4.dll"),
-    ("System32/rpclts1.dll",        SDK_LIB / "rpclts1.dll"),
-    ("System32/rpcltc1.dll",        SDK_LIB / "rpcltc1.dll"),
-    ("System32/csrsrv.dll",         SDK_LIB / "csrsrv.dll"),
-    ("System32/basesrv.dll",        SDK_LIB / "basesrv.dll"),
-    ("System32/csrss.exe",          OBJ("CSR/SERVER") / "csrss.exe"),
-    ("System32/lsasrv.dll",         SDK_LIB / "lsasrv.dll"),
-    ("System32/samsrv.dll",         SDK_LIB / "samsrv.dll"),
-    ("System32/samlib.dll",         SDK_LIB / "samlib.dll"),
-    ("System32/msv1_0.dll",         SDK_LIB / "msv1_0.dll"),
-    ("System32/netapi32.dll",       SDK_LIB / "NETAPI32.DLL"),  # XXX: pre-built
-    ("System32/netrap.dll",         SDK_LIB / "NETRAP.DLL"),    # XXX: pre-built
-    ("System32/lsass.exe",          OBJ("LSA/SERVER") / "lsass.exe"),
-]
-
-FONTS = NT / "PRIVATE/WINDOWS/GDI/FONTS"
-
-# GUI adds the window/drawing stack.
-_GUI_FILES: list[tuple[str, Path]] = [
-    # Win32 subsystem DLLs
-    ("System32/user32.dll",         SDK_LIB / "user32.dll"),
-    ("System32/gdi32.dll",          SDK_LIB / "gdi32.dll"),
-    ("System32/winsrv.dll",         SDK_LIB / "winsrv.dll"),
-    ("System32/WINSPOOL.DRV",       SDK_LIB / "WINSPOOL.DRV"),  # XXX: pre-built
-    # Video: port framework + Bochs VGA miniport + framebuffer display driver
-    ("System32/Drivers/videoprt.sys", SDK_LIB / "videoprt.sys"),
-    ("System32/Drivers/bochsvga.sys", SDK_LIB / "bochsvga.sys"),
-    ("System32/framebuf.dll",       SDK_LIB / "framebuf.dll"),
-    # Input drivers
+    ("System32/ntoskrnl.exe",        OBJ("NTOS/INIT/UP") / "ntoskrnl.exe"),
+    ("System32/hal.dll",             OBJ("NTOS/NTHALS/HAL") / "hal.dll"),
+    ("System32/c_1252.nls",          NLS_DATA / "C_1252.NLS"),
+    ("System32/c_437.nls",           NLS_DATA / "C_437.NLS"),
+    ("System32/l_intl.nls",          NLS_DATA / "L_INTL.NLS"),
+    ("System32/ntdll.dll",           SDK_LIB / "ntdll.dll"),
+    # Storage / FS / COM.
+    ("System32/Drivers/atdisk.sys",  SDK_LIB / "atdisk.sys"),
+    ("System32/Drivers/null.sys",    SDK_LIB / "null.sys"),
+    ("System32/Drivers/fastfat.sys", SDK_LIB / "fastfat.sys"),
+    ("System32/Drivers/npfs.sys",    SDK_LIB / "npfs.sys"),
+    ("System32/Drivers/msfs.sys",    SDK_LIB / "msfs.sys"),
+    ("System32/Drivers/serial.sys",  SDK_LIB / "serial.sys"),
+    # Input + video drivers for the eventual pure-Lua UI. Lua will
+    # drive kbdclass/mouclass via NtDeviceIoControlFile and map the
+    # framebuffer from bochsvga via IOCTL_VIDEO_MAP_VIDEO_MEMORY.
     ("System32/Drivers/i8042prt.sys", SDK_LIB / "i8042prt.sys"),
     ("System32/Drivers/kbdclass.sys", SDK_LIB / "kbdclass.sys"),
     ("System32/Drivers/mouclass.sys", SDK_LIB / "mouclass.sys"),
-    # US keyboard-layout DLL — USERSRV::xxxLoadKeyboardLayout LoadLibrary's
-    # this to translate i8042prt scancodes into virtual keys + WCHARs.
-    # Without it, edit controls get WM_KEYDOWN but no WM_CHAR.
-    ("System32/kbdus.dll",           OBJ("WINDOWS/USER/KBDLYOUT") / "kbdus.dll"),
-    # MPR — Multiple Provider Router. userinit.exe imports WNetRestoreConnection
-    # to re-mount saved HKCU\Network drive letters. No providers are registered
-    # on MicroNT so it's a no-op at runtime, but userinit won't load without
-    # the import being resolvable.
-    ("System32/mpr.dll",             SDK_LIB / "mpr.dll"),
-    # Shell32 — NT 3.5's lighter-weight shell helper DLL (ShellExecute,
-    # DragAcceptFiles, Extract*Icon, About-box, environment helpers).
-    # Progman and most classic-NT apps import it.
-    ("System32/shell32.dll",         SDK_LIB / "shell32.dll"),
-    # Progman — Program Manager. Default NT 3.5 shell (HKLM\...\Winlogon\Shell).
-    # Winlogon/userinit execs it after successful logon; groups + icons +
-    # Program/File/Options/Window menus.
-    ("System32/progman.exe",         OBJ("WINDOWS/SHELL/PROGMAN") / "progman.exe"),
-    # cmd.exe — Console shell. Reachable via progman File → Run → cmd.exe.
-    ("System32/cmd.exe",             OBJ("WINDOWS/CMD") / "cmd.exe"),
-    # Login
-    ("System32/winlogon.exe",       OBJ("WINDOWS/USER/WINLOGON/DAYTONA") / "winlogon.exe"),
-    ("System32/userinit.exe",       OBJ("WINDOWS/USER/USERINIT") / "userinit.exe"),
-    # Dialog bitmap fonts — referenced by SOFTWARE hive GRE_Initialize.
-    # The "E" = English (CP1252) variants, bigger than the stripped-down
-    # VGA*.FON (only 5-7 KB each, too sparse for dialog text).
-    ("System32/sserife.fon",        FONTS / "SSERIFE.FON"),   # MS Sans Serif
-    ("System32/coure.fon",          FONTS / "COURE.FON"),     # Courier (fixed)
-    ("System32/smalle.fon",         FONTS / "SMALLE.FON"),    # Small Fonts
+    ("System32/Drivers/videoprt.sys", SDK_LIB / "videoprt.sys"),
+    ("System32/Drivers/bochsvga.sys", SDK_LIB / "bochsvga.sys"),
 ]
 
 
-def get_disk_files(profile: str, output_dir: Path) -> list[tuple[str, Path]]:
-    """Return the file list for *profile*, with the SYSTEM hive path
-    pointing into *output_dir*."""
+def get_disk_files(output_dir: Path) -> list[tuple[str, Path]]:
+    """Return the file list, with the SYSTEM hive path pointing into
+    *output_dir*. No SOFTWARE / DEFAULT hives — those are Win32-userland-
+    only, and there is no Win32 userland."""
     files = list(_CORE_FILES)
-    files.extend(_lua_tree_files())          # \SystemRoot\lua\* — every profile
-    # Insert the profile-specific hives. SOFTWARE is only needed once a
-    # Win32 userland is present (winlogon / basesrv / GDI consumers) — the
-    # kernel itself reads nothing from it.
+    files.extend(_lua_tree_files())
     files.append(("System32/config/SYSTEM", output_dir / "SYSTEM"))
-    if profile in ("headless", "gui"):
-        files.append(("System32/config/SOFTWARE", output_dir / "SOFTWARE"))
-        files.extend(_HEADLESS_FILES)
-    if profile == "gui":
-        # DEFAULT hive holds pre-logon HKCU state (Control Panel\Colors,
-        # WindowMetrics, Desktop). Kernel's CmpMachineHiveList entry
-        # { L"DEFAULT", L"USER\\.DEFAULT", ... } mounts this at
-        # \Registry\User\.Default — absence yields silent fallbacks to
-        # whatever literals sit in the USERSRV source tree.
-        files.append(("System32/config/DEFAULT", output_dir / "DEFAULT"))
-        files.extend(_GUI_FILES)
     return files
 
 
@@ -622,11 +532,9 @@ def _build_image(disk_files: list[tuple[str, Path]], size_mb: int = 16,
 
 def main() -> None:
     import argparse
-    ap = argparse.ArgumentParser(description="Build a profile-specific UEFI boot disk (ESP image).")
-    ap.add_argument("--profile", choices=PROFILES, default="headless",
-                    help="which file set to include (default: headless)")
+    ap = argparse.ArgumentParser(description="Build the UEFI boot disk (ESP image).")
     ap.add_argument("--output-dir", type=Path, default=None,
-                    help="directory for esp.img (default: build/<profile>)")
+                    help="directory for esp.img (default: build/disk)")
     ap.add_argument("--efi-binary", type=Path, required=True,
                     help="path to BOOTX64.EFI")
     ap.add_argument("-x", "--extra", action="append", default=[],
@@ -638,14 +546,14 @@ def main() -> None:
                          "-x src/cr/lua:lua")
     args = ap.parse_args()
 
-    output_dir = args.output_dir or (SRC_ROOT.parent / "build" / args.profile)
+    output_dir = args.output_dir or (SRC_ROOT.parent / "build" / "disk")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    disk_files = get_disk_files(args.profile, output_dir)
+    disk_files = get_disk_files(output_dir)
 
-    # Extras: appended after the profile core so iteration-specific files
-    # (e.g. a fresh hello-native.exe from src/cr) can ride on top without
-    # editing the profile lists. If HOST is a directory, its contents are
+    # Extras: appended after the core so iteration-specific files (e.g.
+    # a fresh experimental binary from src/cr) can ride on top without
+    # editing the list above. If HOST is a directory its contents are
     # staged recursively under DEST (preserving the subtree layout).
     for spec in args.extra:
         if ":" not in spec:
@@ -665,7 +573,7 @@ def main() -> None:
     esp_out = output_dir / "esp.img"
     esp = _build_image(esp_files, size_mb=64)
     esp.write(esp_out)
-    print(f"ESP image ({args.profile}): {esp_out}")
+    print(f"ESP image: {esp_out}")
 
 
 if __name__ == "__main__":

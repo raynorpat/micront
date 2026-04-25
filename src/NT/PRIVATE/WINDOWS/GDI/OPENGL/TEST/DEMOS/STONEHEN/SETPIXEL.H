@@ -1,1 +1,0 @@
-BOOL bSetupPixelFormat(HDC);

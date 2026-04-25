@@ -1,4 +1,0 @@
-LIBRARY KBDPL1
-
-EXPORTS
-    KbdLayerDescriptor @1

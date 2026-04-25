@@ -1,4 +1,0 @@
-LIBRARY KBDES
-
-EXPORTS
-    KbdLayerDescriptor @1

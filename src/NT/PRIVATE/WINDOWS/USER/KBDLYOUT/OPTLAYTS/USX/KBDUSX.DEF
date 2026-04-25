@@ -1,4 +1,0 @@
-LIBRARY KBDUSX
-
-EXPORTS
-    KbdLayerDescriptor @1

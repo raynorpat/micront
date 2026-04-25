@@ -1,5 +1,0 @@
-
-HANDLE
-DIBFromGIFFile(
-    HFILE   hFileGIF
-    );

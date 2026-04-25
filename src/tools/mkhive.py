@@ -412,24 +412,30 @@ class Hive:
 # Minimal boot hive for MicroNT
 # ============================================================================
 
-PROFILES = ("micront", "headless", "gui")
+# Boot defaults for Control\Init\{Exe,Args,Stdio}. The kernel spawns
+# this image as the initial user-mode process (INIT.C::QueryInitConfig),
+# with the Args appended to CommandLine and the NT-device Stdio opened
+# inheritable and wired into Standard{Input,Output,Error}.
+#
+# run.exe is the native-subsystem LuaJIT (imports ntdll only). main.lua
+# is its entry script. Serial0 gives the Lua process a raw-mode COM1 for
+# stdin/out/err — works alongside DbgPrint on the same port.
+DEFAULT_INIT_EXE   = "lua\\run.exe"
+DEFAULT_INIT_ARGS  = "\\SystemRoot\\lua\\main.lua"
+DEFAULT_INIT_STDIO = "\\Device\\Serial0"
 
 
-def build_micront_system_hive(profile: str = "headless",
-                              init_exe: str | None = None,
-                              init_args: str | None = None,
-                              init_stdio: str | None = None) -> Hive:
-    """Return a Hive populated with the minimum NT 3.5 needs to boot.
+def build_system_hive(init_exe: str | None = None,
+                      init_args: str | None = None,
+                      init_stdio: str | None = None) -> Hive:
+    """Return the SYSTEM hive with the minimum NT 3.5 needs to boot
+    straight into our native Lua userland.
 
-    `profile` selects how much of the Win32 subsystem gets wired up:
-
-      micront   — no Win32 subsystem at all. smss comes up but has
-                  nothing to hand off to. Any init program is a
-                  native NT binary (linked against nt.lib).
-      headless  — Win32 base: csrss + basesrv (kernel32-only, no
-                  user32/gdi32/console).
-      gui       — headless + winsrv (USER, GDI, console servers) +
-                  winlogon.
+    Control\\Init\\Exe tells the kernel (INIT.C::QueryInitConfig) to
+    spawn our image directly instead of falling back to smss.exe; we
+    have no Win32 subsystem, no session manager, no winlogon. Defaults
+    come from DEFAULT_INIT_{EXE,ARGS,STDIO}; callers override per-run
+    via CLI flags (e.g. cr's Makefile iteration loop).
 
     The kernel searches this hive during Phase 0/1 for:
       Select\\{current,default,lastknowngood,failed}
@@ -438,8 +444,10 @@ def build_micront_system_hive(profile: str = "headless",
     Names are lowercase to match the kernel's case-insensitive lookups
     without depending on NLS case tables being fully live.
     """
-    if profile not in PROFILES:
-        raise ValueError(f"profile must be one of {PROFILES}, got {profile!r}")
+    init_exe   = init_exe   if init_exe   is not None else DEFAULT_INIT_EXE
+    init_args  = init_args  if init_args  is not None else DEFAULT_INIT_ARGS
+    init_stdio = init_stdio if init_stdio is not None else DEFAULT_INIT_STDIO
+
     h = Hive("SYSTEM")
 
     h["Select"] \
@@ -450,138 +458,29 @@ def build_micront_system_hive(profile: str = "headless",
 
     control = h["ControlSet001\\Control"]
 
-    # MicroNT: Control\Init\* overrides the kernel's initial user-mode
-    # process configuration (INIT.C QueryInitConfig, which opens this
-    # subkey once and queries three values):
-    #
-    #   Exe    SystemRoot-relative path (mkhive prepends \SystemRoot\).
-    #          Written as a full NT path to the registry.
-    #   Args   Verbatim argv tail, appended to CommandLine after a space.
-    #   Stdio  NT device path (e.g. "\Device\Serial0"). Kernel opens
-    #          inheritable + raw-mode timeouts; handle lands in
-    #          ProcessParameters.Standard{Input,Output,Error}.
-    #
-    # Absent → kernel falls back to \SystemRoot\System32\smss.exe with
-    # no args and no stdio.
-    if init_exe:
-        init = control["Init"]
-        init.set_sz("Exe", f"\\SystemRoot\\{init_exe}")
-        if init_args:
-            init.set_sz("Args", init_args)
-        if init_stdio:
-            init.set_sz("Stdio", init_stdio)
+    # Control\Init — kernel's initial-process configuration, read by
+    # INIT.C::QueryInitConfig. Exe is the image path (SystemRoot-
+    # relative here; mkhive prepends \SystemRoot\). Args is the argv
+    # tail. Stdio is an NT device path the kernel opens inheritable
+    # and pipes into ProcessParameters.Standard{Input,Output,Error}.
+    init = control["Init"]
+    init.set_sz("Exe",   f"\\SystemRoot\\{init_exe}")
+    init.set_sz("Args",  init_args)
+    init.set_sz("Stdio", init_stdio)
 
-    # Session Manager minimal config so smss.exe doesn't try to spawn
-    # programs we don't have (autochk.exe, csrss.exe, etc.).
-    sm = control["Session Manager"]
-
-    # Empty BootExecute — skip autocheck.
-    sm.set_multi_sz("BootExecute", [])
-
-    # Session Manager\Execute: smss reads this as REG_MULTI_SZ and the
-    # LAST entry becomes InitialCommand (see SMINIT.C:718-726). Empty list
-    # → smss defaults to "winlogon.exe" (line 753), which then launches
-    # lsass.exe via the SOFTWARE hive Winlogon\System value. Irrelevant to
-    # micront (bypasses smss entirely via Control\InitExe).
-    sm.set_multi_sz("Execute", [])
-
-    # SystemDrive gets set by the full NTLDR/OSLOADER at boot time from
-    # the ARC boot device — under our UEFI loader it stays unset, so we
-    # hardcode it here matching the DOS Devices C: symlink below.
-    # Without SystemDrive, SystemRoot expands to a literal "%SystemDrive%\"
-    # and every subsequent expansion (e.g. csrss.exe's image path) fails.
-    sm["Environment"] \
+    # Environment: the UEFI loader doesn't populate SystemDrive, so set
+    # it here to match the DOS Devices C: symlink below. Missing
+    # SystemDrive would leave %SystemRoot% unexpanded.
+    control["Session Manager\\Environment"] \
         .set_sz("SystemDrive", "C:") \
         .set_expand_sz("SystemRoot", "%SystemDrive%\\") \
         .set_expand_sz("Path", "%SystemRoot%\\System32")
 
-    # Win32 subsystem registration. smss reads SubSystems\Required at
-    # SmpInit, and for each name it resolves SubSystems\<Name> as the
-    # command line to launch. The launch string's first token is the
-    # image path; the rest are arguments csrsrv parses:
-    #   ObjectDirectory  — NT object-namespace dir for csrss's LPC ports
-    #                       (unrelated to filesystem layout)
-    #   SharedSection    — three comma-separated sizes (KB) for the 3
-    #                       shared sections csrss creates (SB, SM, View)
-    #   Windows=On       — enable the Windows subsystem
-    #   ServerDll=N,I    — per-server DLL to load at startup; index I is
-    #                       the API-table slot. basesrv owns slot 1
-    #                       (kernel32's base services). We skip winsrv
-    #                       (slots 2+3 = USER/GDI/Console) entirely —
-    #                       headless Win32 doesn't need it.
-    #   ServerDllInitialization — entry-point fn each ServerDll exports;
-    #                             "CsrServerInitialization" is the
-    #                             csrsrv-side default.
-    sm_sub = sm["SubSystems"]
-
-    # Required subsystems: smss loads these by name before any app runs.
-    # Micront profile has none — smss just sails past SmpLoadSubSystems
-    # and falls straight through to Execute/InitialCommand.
-    if profile == "micront":
-        sm_sub.set_multi_sz("Required", [])
-    else:
-        sm_sub.set_multi_sz("Required", ["Windows"])
-    sm_sub.set_multi_sz("Optional", [])
-
-    if profile != "micront":
-        # Win32 subsystem registration. The launch string's first token
-        # is the image path; the rest are arguments csrsrv parses:
-        #   ObjectDirectory  — NT object-namespace dir for csrss's LPC
-        #                       ports (unrelated to filesystem layout)
-        #   SharedSection    — three sizes (KB) for the 3 shared sections
-        #   ServerDll=N,I    — per-server DLL; basesrv owns slot 1. GUI
-        #                       profile adds winsrv with slots 2+3 for
-        #                       USER and Console.
-        # IMPORTANT: these indices are ABI constants, not arbitrary. They
-        # must match the #defines in WINSS.H:
-        #   BASESRV_SERVERDLL_INDEX  = 1
-        #   CONSRV_SERVERDLL_INDEX   = 2
-        #   USERSRV_SERVERDLL_INDEX  = 3
-        #   GDISRV_SERVERDLL_INDEX   = 4
-        # Client DLLs (user32, kernel32) use these hardcoded indices to
-        # look up per-process and per-thread data. If the indices here
-        # don't match, the server DLL writes sizeof(PROCESSINFO) bytes
-        # into a smaller slot's allocation — silent heap corruption.
-        server_dlls = "ServerDll=basesrv,1 "
-        if profile == "gui":
-            server_dlls += (
-                "ServerDll=winsrv:ConServerDllInitialization,2 "
-                "ServerDll=winsrv:UserServerDllInitialization,3 "
-                "ServerDll=winsrv:GdiServerDllInitialization,4 "
-            )
-        sm_sub.set_expand_sz(
-            "Windows",
-            "%SystemRoot%\\system32\\csrss.exe "
-            "ObjectDirectory=\\Windows "
-            "SharedSection=1024,3072,512 "
-            "Windows=On "
-            "SubSystemType=Windows "
-            + server_dlls +
-            "ProfileControl=Off "
-            "MaxRequestThreads=16"
-        )
-
-    # DOS Devices — smss creates \DosDevices\<Name> symlinks pointing at the
-    # given NT device path. Without a C: symlink, RtlDosPathNameToNtPathName_U
-    # fails to resolve "C:\System32" and SmpInitializeKnownDlls returns
-    # STATUS_OBJECT_PATH_NOT_FOUND (c000003a).
-    sm["DOS Devices"] \
-        .set_sz("C:", "\\Device\\Harddisk0\\Partition1") \
-        .set_sz("PIPE", "\\Device\\NamedPipe") \
-        .set_sz("MAILSLOT", "\\Device\\Mailslot")
-
-    # KnownDlls: SmpInitializeKnownDlls reads DllDirectory to locate the
-    # KnownDlls filesystem directory. Missing => conversion of NULL path
-    # returns STATUS_OBJECT_NAME_INVALID (c0000033). Point at System32.
-    sm["KnownDlls"] \
-        .set_expand_sz("DllDirectory", "%SystemRoot%\\System32")
-
-    # Memory Management + FileRenameOperations subkeys — SmpRegistryConfigurationTable
-    # queries both via RTL_QUERY_REGISTRY_SUBKEY with no OPTIONAL flag; any
-    # missing subkey => STATUS_OBJECT_NAME_NOT_FOUND and SmpInit aborts.
-    sm["Memory Management"] \
-        .set_multi_sz("PagingFiles", [])
-    sm["FileRenameOperations"]
+    # (smss-related Session Manager config — SubSystems, DOS Devices,
+    # KnownDlls, Memory Management, FileRenameOperations — all lived
+    # here. They were consumed exclusively by smss.exe at boot; with
+    # no smss in the image the kernel doesn't read any of it, so
+    # they're omitted.)
 
     # ServiceGroupOrder controls the order system-start drivers are loaded.
     # Video Init (port driver) must load before Video (miniports).
@@ -628,14 +527,6 @@ def build_micront_system_hive(profile: str = "headless",
         .set_dword("Start",        1) \
         .set_dword("ErrorControl", 1) \
         .set_sz("Group", "File System")
-    # NPFS pipe name aliases — the RPC client libraries use service-
-    # specific pipe names (lsarpc, samr, etc.) but all security services
-    # in lsass.exe share the single "lsass" pipe endpoint. NPFS
-    # translates these at open time via NpTranslateAlias.
-    # Format: value name = target pipe, value data = alias names
-    # (REG_MULTI_SZ). Verified against reference OAK/BIN/SYSTEM hive.
-    npfs["Aliases"] \
-        .set_multi_sz("lsass", ["netlogon", "lsarpc", "samr"])
     services["msfs"] \
         .set_dword("Type",         2) \
         .set_dword("Start",        1) \
@@ -656,288 +547,12 @@ def build_micront_system_hive(profile: str = "headless",
         .set_dword("ErrorControl", 1) \
         .set_sz("Group", "Extended base")
 
-    if profile != "micront":
-        # LSA configuration — auth packages list and product options.
-        # LsapConfigurePackages reads Control\Lsa\Authentication Packages.
-        # msv1_0 is the standard NT LAN Manager auth package.
-        control["Lsa"] \
-            .set_multi_sz("Authentication Packages", ["msv1_0"])
-
-        # LanmanWorkstation\Parameters — LsapDbSetDomainInfo (Pass 2 of
-        # LSA auto-install) reads the Account Domain SID from here.
-        # No Domain/DomainId (primary domain) — MicroNT is standalone,
-        # never domain-joined. LsapDbSetDomainInfo is patched to skip
-        # primary domain setup when these are absent.
-        # AccountDomainId format: space-separated decimal, 6 authority
-        # bytes then sub-authorities (tokenized by LsapDbGetNextValueToken).
-        # S-1-5-21-1-2-3 = authority 0 0 0 0 0 5, sub-auths 21 1 2 3.
-        services["LanmanWorkstation\\Parameters"] \
-            .set_sz("AccountDomainId", "0 0 0 0 0 5 21 1 2 3")
-
-        # ProductOptions — LsapDbInitializeServer reads ProductType.
-        # "WinNt" = standalone workstation, "LanManNt" = domain controller.
-        control["ProductOptions"] \
-            .set_sz("ProductType", "WinNt")
-
-        # ComputerName — GetComputerNameW reads this; lsass calls it during
-        # LsapDbInitializeServer(2). Missing key = null deref in kernel32.
-        control["ComputerName\\ComputerName"] \
-            .set_sz("ComputerName", "MICRONT")
-
-    if profile == "gui":
-        # Video: Bochs VGA miniport (QEMU stdvga, PCI 1234:1111).
-        # videoprt.sys is the video port framework loaded implicitly.
-        services["videoprt"] \
-            .set_dword("Type",         1) \
-            .set_dword("Start",        1) \
-            .set_dword("ErrorControl", 1) \
-            .set_sz("Group", "Video Init")
-        bochsvga = services["bochsvga"]
-        bochsvga \
-            .set_dword("Type",         1) \
-            .set_dword("Start",        1) \
-            .set_dword("ErrorControl", 1) \
-            .set_sz("Group", "Video") \
-            .set_sz("ImagePath", "System32\\Drivers\\bochsvga.sys")
-        # Device0 subkey tells USER server which display driver DLL to load.
-        bochsvga["Device0"] \
-            .set_multi_sz("InstalledDisplayDrivers", ["framebuf"]) \
-            .set_dword("DefaultSettings.XResolution", 1024) \
-            .set_dword("DefaultSettings.YResolution", 768) \
-            .set_dword("DefaultSettings.BitsPerPel", 32)
-
-        # Input: PS/2 keyboard + mouse
-        services["i8042prt"] \
-            .set_dword("Type",         1) \
-            .set_dword("Start",        1) \
-            .set_dword("ErrorControl", 1) \
-            .set_sz("Group", "Keyboard Class")
-        services["kbdclass"] \
-            .set_dword("Type",         1) \
-            .set_dword("Start",        1) \
-            .set_dword("ErrorControl", 1) \
-            .set_sz("Group", "Keyboard Class")
-        # kbdclass's KbdConfiguration opens Services\kbdclass\Parameters
-        # to read KeyboardDataQueueSize / MaximumPortsServiced /
-        # KeyboardDeviceBaseName / ConnectMultiplePorts. All values are
-        # RTL_QUERY_REGISTRY_OPTIONAL — but the subkey itself must exist
-        # or RtlQueryRegistryValues returns STATUS_OBJECT_NAME_NOT_FOUND
-        # before DriverEntry can fall back to defaults. Presence alone
-        # is enough; no values needed.
-        services["kbdclass\\Parameters"]
-        services["mouclass"] \
-            .set_dword("Type",         1) \
-            .set_dword("Start",        1) \
-            .set_dword("ErrorControl", 1) \
-            .set_sz("Group", "Pointer Class")
-        services["mouclass\\Parameters"]
-
-    return h
-
-
-def build_micront_software_hive(profile: str = "headless") -> Hive:
-    """Return a SOFTWARE hive with the minimum keys NT needs to boot.
-
-    The kernel loads this from %SystemRoot%\\System32\\config\\SOFTWARE
-    and mounts it at \\Registry\\Machine\\Software.
-
-    The most critical consumer is winlogon.exe which reads its startup
-    configuration from Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon
-    via GetProfileString("WINLOGON", ...).
-    """
-    h = Hive("SOFTWARE")
-
-    cv = h["Microsoft\\Windows NT\\CurrentVersion"]
-
-    cv.set_sz("CurrentVersion", "3.5") \
-      .set_sz("CurrentBuildNumber", "807") \
-      .set_sz("CurrentType", "Uniprocessor Free") \
-      .set_sz("SystemRoot", "C:\\")
-
-    if profile != 'micront':
-        # Winlogon configuration — winlogon reads these via GetProfileString
-        # (WINLOGON section → IniFileMapping → this registry path).
-        wl = cv["Winlogon"]
-
-        # "System" is the list of processes winlogon starts before auth init.
-        # lsass.exe is the security subsystem; must be running before
-        # LsaRegisterLogonProcess can succeed.
-        wl.set_sz("System", "lsass.exe")
-
-        # "Userinit" runs after a successful logon to set up the user env.
-        wl.set_sz("Userinit", "userinit.exe,")
-
-        # "Shell" is what userinit launches as the user's desktop shell.
-        # Points at the cr Lua runtime's Win32-GUI stub (runw.exe,
-        # subsystem=windows). The native-subsystem run.exe is rejected
-        # by kernel32!CreateProcess with ERROR_CHILD_NOT_COMPLETE
-        # (PROCESS.C:1141 — Win32 only accepts WINDOWS_GUI / WINDOWS_CUI
-        # subsystems). runw.exe has the same Lua VM and lua/ surface;
-        # only its PE subsystem field differs, so csrss registers it
-        # as a GUI process and chunks can ffi.load("user32"/"gdi32").
-        # All three (run/runc/runw) are staged at \SystemRoot\lua\ by
-        # mkdisk's _lua_tree_files().
-        # Note the asymmetry between the two paths in the value:
-        #   - EXE path uses C:\ — CreateProcess (kernel32) needs Win32-
-        #     style paths to find the image to load.
-        #   - Script-arg path uses \SystemRoot\ — argv[1] gets fed to
-        #     cr's fopen, which calls NtCreateFile verbatim (no DOS
-        #     path translation, per cr's NOTES.md "DosDevices — not
-        #     used"). NtCreateFile wants NT-namespace paths.
-        # Once shell.lua is loaded, require() uses package.path which
-        # defaults to \SystemRoot\lua\?.lua (LuaJIT fork patch), so
-        # all subsequent module loads stay on NT paths.
-        wl.set_sz("Shell",
-                  "C:\\lua\\runw.exe \\SystemRoot\\lua\\shell.lua")
-
-        # ServiceControllerStart — winlogon starts this before lsass.
-        # We don't have services.exe yet; winlogon logs a warning but
-        # continues.
-        wl.set_sz("ServiceControllerStart", "")
-
-    if profile == "gui":
-        # GRE_Initialize — font file paths for the GDI engine.
-        # Without these, GRE falls back to the winsrv.dll embedded font.
-        # SSERIFE.FON contains "MS Sans Serif" (the canonical NT 3.5 dialog
-        # font); COURE.FON is Courier; SMALLE.FON holds the tiny-point
-        # Small Fonts face.
-        gre = cv["GRE_Initialize"]
-        gre.set_sz("FONTS.FON", "C:\\System32\\sserife.fon") \
-           .set_sz("FIXEDFON.FON", "C:\\System32\\coure.fon") \
-           .set_sz("OEMFONT.FON", "C:\\System32\\coure.fon")
-
-        # Font substitution table — only logical faces that aren't
-        # physically present need aliasing.
-        cv["FontSubstitutes"] \
-            .set_sz("MS Shell Dlg", "MS Sans Serif") \
-            .set_sz("Helv", "MS Sans Serif") \
-            .set_sz("Tms Rmn", "MS Serif") \
-            .set_sz("Courier New", "Courier")
-
-        # Program Manager common groups — progman's LoadCommonGroups()
-        # (PMINIT.C:913) enumerates subkeys of HKLM\SOFTWARE\Program Groups
-        # and loads each subkey's default (unnamed) REG_BINARY value as a
-        # raw GROUPDEF blob (the on-disk .GRP file format). Without at
-        # least one entry here, progman starts with a blank MDI client
-        # — no group windows, nothing to click. Seed the canonical
-        # "Main" group from the in-tree MAIN.GRP shipped with PROGMAN.
-        from pathlib import Path as _Path
-        main_grp = _Path(__file__).resolve().parent.parent / \
-            "NT" / "PRIVATE" / "WINDOWS" / "SHELL" / "PROGMAN" / "MAIN.GRP"
-        h["Program Groups\\Main"].set_binary("", main_grp.read_bytes())
-
-    if profile != 'micront':
-        # IniFileMapping — BaseSrvInitializeIniFileMappings reads this tree
-        # to map GetProfileString("section","key") calls to registry paths.
-        # Format: value "" (default) = "SYS:registrypath" maps the whole
-        # section. SYS: = HKLM, USR: = HKCU.
-        ifm = h["Microsoft\\Windows NT\\CurrentVersion\\IniFileMapping\\win.ini"]
-        ifm["windows"] \
-            .set_sz("", "SYS:Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows")
-        ifm["WINLOGON"] \
-            .set_sz("", "SYS:Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon")
-
-    return h
-
-
-def build_micront_default_hive(profile: str = "headless") -> Hive:
-    """Return the DEFAULT user hive mounted at \\Registry\\User\\.Default.
-
-    USERSRV accesses per-user UI policy through this hive whenever no
-    interactive user is logged on — which, for the Welcome dialog path,
-    is always. PROFILE.C::aFastRegMap hardcodes the section roots with a
-    leading 'U' meaning HKCU, and before logon HKCU == .Default. So every
-    one of these section reads lands here:
-
-        PMAP_COLORS      → Control Panel\\Colors
-        PMAP_DESKTOP     → Control Panel\\Desktop
-        PMAP_CURSORS     → Control Panel\\Cursors
-        PMAP_BEEP        → Control Panel\\Sound
-        PMAP_MOUSE       → Control Panel\\Mouse
-        PMAP_KEYBOARD    → Control Panel\\Keyboard
-        (etc. — see WINSRV.H PMAP_* constants)
-
-    Without a DEFAULT hive mounted, every FastGetProfileStringW call
-    that targets these sections fails to open its cached key, silently
-    returns the caller's hardcoded default, and the UI renders with
-    whatever Microsoft's engineer typed into the fallback literal in
-    1992. That's how MicroNT ended up with invisible dialog frames —
-    Color\\Window defaulted to RGB(255,255,255) (white), Color\\Desktop
-    to some gray, and the dialog frame brushes were NULL because no
-    real sysColors seeding ever happened.
-
-    NT 3.5 typically loads DEFAULT from %SystemRoot%\\System32\\config\\
-    DEFAULT, as a HIVE_LIST_ENTRY in CmpMachineHiveList (CMDAT.C line 206:
-    { L"DEFAULT", L"USER\\.DEFAULT", ... }). This builder emits that
-    hive file.
-
-    Populating this file is equivalent to running the Control Panel's
-    "Appearance" and "Desktop" applets once, with the classic Windows 3.1
-    grey/blue scheme. The color values are the 21 REG_SZ entries the
-    USERSRV string table identifies by name (STR_SCROLLBAR..STR_BTNHIGHLIGHT
-    in USER/SERVER/RES.RC), stored as space-separated decimal R G B.
-    """
-    h = Hive("DEFAULT")
-
-    if profile != "gui":
-        # Only GUI profile needs these — headless/micront never touches
-        # PMAP_COLORS / PMAP_DESKTOP and so never mounts .Default.
-        return h
-
-    # ---- Control Panel\Colors ----
-    # Classic Windows 3.1 / NT 3.5 "Windows Default" scheme. Values are
-    # space-separated decimal R G B as REG_SZ — the format CI_GetClrVal
-    # (USER/SERVER/INIT.C:1645) parses. Value names are from RES.RC:197–217.
-    colors = h["Control Panel\\Colors"]
-    colors.set_sz("Scrollbar",         "192 192 192")  # COLOR_SCROLLBAR
-    colors.set_sz("Background",        "0 128 128")    # COLOR_BACKGROUND (teal desktop)
-    colors.set_sz("ActiveTitle",       "0 0 128")      # COLOR_ACTIVECAPTION (dark blue)
-    colors.set_sz("InactiveTitle",     "128 128 128")  # COLOR_INACTIVECAPTION
-    colors.set_sz("Menu",              "192 192 192")  # COLOR_MENU
-    colors.set_sz("Window",            "255 255 255")  # COLOR_WINDOW (dialog background)
-    colors.set_sz("WindowFrame",       "0 0 0")        # COLOR_WINDOWFRAME (border line)
-    colors.set_sz("MenuText",          "0 0 0")        # COLOR_MENUTEXT
-    colors.set_sz("WindowText",        "0 0 0")        # COLOR_WINDOWTEXT
-    colors.set_sz("TitleText",         "255 255 255")  # COLOR_CAPTIONTEXT
-    colors.set_sz("ActiveBorder",      "192 192 192")  # COLOR_ACTIVEBORDER
-    colors.set_sz("InactiveBorder",    "192 192 192")  # COLOR_INACTIVEBORDER
-    colors.set_sz("AppWorkspace",      "128 128 128")  # COLOR_APPWORKSPACE (MDI backdrop)
-    colors.set_sz("Hilight",           "0 0 128")      # COLOR_HIGHLIGHT (selection bar)
-    colors.set_sz("HilightText",       "255 255 255")  # COLOR_HIGHLIGHTTEXT
-    colors.set_sz("ButtonFace",        "192 192 192")  # COLOR_BTNFACE (button grey)
-    colors.set_sz("ButtonShadow",      "128 128 128")  # COLOR_BTNSHADOW
-    colors.set_sz("GrayText",          "128 128 128")  # COLOR_GRAYTEXT (disabled)
-    colors.set_sz("ButtonText",        "0 0 0")        # COLOR_BTNTEXT
-    colors.set_sz("InactiveTitleText", "192 192 192")  # COLOR_INACTIVECAPTIONTEXT
-    colors.set_sz("ButtonHilight",     "255 255 255")  # COLOR_BTNHIGHLIGHT
-
-    # ---- Control Panel\Desktop ----
-    # Window manager policy that USER reads via PMAP_DESKTOP. BorderWidth
-    # is the multiplier applied to the display driver's cxBorder to yield
-    # SM_CXFRAME — without this, SERVER.C:2150 defaults to 3 anyway, but
-    # explicit beats implicit; also covers CaretBlinkRate, DragFullWindows,
-    # etc. that other sites in USERSRV read.
-    desktop = h["Control Panel\\Desktop"]
-    desktop.set_sz("BorderWidth",        "3")
-    desktop.set_sz("CursorBlinkRate",    "530")
-    desktop.set_sz("ScreenSaveTimeOut",  "900")
-    desktop.set_sz("ScreenSaveActive",   "0")
-    desktop.set_sz("Wallpaper",          "(None)")
-    desktop.set_sz("TileWallpaper",      "0")
-    desktop.set_sz("WallpaperStyle",     "0")
-    desktop.set_sz("GridGranularity",    "0")
-    desktop.set_sz("DragFullWindows",    "0")
-    desktop.set_sz("FontSmoothing",      "0")
-
-    # ---- Control Panel\Cursors / Mouse / Keyboard / Sound ----
-    # Empty but present, so FastGetProfileStringW gets a real key handle
-    # and falls through to the caller's default instead of erroring.
-    h["Control Panel\\Cursors"]
-    h["Control Panel\\Mouse"]
-    h["Control Panel\\Keyboard"]
-    h["Control Panel\\Sound"]
-    h["Control Panel\\Sounds"]
-    h["Control Panel\\Icons"]
+    # (Input + video drivers — i8042prt, kbdclass, mouclass, videoprt,
+    # bochsvga — ship on disk but are not auto-started. The eventual
+    # pure-Lua UI layer will register + start them from userland when
+    # it's ready. Adding Start=1 entries here prematurely would fire
+    # driver init on every boot with nothing in userland to consume
+    # the resulting devices.)
 
     return h
 
@@ -952,28 +567,24 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("output", nargs="?", default="SYSTEM",
                     help="path to write the hive to")
-    ap.add_argument("--profile", choices=PROFILES, default="headless",
-                    help="which registry layout to emit (default: headless)")
     ap.add_argument("--init-exe", default=None, metavar="PATH",
-                    help="micront only: SystemRoot-relative path to the "
-                         "initial user-mode process exe (e.g. "
-                         "'lua\\jit.exe'). Control\\InitExe is written as "
-                         "\\SystemRoot\\<PATH>.")
+                    help="SystemRoot-relative path to the initial "
+                         "user-mode process exe. Control\\Init\\Exe "
+                         f"is written as \\SystemRoot\\<PATH>. "
+                         f"Default: {DEFAULT_INIT_EXE!r}.")
     ap.add_argument("--init-args", default=None, metavar="ARGS",
-                    help="micront only: Control\\Init\\Args — argv tail "
-                         "appended to Exe's command line, whitespace-"
-                         "separated. Only meaningful with --init-exe.")
+                    help="Control\\Init\\Args — argv tail appended to "
+                         "Exe's command line, whitespace-separated. "
+                         f"Default: {DEFAULT_INIT_ARGS!r}.")
     ap.add_argument("--init-stdio", default=None, metavar="NTPATH",
-                    help="micront only: Control\\Init\\Stdio — NT device "
-                         "path (e.g. \\Device\\Serial0) opened inheritable "
-                         "by the kernel and wired into the init process's "
-                         "stdin/stdout/stderr handles.")
+                    help="Control\\Init\\Stdio — NT device path opened "
+                         "inheritable by the kernel and wired into the "
+                         "init process's stdin/stdout/stderr handles. "
+                         f"Default: {DEFAULT_INIT_STDIO!r}.")
     args = ap.parse_args()
 
     # Banner the stamp we're building against so CI logs pin hive <-> binary
-    # pairing. When the SOFTWARE hive lands, populate CurrentVersion /
-    # CurrentBuildNumber / CSDVersion from `stamp` so SRVINIT's registry
-    # read hits live values instead of the NTVERP-derived fallback.
+    # pairing.
     try:
         stamp = lv.parse_ntverp()
         print(f"build stamp: NT {stamp.version_str} "
@@ -981,30 +592,11 @@ def main() -> None:
     except Exception as e:
         print(f"build stamp: unavailable ({e})")
 
-    h = build_micront_system_hive(profile=args.profile,
-                                  init_exe=args.init_exe,
-                                  init_args=args.init_args,
-                                  init_stdio=args.init_stdio)
+    h = build_system_hive(init_exe=args.init_exe,
+                          init_args=args.init_args,
+                          init_stdio=args.init_stdio)
     size = h.write(args.output)
-    print(f"SYSTEM hive ({args.profile}): {size} bytes -> {args.output}")
-
-    # SOFTWARE hive is Win32-userland only; micront has no consumer of it.
-    if args.profile != "micront":
-        sw = build_micront_software_hive(profile=args.profile)
-        sw_path = args.output.replace("SYSTEM", "SOFTWARE") if "SYSTEM" in args.output else "SOFTWARE"
-        size = sw.write(sw_path)
-        print(f"SOFTWARE hive ({args.profile}): {size} bytes -> {sw_path}")
-
-    # DEFAULT hive is what gets mounted at \Registry\User\.Default before
-    # any interactive logon — USERSRV's PMAP_COLORS/PMAP_DESKTOP/etc.
-    # reads land here when nobody's logged in. Kernel-side CMDAT.C's
-    # CmpMachineHiveList expects %SystemRoot%\System32\config\DEFAULT
-    # to exist; without it mounts silently fall through to caller defaults.
-    if args.profile == "gui":
-        df = build_micront_default_hive(profile=args.profile)
-        df_path = args.output.replace("SYSTEM", "DEFAULT") if "SYSTEM" in args.output else "DEFAULT"
-        size = df.write(df_path)
-        print(f"DEFAULT hive ({args.profile}): {size} bytes -> {df_path}")
+    print(f"SYSTEM hive: {size} bytes -> {args.output}")
 
 
 if __name__ == "__main__":

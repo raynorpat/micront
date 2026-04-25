@@ -1,4 +1,0 @@
-[ implicit_handle( handle_t UuidGetValuesBindingHandle ) 
-] interface UuidGetValues
-{
-}

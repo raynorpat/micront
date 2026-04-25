@@ -1,4 +1,0 @@
-LIBRARY KBDTUF
-
-EXPORTS
-    KbdLayerDescriptor @1

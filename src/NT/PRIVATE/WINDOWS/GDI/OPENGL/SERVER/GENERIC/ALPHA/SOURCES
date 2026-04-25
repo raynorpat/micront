@@ -1,4 +1,0 @@
-ALPHA_SOURCES=gencpu.c \
-		alpha\vsave.s
-	
-

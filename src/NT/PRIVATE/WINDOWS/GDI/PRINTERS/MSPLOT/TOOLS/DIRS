@@ -1,9 +1,0 @@
-!IF 0
-
-This dirs will build the tool directory (ntres) plotgpc
-
-!ENDIF
-
-DIRS=ntres
-
-OPTIONAL_DIRS=

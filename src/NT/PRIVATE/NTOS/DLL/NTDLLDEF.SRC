@@ -302,24 +302,6 @@ EXPORTS
     RtlZeroMemory
     RtlSystemTimeToLocalTime
     RtlLocalTimeToSystemTime
-    CsrClientConnectToServer
-    CsrClientCallServer
-    CsrAllocateCaptureBuffer
-    CsrFreeCaptureBuffer
-    CsrAllocateMessagePointer
-    CsrAllocateCapturePointer
-    CsrCaptureMessageBuffer
-    CsrCaptureMessageString
-    CsrCaptureTimeout
-    CsrProbeForWrite
-    CsrProbeForRead
-    CsrClientThreadConnect
-    CsrClientSendMessage
-    CsrClientMaxMessage
-    CsrNewThread
-    CsrIdentifyAlertableThread
-    CsrSetPriorityClass
-    CsrpProcessCallbackRequest
     RtlCutoverTimeToSystemTime
 
     atan

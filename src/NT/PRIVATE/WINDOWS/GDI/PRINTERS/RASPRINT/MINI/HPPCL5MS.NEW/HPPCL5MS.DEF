@@ -1,8 +1,0 @@
-LIBRARY hppcl5ms
-
-DESCRIPTION 'Minidriver for HP's PCL 5 printers & clones'
-
-PROTMODE
-
-EXPORTS
-   bInitProc

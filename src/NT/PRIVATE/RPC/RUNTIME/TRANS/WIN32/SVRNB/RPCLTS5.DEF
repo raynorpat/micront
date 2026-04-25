@@ -1,8 +1,0 @@
-LIBRARY RPCLTS5
-
-DESCRIPTION 'NT Remote Procedure Call Netbios Server Transport'
-
-
-EXPORTS
-
-    TransportLoad

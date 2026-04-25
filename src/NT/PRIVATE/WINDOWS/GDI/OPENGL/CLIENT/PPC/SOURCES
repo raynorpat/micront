@@ -1,2 +1,0 @@
-PPC_SOURCES= ppc\glpapi.s   \
-	         ppc\noopapi.c

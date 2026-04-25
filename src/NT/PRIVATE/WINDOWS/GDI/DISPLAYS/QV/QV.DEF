@@ -1,9 +1,0 @@
-NAME QV
-
-DESCRIPTION 'QVision Display Driver Library'
-
-EXPORTS
-    DrvEnableDriver
-    DrvDisableDriver
-
-PROTMODE

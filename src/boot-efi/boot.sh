@@ -1,27 +1,30 @@
 #!/bin/sh
 #
 # Boot MicroNT UEFI loader under OVMF64 in QEMU.
-# Usage: boot.sh [profile]   (default: headless)
-# Profiles: micront, headless, gui
 #
 # Runs under the default -machine pc (i440fx + PIIX3); OVMF64 works on
 # both i440fx and q35, and our NT 3.5 atdisk.sys only speaks legacy IDE
 # anyway, so staying on PIIX3 saves us the q35-→-AHCI impedance mismatch.
 #
 # Keep a per-checkout copy of NVRAM vars so /usr/share stays pristine.
+#
+# Env toggles: VGA=1 shows a VGA window, default is serial-console-only.
+# GDB=1 pauses for a gdb attach, TRACE=1 logs instructions, MEM=<N>
+# overrides guest RAM in MB.
 
-PROFILE="${1:-headless}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-ESP_IMG="$REPO_ROOT/build/$PROFILE/esp.img"
+ESP_IMG="$REPO_ROOT/build/disk/esp.img"
 
 if [ ! -f "$ESP_IMG" ]; then
-    echo "ERROR: $ESP_IMG not found. Run: build.sh $PROFILE" >&2
+    echo "ERROR: $ESP_IMG not found. Run: build.sh" >&2
     exit 1
 fi
 
-# Display: GUI profile gets a window, others run headless.
-if [ "$PROFILE" = "gui" ]; then
+# Display: VGA=1 opens a window + stdvga; otherwise serial-console only.
+# stdvga pairs with the bochsvga.sys miniport when the pure-Lua UI
+# eventually starts driving it.
+if [ "${VGA:-0}" = "1" ]; then
     DISPLAY_FLAGS="-display gtk -vga std"
 else
     DISPLAY_FLAGS="-display none"
@@ -29,7 +32,7 @@ fi
 
 cp /usr/share/OVMF/OVMF_VARS_4M.fd OVMF_VARS_4M.fd
 
-# Guest RAM size. Override via env: MEM=512 boot.sh micront
+# Guest RAM size. Override via env: MEM=512 boot.sh
 # Default keeps parity with the old behaviour (qemu-system-i386 default
 # is ~128 MB). The loader's identity map scales with registered ranges,
 # not a blanket constant, so any size UEFI's allocator can place our
