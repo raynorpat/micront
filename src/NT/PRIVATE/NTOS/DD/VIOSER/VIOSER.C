@@ -122,17 +122,18 @@ VioserFindAndAttach(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegPath)
     KAFFINITY      affinity = 0;
     u16            qsizes[2];
 
-    /* (1) Find. virtio-console legacy device id 0x1003. HAL returns
-       64 bytes (standard PCI header) which holds VendorID + DeviceID
-       at offsets 0/2 — that's all we need. */
+    /* (1) Find. Match modern (0x1043) OR transitional (0x1003) ID.
+       QEMU's default virtio-serial-pci is transitional. */
     for (slot = 0; slot < 32 * 8; slot++) {
         got = HalGetBusDataByOffset(PCIConfiguration, 0, slot,
                                     &cfg, 0, sizeof(cfg));
         if (got < 4)                                      continue;
         if (cfg.VendorID == 0xFFFF)                       continue;
         if (cfg.VendorID != VIRTIO_PCI_VENDOR_ID)         continue;
-        if (cfg.DeviceID != VIRTIO_PCI_LEGACY_DEV_CON)    continue;
-        DbgPrint("VIOSER: matched virtio-console at bus0 slot 0x%02x\n", slot);
+        if (cfg.DeviceID != VIRTIO_PCI_DEV_CONSOLE &&
+            cfg.DeviceID != VIRTIO_PCI_TRANS_CONSOLE)     continue;
+        DbgPrint("VIOSER: matched virtio-console (devid 0x%04x) at bus0 slot 0x%02x\n",
+                 cfg.DeviceID, slot);
         break;
     }
     if (slot >= 32 * 8)
@@ -147,21 +148,18 @@ VioserFindAndAttach(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegPath)
     }
     for (i = 0; i < resources->List[0].PartialResourceList.Count; i++) {
         pd = &resources->List[0].PartialResourceList.PartialDescriptors[i];
-        if (pd->Type == CmResourceTypePort && ioBase == NULL) {
-            ioBase = (PUCHAR)(ULONG)pd->u.Port.Start.LowPart;
-        } else if (pd->Type == CmResourceTypeInterrupt && intVector == 0) {
+        if (pd->Type == CmResourceTypeInterrupt && intVector == 0) {
             intVector = pd->u.Interrupt.Vector;
             intLevel  = (KIRQL)pd->u.Interrupt.Level;
         }
     }
-    if (!ioBase || !intVector) {
+    if (!intVector) {
         ExFreePool(resources);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-    DbgPrint("VIOSER: BAR0=0x%x bus IRQ vec=%u lvl=%u\n",
-             (ULONG)ioBase, intVector, intLevel);
+    DbgPrint("VIOSER: bus IRQ vec=%u lvl=%u\n", intVector, intLevel);
 
-    /* Translate bus-relative IRQ → system vector + DIRQL. See viorng
+    /* Translate bus-relative IRQ -> system vector + DIRQL. See viorng
        for the rationale; same translation applies here. */
     {
         ULONG sysVector;
@@ -173,6 +171,9 @@ VioserFindAndAttach(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegPath)
         intVector = sysVector;
         intLevel  = sysIrql;
     }
+    /* ioBase no longer needed - VirtioPciInit handles BAR readout
+       via PCI cap walk + MmMapIoSpace. */
+    UNREFERENCED_PARAMETER(ioBase);
 
     /* (3) Device object. Buffered I/O. */
     RtlInitUnicodeString(&devName, L"\\Device\\VirtioCon0");
@@ -190,10 +191,14 @@ VioserFindAndAttach(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegPath)
     KeInitializeSpinLock(&dev->Lock);
     KeInitializeDpc(&dev->CompletionDpc, VioserDpc, dev);
 
-    /* (4) Init virtio-pci, run the handshake. */
-    VirtioPciInit(&dev->Pci, ioBase, 0, slot,
-                  intVector, intLevel,
-                  VIRTIO_ID_CONSOLE);
+    /* (4) Init virtio-pci (modern transport), run the handshake. */
+    st = VirtioPciInit(&dev->Pci, 0, slot,
+                       intVector, intLevel, affinity,
+                       VIRTIO_ID_CONSOLE);
+    if (!NT_SUCCESS(st)) {
+        DbgPrint("VIOSER: VirtioPciInit failed 0x%08x\n", st);
+        goto fail_dev;
+    }
     VirtioDevReset(&dev->Pci.Vdev);
     VirtioDevStatusUpdate(&dev->Pci.Vdev, VIRTIO_STATUS_ACK);
     VirtioDevStatusUpdate(&dev->Pci.Vdev,

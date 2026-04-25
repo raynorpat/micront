@@ -377,6 +377,32 @@ VirtqGetRingPaddr(PVIRTQUEUE vq)
     return vqi->VringPaddr;
 }
 
+PHYSICAL_ADDRESS
+VirtqGetAvailPaddr(PVIRTQUEUE vq)
+{
+    PVIRTQUEUE_INTERNAL vqi;
+    PHYSICAL_ADDRESS    p;
+
+    ASSERT(vq != NULL);
+    vqi = VQ_TO_INT(vq);
+    p.QuadPart = vqi->VringPaddr.QuadPart +
+                 ((PUCHAR)vqi->Ring.Avail - (PUCHAR)vqi->Ring.Desc);
+    return p;
+}
+
+PHYSICAL_ADDRESS
+VirtqGetUsedPaddr(PVIRTQUEUE vq)
+{
+    PVIRTQUEUE_INTERNAL vqi;
+    PHYSICAL_ADDRESS    p;
+
+    ASSERT(vq != NULL);
+    vqi = VQ_TO_INT(vq);
+    p.QuadPart = vqi->VringPaddr.QuadPart +
+                 ((PUCHAR)vqi->Ring.Used - (PUCHAR)vqi->Ring.Desc);
+    return p;
+}
+
 /* ------------------------------------------------------------------ *
  * Internal helpers.
  * ------------------------------------------------------------------ */

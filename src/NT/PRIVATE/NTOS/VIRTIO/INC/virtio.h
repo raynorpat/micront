@@ -239,9 +239,14 @@ int VirtqIsFull(PVIRTQUEUE vq);
 /* Notify the device that we've added work to the avail ring. */
 VOID VirtqHostNotify(PVIRTQUEUE vq);
 
-/* Physical address of the descriptor ring base — the transport writes
-   (paddr >> 12) to VIRTIO_PCI_QUEUE_PFN. */
-PHYSICAL_ADDRESS VirtqGetRingPaddr(PVIRTQUEUE vq);
+/* Physical addresses of the three rings (descriptor / avail / used).
+   Modern transport writes them as three independent 64-bit registers
+   (queue_desc / queue_driver / queue_device); legacy crammed them into
+   one PFN slot. They're contiguous in our backing allocation either
+   way, computed at VringInit time. */
+PHYSICAL_ADDRESS VirtqGetRingPaddr (PVIRTQUEUE vq);   /* desc[0]  */
+PHYSICAL_ADDRESS VirtqGetAvailPaddr(PVIRTQUEUE vq);   /* avail.*  */
+PHYSICAL_ADDRESS VirtqGetUsedPaddr (PVIRTQUEUE vq);   /* used.*   */
 
 /* Disable / enable interrupts on this queue (avail ring flags). */
 VOID VirtqIntrDisable(PVIRTQUEUE vq);

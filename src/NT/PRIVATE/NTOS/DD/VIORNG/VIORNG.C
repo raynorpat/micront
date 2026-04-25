@@ -107,17 +107,20 @@ VioRngFindAndAttach(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegPath)
     KIRQL          intLevel = 0;
     KAFFINITY      affinity = 0;
 
-    /* (1) Find the device. HAL returns 64 bytes (the standard PCI
-       header) — not the full 256 the cfg struct holds. We only need
-       VendorID + DeviceID, both in the first 4 bytes. */
+    /* (1) Find the device. Match modern (0x1044) OR transitional
+       (0x1005) ID — QEMU's default for virtio-rng-pci is transitional,
+       which advertises 0x1005 but still exposes the modern PCI caps
+       we drive against. */
     for (slot = 0; slot < 32 * 8; slot++) {
         got = HalGetBusDataByOffset(PCIConfiguration, 0, slot,
                                     &cfg, 0, sizeof(cfg));
         if (got < 4)                                      continue;
         if (cfg.VendorID == 0xFFFF)                       continue;
         if (cfg.VendorID != VIRTIO_PCI_VENDOR_ID)         continue;
-        if (cfg.DeviceID != VIRTIO_PCI_LEGACY_DEV_RNG)    continue;
-        DbgPrint("VIORNG: matched virtio-rng at bus0 slot 0x%02x\n", slot);
+        if (cfg.DeviceID != VIRTIO_PCI_DEV_RNG &&
+            cfg.DeviceID != VIRTIO_PCI_TRANS_RNG)         continue;
+        DbgPrint("VIORNG: matched virtio-rng (devid 0x%04x) at bus0 slot 0x%02x\n",
+                 cfg.DeviceID, slot);
         break;
     }
     if (slot >= 32 * 8)
@@ -131,31 +134,25 @@ VioRngFindAndAttach(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegPath)
         return st;
     }
 
-    /* Walk the partials: first I/O port range → BAR0; first interrupt
-       → bus-relative IRQ + level. Legacy virtio-rng has nothing else
-       of interest. */
+    /* Walk the partials: we only need the interrupt resource — the
+       modern transport reads BARs from PCI config space itself via
+       VirtioPciInit's cap walk, so we don't pre-extract a port range
+       here. */
     for (i = 0; i < resources->List[0].PartialResourceList.Count; i++) {
         pd = &resources->List[0].PartialResourceList.PartialDescriptors[i];
-        if (pd->Type == CmResourceTypePort && ioBase == NULL) {
-            ioBase = (PUCHAR)(ULONG)pd->u.Port.Start.LowPart;
-            DbgPrint("VIORNG: BAR0 I/O = 0x%x len %u\n",
-                     pd->u.Port.Start.LowPart, pd->u.Port.Length);
-        } else if (pd->Type == CmResourceTypeInterrupt && intVector == 0) {
+        if (pd->Type == CmResourceTypeInterrupt && intVector == 0) {
             intVector = pd->u.Interrupt.Vector;
             intLevel  = (KIRQL)pd->u.Interrupt.Level;
         }
     }
-    if (!ioBase || !intVector) {
-        DbgPrint("VIORNG: missing BAR0 or IRQ\n");
+    if (!intVector) {
+        DbgPrint("VIORNG: missing IRQ resource\n");
         ExFreePool(resources);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-
-    /* Translate the bus-relative interrupt resources into a system
-       vector + IRQL + affinity that IoConnectInterrupt accepts. NT
-       3.5 PCI HAL returns bus IRQ (= ISA IRQ via INTA-D routing) in
-       both Vector and Level fields; the translation maps that to a
-       system-wide vector and the matching DIRQL. */
+    /* The HalAssignSlotResources interrupt is bus-relative on NT 3.5
+       PCI (= the IRQ line via INTA-D routing). Translate to a system
+       vector + DIRQL + affinity — same pattern as serial.sys. */
     {
         ULONG sysVector;
         KIRQL sysIrql = 0;
@@ -166,6 +163,10 @@ VioRngFindAndAttach(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegPath)
         intVector = sysVector;
         intLevel  = sysIrql;
     }
+    /* ioBase no longer needed — VirtioPciInit reads BARs from PCI
+       config and MmMapIoSpace's them itself based on what the cap
+       walk reports. */
+    UNREFERENCED_PARAMETER(ioBase);
 
     /* (3) Create the device object. Buffered I/O — NT will copy
        between user buffer and Irp->AssociatedIrp.SystemBuffer for us. */
@@ -185,10 +186,15 @@ VioRngFindAndAttach(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegPath)
     KeInitializeSpinLock(&dev->IsrLock);
     KeInitializeDpc(&dev->CompletionDpc, VioRngDpc, dev);
 
-    /* (4) Init virtio_pci, do the device handshake. */
-    VirtioPciInit(&dev->Pci, ioBase, 0, slot,
-                  intVector, intLevel,
-                  VIRTIO_ID_RNG);
+    /* (4) Init virtio_pci (modern transport — caps + MmMapIoSpace),
+       then run the device handshake. */
+    st = VirtioPciInit(&dev->Pci, 0, slot,
+                       intVector, intLevel, affinity,
+                       VIRTIO_ID_RNG);
+    if (!NT_SUCCESS(st)) {
+        DbgPrint("VIORNG: VirtioPciInit failed 0x%08x\n", st);
+        goto fail_dev;
+    }
 
     VirtioDevReset(&dev->Pci.Vdev);
     VirtioDevStatusUpdate(&dev->Pci.Vdev, VIRTIO_STATUS_ACK);

@@ -84,18 +84,33 @@ cp /usr/share/OVMF/OVMF_VARS_4M.fd OVMF_VARS_4M.fd
 # -device piix3-ide needed. NT 3.5's atdisk.sys speaks IDE/ATA and
 # OVMF's IdeBusDxe handles the firmware-side enumeration fine.
 #
-# Virtio devices: NT 3.5's HAL doesn't speak MMCONFIG / MSI-X, so we
-# force transitional mode (legacy I/O config + INTx interrupts) on
-# every virtio device with disable-modern=on,disable-legacy=off. The
-# PCI vendor:device IDs land in our drivers' PCI scan range.
+# Virtio devices: our virtio.lib speaks the modern transport (PCI
+# capabilities + MMIO common-config + INTx interrupts), no MSI-X. We
+# accept both modern (0x1040+) and transitional (0x1000-0x103F) PCI
+# device IDs in the drivers; QEMU's default for the classic device
+# classes (rng, console, blk, etc.) is transitional, which exposes
+# both interfaces simultaneously and our drivers drive via modern
+# transport regardless. Modern-only classes (input, gpu, vsock, fs)
+# get their 0x1040+ IDs unconditionally.
 #
-#   virtio-rng-pci      →  1AF4:1005  →  viorng.sys
-#   virtio-serial-pci   →  1AF4:1003  →  vioser.sys
+#   virtio-rng-pci      ->  1AF4:1005 (transitional default)  ->  viorng.sys
+#   virtio-serial-pci   ->  1AF4:1003 (transitional default)  ->  vioser.sys
 #
 # virtio-serial: the PCI device hosts ports; we attach a single
 # virtconsole port to a pty chardev. QEMU prints the pty path on stdout
 # at boot; cat that pty (e.g. `cat /dev/pts/N`) to see what the guest
 # wrote and `echo foo > /dev/pts/N` to send to the guest.
+# PCI BAR window: NT 3.5 is 32-bit non-PAE, so it can only address
+# physical memory below 4 GiB. OVMF on qemu-system-x86_64 + i440fx
+# defaults to a 64-bit PCI MMIO window above 4 GiB and happily places
+# device BARs there (e.g. virtio at paddr=0x800000000) which the
+# guest can't reach. The HAL handles this in HalpRelocateHighPciBars
+# (see src/NT/PRIVATE/NTOS/NTHALS/HAL/I386/ixpcibus.c) - it walks
+# every device at boot and rewrites any BAR placed above 4 GiB into
+# the low 32-bit MMIO window before drivers see it. We deliberately
+# do NOT pass -global i440FX-pcihost.pci-hole64-size=0 here so this
+# path is exercised end-to-end, matching cloud / non-QEMU firmware
+# that may not honour such tweaks.
 exec qemu-system-x86_64 -m "$MEM" \
     -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
     -drive if=pflash,format=raw,file=./OVMF_VARS_4M.fd \
@@ -103,8 +118,8 @@ exec qemu-system-x86_64 -m "$MEM" \
     -chardev stdio,id=serialmux,mux=on \
     -serial chardev:serialmux \
     -object rng-random,id=rng0,filename=/dev/urandom \
-    -device virtio-rng-pci,rng=rng0,disable-modern=on,disable-legacy=off \
-    -device virtio-serial-pci,disable-modern=on,disable-legacy=off,id=vser0 \
+    -device virtio-rng-pci,rng=rng0 \
+    -device virtio-serial-pci,id=vser0 \
     -chardev pty,id=vcon0 \
     -device virtconsole,chardev=vcon0 \
     -no-reboot \
