@@ -570,21 +570,39 @@ def build_system_hive(init_exe: str | None = None,
         .set_sz("Group", "Virtio")
 
     # virtio-input — keyboard / mouse / tablet via virtio-keyboard-pci,
-    # virtio-mouse-pci, etc. (modern device ID 0x1052). At skeleton
-    # stage just dumps events to the kernel debug log; future passes
-    # bind to kbdclass / mouclass via IOCTL_INTERNAL_*_CONNECT.
+    # virtio-mouse-pci, etc. (modern device ID 0x1052). Drives kbdclass
+    # via IOCTL_INTERNAL_KEYBOARD_CONNECT and exposes each detected
+    # device as both \Device\VirtioInput<N> and a per-class symlink
+    # (\Device\KeyboardPort<K> / \Device\PointerPort<P>) the class
+    # drivers find by name.
     services["vioinput"] \
         .set_dword("Type",         1) \
         .set_dword("Start",        1) \
         .set_dword("ErrorControl", 1) \
         .set_sz("Group", "Virtio")
 
-    # (Input + video drivers — i8042prt, kbdclass, mouclass, videoprt,
-    # bochsvga — ship on disk but are not auto-started. The eventual
-    # pure-Lua UI layer will register + start them from userland when
-    # it's ready. Adding Start=1 entries here prematurely would fire
-    # driver init on every boot with nothing in userland to consume
-    # the resulting devices.)
+    # kbdclass — keyboard class driver. Walks \Device\KeyboardPort<N>
+    # at init, sends IOCTL_INTERNAL_KEYBOARD_CONNECT to bind, surfaces
+    # \Device\KeyboardClass0 to user mode. Loads in the "Keyboard
+    # Class" group, after Virtio so vioinput's port symlinks already
+    # exist when kbdclass enumerates them.
+    services["kbdclass"] \
+        .set_dword("Type",         1) \
+        .set_dword("Start",        1) \
+        .set_dword("ErrorControl", 1) \
+        .set_sz("Group", "Keyboard Class")
+
+    # mouclass — same shape as kbdclass but for \Device\PointerPort<N>.
+    # Surfaces \Device\PointerClass0; vioinput's mouse path delivers
+    # batched MOUSE_INPUT_DATA packets here on every EV_SYN.
+    services["mouclass"] \
+        .set_dword("Type",         1) \
+        .set_dword("Start",        1) \
+        .set_dword("ErrorControl", 1) \
+        .set_sz("Group", "Pointer Class")
+
+    # (videoprt / bochsvga / i8042prt: not auto-started - the Lua UI
+    # layer will register + start them when it's ready.)
 
     return h
 
