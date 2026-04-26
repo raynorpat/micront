@@ -2,13 +2,16 @@
 #
 # Boot MicroNT UEFI loader under OVMF in QEMU.
 #
-# Usage: boot.sh [--vga] [--gdb] [--trace] [--mem MB]
+# Usage: boot.sh [--vga] [--gdb] [--trace] [--netdump] [--mem MB]
 #   --vga       Open a VGA window (stdvga) in addition to serial.
 #               Default: serial-console-only (-display none).
 #   --gdb       Pause CPU at boot and listen for gdb on :1234.
 #               Connect with `gdb -x boot-efi/gdb.init` from another shell.
 #   --trace     Log int / cpu_reset / in_asm to ./qemu.log.
 #               Produces a large file; opt-in for exception debugging.
+#   --netdump   Dump every virtio-net frame to ./vionet.pcap (override
+#               with NETDUMP_FILE=...). Open with wireshark/tshark to
+#               see ARP, DHCP, outbound IP exactly as it leaves the guest.
 #   --mem MB    Guest RAM in megabytes. Default 128.
 #
 # Runs under the default -machine pc (i440fx + PIIX3); OVMF works on
@@ -30,7 +33,15 @@ NVME_SIZE_MB=64
 DISPLAY_FLAGS="-display none"
 GDB_FLAGS=""
 TRACE_FLAGS=""
+NETDUMP_FLAGS=""
 MEM=128
+
+# Honour `NETDUMP=1` from the environment so wrapper Makefiles (e.g.
+# `make selftest NETDUMP=1`) can opt into the pcap without rewriting
+# their boot.sh invocation. The --netdump flag below also turns it on.
+if [ -n "$NETDUMP" ] && [ "$NETDUMP" != "0" ]; then
+    set -- --netdump "$@"
+fi
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -47,6 +58,15 @@ while [ $# -gt 0 ]; do
         --trace)
             TRACE_FLAGS="-d int,cpu_reset,in_asm -D qemu.log"
             echo "[boot.sh] tracing int,cpu_reset,in_asm to ./qemu.log"
+            shift
+            ;;
+        --netdump)
+            # Capture every frame on the virtio-net netdev to a pcap so
+            # we can see ARP / DHCP / outbound IP exactly as it leaves
+            # the guest. Open the result with wireshark / tshark.
+            NETDUMP_FILE="${NETDUMP_FILE:-./vionet.pcap}"
+            NETDUMP_FLAGS="-object filter-dump,id=netdump0,netdev=n0,file=$NETDUMP_FILE"
+            echo "[boot.sh] capturing virtio-net traffic to $NETDUMP_FILE"
             shift
             ;;
         --mem)
@@ -156,4 +176,4 @@ exec qemu-system-x86_64 -m "$MEM" \
     -netdev user,id=n0 \
     -device virtio-net-pci,netdev=n0 \
     -no-reboot \
-    $DISPLAY_FLAGS $GDB_FLAGS $TRACE_FLAGS
+    $DISPLAY_FLAGS $GDB_FLAGS $TRACE_FLAGS $NETDUMP_FLAGS
