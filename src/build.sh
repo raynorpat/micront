@@ -822,6 +822,11 @@ DRIVER_TARGETS=(
     atdisk null fastfat npfs msfs serial
     i8042prt kbdclass mouclass
     vga_miniport bochsvga
+    # ndis_wrapper produces ndis.lib, which build_virtio's vionet link
+    # step consumes — must come before `virtio` here. Other networking
+    # bits (tdi_wrapper / tcpip / afd) come further down because they
+    # also depend on virtio.lib being current.
+    ndis_wrapper
     virtio
     # SCSI subsystem (dependency order: class.lib -> scsiport -> scsidisk).
     # nvme2k is a SCSI miniport on top of scsiport.
@@ -829,12 +834,8 @@ DRIVER_TARGETS=(
     dd_scsiport
     dd_scsidisk
     dd_nvme2k
-    # Networking. ndis.sys is the framework miniports register against;
-    # tdi.sys is the wrapper TDI clients link to; tcpip.sys (which has
-    # ip.lib statically linked in) is the actual TCP/UDP/IP transport.
-    # Build order matters: tcpip.sys depends on ndis.lib + tdi.lib + ip.lib.
-    ndis_wrapper
-    ndis_vionet
+    # Rest of the network stack. tcpip.sys depends on ndis.lib +
+    # tdi.lib + ip.lib; afd depends on tdi.lib.
     tdi_wrapper
     tdi_tcpip_ip
     tdi_tcpip_tcp

@@ -67,7 +67,19 @@ HalEndSystemInterrupt(
 }
 
 /*
- * HalEnableSystemInterrupt - unmask a specific IRQ
+ * HalEnableSystemInterrupt - unmask a specific IRQ.
+ *
+ * Drivers reach here via KeConnectInterrupt (after IoConnectInterrupt
+ * or NDIS' wrapper). Vector is the SYSTEM IDT vector — already
+ * translated from the bus-relative IRQ by HalGetInterruptVector.
+ * If you call NdisMRegisterInterrupt: pass BUS-level vec/irql, NDIS
+ * does the translation internally; passing system-level values
+ * double-converts and the resulting Vector misses the mask write
+ * here, leaving the IRQ blocked at PIC level for ever after.
+ *
+ * InterruptMode is honoured implicitly by the chipset's existing
+ * ELCR config — we don't program ELCR per-IRQ (stock NT 3.5 HALX86
+ * doesn't either; ELCR is treated as firmware-supplied input).
  */
 BOOLEAN
 HalEnableSystemInterrupt(
@@ -78,7 +90,7 @@ HalEnableSystemInterrupt(
 {
     ULONG irq;
 
-    HalpSerialPrint("HAL: EnableSystemInterrupt\r\n");
+    UNREFERENCED_PARAMETER(InterruptMode);
 
     if (Vector < PRIMARY_VECTOR_BASE || Vector >= PRIMARY_VECTOR_BASE + 16) {
         return FALSE;
