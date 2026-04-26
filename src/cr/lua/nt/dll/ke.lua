@@ -40,6 +40,10 @@ NTSTATUS __stdcall NtWaitForMultipleObjects(ULONG Count,
 NTSTATUS __stdcall NtDelayExecution(unsigned char Alertable,
                                     LARGE_INTEGER *DelayInterval);
 NTSTATUS __stdcall NtAlertThread   (HANDLE ThreadHandle);
+
+NTSTATUS __stdcall NtQuerySystemTime(LARGE_INTEGER *SystemTime);
+NTSTATUS __stdcall NtQueryPerformanceCounter(LARGE_INTEGER *PerformanceCounter,
+                                             LARGE_INTEGER *PerformanceFrequency);
 ]]
 
 local M = {}
@@ -107,6 +111,30 @@ end
 function M.NtAlertThread(thread_handle)
     local st = ntdll.NtAlertThread(handle.raw(thread_handle))
     if err.is_error(st) then err.raise('NtAlertThread', st) end
+end
+
+-- Wall-clock time in NT's native units (100ns intervals since 1601-01-01,
+-- UTC). Returns a fresh LARGE_INTEGER cdata; the caller may keep it across
+-- other calls. For a Unix-epoch number, divide QuadPart by 1e7 and
+-- subtract 11_644_473_600 — see os.lua's time helpers.
+function M.NtQuerySystemTime()
+    local t  = ffi.new('LARGE_INTEGER')
+    local st = ntdll.NtQuerySystemTime(t)
+    if err.is_error(st) then err.raise('NtQuerySystemTime', st) end
+    return t
+end
+
+-- Monotonic high-resolution counter, returned as (counter, frequency)
+-- Lua numbers (each is the QuadPart of a LARGE_INTEGER). NT 3.5 with
+-- MicroNT's custom HAL returns frequency=0 because the HAL doesn't
+-- implement the perf counter primitive — callers should treat that as
+-- "not available" and fall back to NtQuerySystemTime for elapsed time.
+function M.NtQueryPerformanceCounter()
+    local c  = ffi.new('LARGE_INTEGER')
+    local f  = ffi.new('LARGE_INTEGER')
+    local st = ntdll.NtQueryPerformanceCounter(c, f)
+    if err.is_error(st) then err.raise('NtQueryPerformanceCounter', st) end
+    return tonumber(c.QuadPart), tonumber(f.QuadPart)
 end
 
 -- ------------------------------------------------------------------

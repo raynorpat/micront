@@ -37,6 +37,8 @@ require('test.sys')
 require('test.tree')
 require('test.thread')
 require('test.sync')
+require('test.io')
+require('test.os')
 
 local ok = t.summary()
 print("")

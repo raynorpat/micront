@@ -26,6 +26,7 @@ local ffi    = require('ffi')
 local ntdll  = require('nt.dll')
 local err    = require('nt.dll.errors')
 local handle = require('nt.dll.handle')
+local str    = require('nt.dll.str')
 
 -- Pack(4) for LARGE_INTEGER-bearing structs; see nt.dll.sys for the
 -- NT 3.5 alignment discussion.
@@ -60,6 +61,47 @@ typedef struct _FILE_DIRECTORY_INFORMATION {
     ULONG         FileNameLength;
     wchar_t       FileName[1];
 } FILE_DIRECTORY_INFORMATION;
+
+typedef struct _FILE_POSITION_INFORMATION {
+    LARGE_INTEGER CurrentByteOffset;
+} FILE_POSITION_INFORMATION;
+
+typedef struct _FILE_END_OF_FILE_INFORMATION {
+    LARGE_INTEGER EndOfFile;
+} FILE_END_OF_FILE_INFORMATION;
+
+typedef struct _FILE_DISPOSITION_INFORMATION {
+    unsigned char DeleteFile;
+} FILE_DISPOSITION_INFORMATION;
+
+#pragma pack(pop)
+
+/* FILE_RENAME_INFORMATION is variable-length: header + inline FileName.
+ * Trailing wchar_t[?] flexes via ffi.new('FILE_RENAME_INFORMATION', n);
+ * the result is a single cdata whose lifetime covers both the header
+ * and the name buffer — same fused-allocation pattern as NT_STRING and
+ * NT_OA_PATH, no cast-pointer aliasing.
+ *
+ * Pack is 2 (NOT 4) because NT 3.5's kernel struct layout for this
+ * specific type uses pack(2) — empirically verified via DbgPrint of
+ * FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName) returning 10 (not
+ * 12). With pack(2), HANDLE goes at offset 2 (1-byte pad after the
+ * BOOLEAN), ULONG at offset 6, FileName at offset 10. With pack(4)
+ * we'd put HANDLE at 4 / FileName at 12, and the kernel would
+ * misread our FileNameLength field as 0x00360000 = 3,538,944 (the
+ * low byte of our actual FileNameLength shifted into the high byte
+ * of the kernel's expected position). The validation
+ * `FIELD_OFFSET(FileName) + FileNameLength <= Length` blows up with
+ * STATUS_INVALID_PARAMETER. Other fs structs in this module are
+ * pack(4)-safe because they don't have a small-then-large field
+ * pairing that creates pack-dependent padding. */
+#pragma pack(push, 2)
+typedef struct _FILE_RENAME_INFORMATION {
+    unsigned char ReplaceIfExists;
+    HANDLE        RootDirectory;
+    ULONG         FileNameLength;   /* bytes, not wchars */
+    wchar_t       FileName[?];
+} FILE_RENAME_INFORMATION;
 #pragma pack(pop)
 
 NTSTATUS __stdcall NtCreateFile(HANDLE *FileHandle,
@@ -79,6 +121,12 @@ NTSTATUS __stdcall NtQueryInformationFile(HANDLE FileHandle,
                                           void *FileInformation,
                                           ULONG Length,
                                           int FileInformationClass);
+
+NTSTATUS __stdcall NtSetInformationFile(HANDLE FileHandle,
+                                        IO_STATUS_BLOCK *IoStatusBlock,
+                                        void *FileInformation,
+                                        ULONG Length,
+                                        int FileInformationClass);
 
 NTSTATUS __stdcall NtQueryDirectoryFile(HANDLE FileHandle,
                                         HANDLE Event,
@@ -131,12 +179,57 @@ NTSTATUS __stdcall NtDeviceIoControlFile(HANDLE FileHandle,
                                          ULONG OutputBufferLength);
 ]]
 
--- STATUS_END_OF_FILE = 0xC0000011 — severity ERROR, so the uniform
--- is_error check would raise on it. EOF is expected in read loops
--- though, so NtReadFile special-cases it through.
-local STATUS_END_OF_FILE_UINT = 0xC0000011
+-- STATUS_END_OF_FILE has severity ERROR, so the uniform is_error
+-- check would raise on it. EOF is expected in read loops though, so
+-- NtReadFile special-cases it through. Constant lives in M (publicly
+-- exposed so callers can match against the status we return).
 
 local M = {}
+
+-- ------------------------------------------------------------------
+-- File-API constants — re-exported so callers (io.lua, os.lua, tests)
+-- don't have to re-derive them from MSDN-style hex literals. Values
+-- are stable across NT versions; sourced from NT/PUBLIC/SDK/INC/NTIOAPI.H
+-- and WINNT.H.
+-- ------------------------------------------------------------------
+
+-- Access masks — composite "GENERIC" forms include SYNCHRONIZE, so
+-- callers don't need to OR it in separately for synchronous handles.
+M.FILE_GENERIC_READ            = 0x00120089
+M.FILE_GENERIC_WRITE           = 0x00120116
+
+-- Standard rights commonly OR'd with the per-class bits above.
+M.DELETE                       = 0x00010000
+M.SYNCHRONIZE                  = 0x00100000
+
+-- ShareAccess.
+M.FILE_SHARE_READ              = 0x00000001
+M.FILE_SHARE_WRITE             = 0x00000002
+M.FILE_SHARE_DELETE            = 0x00000004
+
+-- CreateDisposition.
+M.FILE_SUPERSEDE               = 0
+M.FILE_OPEN                    = 1
+M.FILE_CREATE                  = 2
+M.FILE_OPEN_IF                 = 3
+M.FILE_OVERWRITE               = 4
+M.FILE_OVERWRITE_IF            = 5
+
+-- CreateOptions.
+M.FILE_DIRECTORY_FILE          = 0x00000001
+M.FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020
+M.FILE_NON_DIRECTORY_FILE      = 0x00000040
+M.FILE_DELETE_ON_CLOSE         = 0x00001000
+
+-- FileAttributes (NtCreateFile FileAttributes argument).
+M.FILE_ATTRIBUTE_NORMAL        = 0x00000080
+M.FILE_ATTRIBUTE_DIRECTORY     = 0x00000010
+
+-- Pseudo-status codes used at the read boundary. STATUS_END_OF_FILE
+-- (severity ERROR) is special-cased through NtReadFile rather than
+-- raised, so callers that want to detect EOF need this constant.
+M.STATUS_END_OF_FILE           = 0xC0000011
+M.STATUS_NO_MORE_FILES         = 0x80000006
 
 function M.NtCreateFile(access, oa, alloc_size, file_attrs, share,
                         disposition, options, ea_buffer, ea_length)
@@ -163,7 +256,7 @@ function M.NtReadFile(h, buffer, length, byte_offset)
     local st = ntdll.NtReadFile(handle.raw(h), nil, nil, nil, iosb,
                                 buffer, length, byte_offset, nil)
     local stu = err.normalize(st)
-    if err.is_error(st) and stu ~= STATUS_END_OF_FILE_UINT then
+    if err.is_error(st) and stu ~= M.STATUS_END_OF_FILE then
         err.raise('NtReadFile', st)
     end
     return iosb.Information, stu
@@ -188,9 +281,21 @@ function M.NtDeviceIoControlFile(h, ioctl,
     return iosb.Information
 end
 
--- FILE_INFORMATION_CLASS subset used below.
-local FileBasicInformation    = 4
-local FileStandardInformation = 5
+-- FILE_INFORMATION_CLASS subset used below. Values from
+-- NT/PUBLIC/SDK/INC/NTIOAPI.H — stable across NT versions.
+local FileBasicInformation       = 4
+local FileStandardInformation    = 5
+local FileRenameInformation      = 10
+local FileDispositionInformation = 13
+local FilePositionInformation    = 14
+local FileEndOfFileInformation   = 20
+
+M.FileBasicInformation       = FileBasicInformation
+M.FileStandardInformation    = FileStandardInformation
+M.FileRenameInformation      = FileRenameInformation
+M.FileDispositionInformation = FileDispositionInformation
+M.FilePositionInformation    = FilePositionInformation
+M.FileEndOfFileInformation   = FileEndOfFileInformation
 
 -- Query fixed-size file info. Returns a freshly-allocated cdata of the
 -- requested class. NT 3.5 strict-checks Length == sizeof for fixed
@@ -209,6 +314,86 @@ end
 
 M.query_basic    = make_file_query('FILE_BASIC_INFORMATION',    FileBasicInformation)
 M.query_standard = make_file_query('FILE_STANDARD_INFORMATION', FileStandardInformation)
+
+-- Generic NtSetInformationFile bridge. info is a cdata of any size; the
+-- caller supplies the matching FILE_*_INFORMATION class.
+function M.NtSetInformationFile(h, info, length, info_class)
+    local iosb = ffi.new('IO_STATUS_BLOCK')
+    local st = ntdll.NtSetInformationFile(handle.raw(h), iosb,
+                                          info, length, info_class)
+    if err.is_error(st) then err.raise('NtSetInformationFile', st) end
+    return iosb.Information
+end
+
+-- file:seek-style helpers. Set (and read) the kernel-side file pointer
+-- on a synchronous handle. NtRead/WriteFile with ByteOffset=nil consults
+-- this pointer; the wrappers in this module already pass `byte_offset`
+-- explicitly, but for io.lua's `file:seek` we want NT to track position.
+function M.set_position(h, offset)
+    local info = ffi.new('FILE_POSITION_INFORMATION')
+    info.CurrentByteOffset.QuadPart = offset
+    M.NtSetInformationFile(h, info,
+                           ffi.sizeof('FILE_POSITION_INFORMATION'),
+                           FilePositionInformation)
+end
+
+function M.get_position(h)
+    local info = ffi.new('FILE_POSITION_INFORMATION')
+    local iosb = ffi.new('IO_STATUS_BLOCK')
+    local st = ntdll.NtQueryInformationFile(handle.raw(h), iosb,
+        info, ffi.sizeof('FILE_POSITION_INFORMATION'), FilePositionInformation)
+    if err.is_error(st) then err.raise('NtQueryInformationFile', st) end
+    return tonumber(info.CurrentByteOffset.QuadPart)
+end
+
+-- Mark file for deletion on last close. Handle must have been opened
+-- with DELETE access. NT 3.5 deletes when the last handle to the file
+-- (anywhere in the system) is closed; subsequent opens fail with
+-- STATUS_DELETE_PENDING until that happens.
+function M.set_disposition(h, delete)
+    local info = ffi.new('FILE_DISPOSITION_INFORMATION')
+    info.DeleteFile = delete and 1 or 0
+    M.NtSetInformationFile(h, info,
+                           ffi.sizeof('FILE_DISPOSITION_INFORMATION'),
+                           FileDispositionInformation)
+end
+
+-- Truncate / extend the file to the given byte length. Handle needs
+-- FILE_WRITE_DATA. After this returns the file pointer is unchanged.
+function M.set_end_of_file(h, length)
+    local info = ffi.new('FILE_END_OF_FILE_INFORMATION')
+    info.EndOfFile.QuadPart = length
+    M.NtSetInformationFile(h, info,
+                           ffi.sizeof('FILE_END_OF_FILE_INFORMATION'),
+                           FileEndOfFileInformation)
+end
+
+-- Rename via FILE_RENAME_INFORMATION. `new_name` is a UTF-8 Lua string;
+-- decoded internally to UTF-16. `replace` defaults to false; if true
+-- and the target exists it gets clobbered. `root_handle` is an optional
+-- NT_HANDLE — when provided, the name is interpreted relative to that
+-- directory (e.g. for renaming inside an already-opened parent dir
+-- handle). Raw HANDLEs are not accepted; handle.raw enforces NT_HANDLE.
+local WCHAR_BYTES = ffi.sizeof('wchar_t')
+
+function M.set_rename(h, new_name, replace, root_handle)
+    local wchars = str.decode_utf8(new_name)
+    local n      = #wchars
+    -- Single fused cdata: header + n wchars in one allocation. ffi.new
+    -- with the trailing-VLA cdef gives us one ref to keep alive across
+    -- the syscall; no cast-pointer aliasing.
+    local info = ffi.new('FILE_RENAME_INFORMATION', n)
+    info.ReplaceIfExists = replace and 1 or 0
+    info.RootDirectory   = root_handle and handle.raw(root_handle) or nil
+    info.FileNameLength  = n * WCHAR_BYTES        -- bytes, per NT contract
+    for i = 1, n do
+        info.FileName[i-1] = wchars[i]
+    end
+    -- `ffi.sizeof('TYPE', nelem)` is the documented LuaJIT idiom for
+    -- VLA-struct sizing; should give header + nelem*element_size.
+    local total_length = ffi.sizeof('FILE_RENAME_INFORMATION', n)
+    M.NtSetInformationFile(h, info, total_length, FileRenameInformation)
+end
 
 -- Directory enumeration. Caller provides buffer; each call returns one
 -- or more FILE_DIRECTORY_INFORMATION records (linked via NextEntryOffset).

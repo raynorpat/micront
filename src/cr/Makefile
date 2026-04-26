@@ -69,12 +69,13 @@ BUILD      := $(REPO)/build/disk
 LUAJIT_SRC := $(MKFILE_DIR)luajit/src
 LUAJIT_OUT := $(LUAJIT_SRC)/luajit.exe
 
-# Boot-time Control\Init values. mkhive.py bakes defaults matching
-# these; overriding here drives the cr iteration loop (e.g. swap
-# main.lua for selftest.lua without rebuilding the toolchain).
-INIT_EXE   ?= lua\run.exe
-INIT_ARGS  ?= \SystemRoot\lua\main.lua
-INIT_STDIO ?= \Device\Serial0
+# Init args override. mkhive.py's defaults already point at lua\run.exe
+# and \SystemRoot\lua\main.lua with stdio on \Device\Serial0; the only
+# thing we override here is the script the kernel hands to run.exe,
+# so `make selftest` can swap main.lua for selftest.lua without
+# re-running the rest of the toolchain. Empty by default → mkhive
+# bakes its own defaults.
+INIT_ARGS_FLAG ?=
 
 # Default target: build run.exe. Must come before any other rule so
 # `make` with no args picks it up.
@@ -171,11 +172,7 @@ clean:
 # mkdisk's _lua_tree_files stages run.exe + the whole lua/ tree.
 disk: all
 	mkdir -p $(BUILD)
-	python3 $(TOOLS)/mkhive.py \
-	    --init-exe '$(INIT_EXE)' \
-	    --init-args '$(INIT_ARGS)' \
-	    --init-stdio '$(INIT_STDIO)' \
-	    $(BUILD)/SYSTEM
+	python3 $(TOOLS)/mkhive.py $(INIT_ARGS_FLAG) $(BUILD)/SYSTEM
 	python3 $(TOOLS)/mkdisk.py \
 	    --output-dir $(BUILD) \
 	    --efi-binary $(BOOT_EFI)/BOOTX64.EFI
@@ -183,7 +180,7 @@ disk: all
 boot: disk
 	$(SRC)/boot.sh
 
-selftest: INIT_ARGS = \SystemRoot\lua\selftest.lua
+selftest: INIT_ARGS_FLAG = --init-args '\SystemRoot\lua\selftest.lua'
 selftest: boot
 
 .PHONY: all rebuild clean info disk boot selftest luajit-clean

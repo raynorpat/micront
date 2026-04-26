@@ -92,9 +92,10 @@ NTSTATUS __stdcall NtCreateThread(HANDLE *h, ULONG Access,
                                   CONTEXT *ctx, INITIAL_TEB *teb,
                                   unsigned char CreateSuspended);
 
-NTSTATUS __stdcall NtTerminateThread(HANDLE h, NTSTATUS ExitStatus);
-NTSTATUS __stdcall NtSuspendThread  (HANDLE h, ULONG *PreviousCount);
-NTSTATUS __stdcall NtResumeThread   (HANDLE h, ULONG *PreviousCount);
+NTSTATUS __stdcall NtTerminateProcess(HANDLE h, NTSTATUS ExitStatus);
+NTSTATUS __stdcall NtTerminateThread (HANDLE h, NTSTATUS ExitStatus);
+NTSTATUS __stdcall NtSuspendThread   (HANDLE h, ULONG *PreviousCount);
+NTSTATUS __stdcall NtResumeThread    (HANDLE h, ULONG *PreviousCount);
 
 /* RtlCreateUserThread bundles stack alloc + CONTEXT + INITIAL_TEB +
  * RtlUserThreadStart trampoline. Almost always what you want; raw
@@ -226,6 +227,14 @@ function M.NtTerminateThread(h, exit_status)
     local raw = (h == nil) and CURRENT_THREAD or handle.raw(h)
     local st = ntdll.NtTerminateThread(raw, exit_status or 0)
     if err.is_error(st) then err.raise('NtTerminateThread', st) end
+end
+
+-- Terminate a process. nil h means the current process (-1 pseudo-handle);
+-- the syscall does not return in that case. exit_status defaults to 0.
+function M.NtTerminateProcess(h, exit_status)
+    local raw = (h == nil) and CURRENT_PROCESS or handle.raw(h)
+    local st = ntdll.NtTerminateProcess(raw, exit_status or 0)
+    if err.is_error(st) then err.raise('NtTerminateProcess', st) end
 end
 
 -- Returns the thread's previous suspend count.
