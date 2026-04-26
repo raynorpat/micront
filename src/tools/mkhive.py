@@ -742,6 +742,22 @@ def build_system_hive(init_exe: str | None = None,
     # subkeys come in a follow-up once we confirm the stack loads).
     tcpip["Parameters"]
 
+    # afd.sys - Ancillary Function Driver. Provides \Device\Afd, the
+    # socket emulation layer above TDI. Userland (Lua via nt.afd)
+    # opens \Device\Afd with an EA buffer naming the underlying TDI
+    # transport (\Device\Tcp / \Device\Udp); IOCTL_AFD_* +
+    # repurposed IRP_MJ_READ/WRITE drive the socket-shape API.
+    # Same Group as tcpip ("TDI") with DependOnService=["tcpip"] so
+    # the transports are registered when AfdCreate looks them up.
+    # No Parameters subkey - AFD has no static config; everything is
+    # discovered per-NtCreateFile via the EA buffer.
+    services["afd"] \
+        .set_dword("Type",         1) \
+        .set_dword("Start",        1) \
+        .set_dword("ErrorControl", 1) \
+        .set_sz("Group", "TDI") \
+        .set_multi_sz("DependOnService", ["tcpip"])
+
     # (videoprt / bochsvga / i8042prt: not auto-started - the Lua UI
     # layer will register + start them when it's ready.)
 

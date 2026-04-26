@@ -450,6 +450,18 @@ build_tdi_tcpip_tcp() {
     mkdir -p "$NTOS/TDI/TCPIP/TCP/obj/i386"
     run_nmake "$NTOS/TDI/TCPIP/TCP" "TDI/TCPIP/TCP - TCP/UDP transport (tcpip.sys)"
 }
+
+# afd.sys - Ancillary Function Driver. The socket emulation layer
+# above TDI: \Device\Afd takes IOCTL_AFD_* (bind / listen / accept /
+# poll / get_address) and IOCTL_TDI_CONNECT, and repurposes
+# IRP_MJ_READ/WRITE as recv/send. Userland (Lua via nt.afd) opens
+# \Device\Afd with an EA buffer naming the underlying TDI transport
+# (\Device\Tcp or \Device\Udp). Ported wholesale from NT 3.5 source
+# (NTOS/AFD); links against tdi.lib so must build after tdi_wrapper.
+build_afd() {
+    mkdir -p "$NTOS/AFD/obj/i386"
+    run_nmake "$NTOS/AFD" "AFD - socket emulation driver (afd.sys)"
+}
 build_null()   { run_nmake "$NTOS/DD/NULL"     "NULL - null device driver"; }
 build_fastfat(){ run_nmake "$NTOS/FASTFAT"     "FASTFAT - FAT filesystem driver"; }
 build_npfs()   { run_nmake "$NTOS/NPFS"       "NPFS - Named Pipe filesystem driver"; }
@@ -823,6 +835,7 @@ DRIVER_TARGETS=(
     tdi_wrapper
     tdi_tcpip_ip
     tdi_tcpip_tcp
+    afd
 )
 
 # Userland: just the native-NT runtime. rtl_user (user-mode RTL),

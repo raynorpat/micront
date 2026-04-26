@@ -512,10 +512,13 @@ _CORE_FILES: list[tuple[str, Path]] = [
     # virtio-net miniport on top, tdi.sys is the TDI wrapper used by
     # transport drivers, tcpip.sys is the TCP/UDP/IP transport that
     # binds upward against tdi clients and downward against vionet.
+    # afd.sys sits on top of tcpip and provides \Device\Afd — the
+    # socket-emulation layer Lua's nt.afd module opens for sockets.
     ("System32/Drivers/ndis.sys",     SDK_LIB / "ndis.sys"),
     ("System32/Drivers/vionet.sys",   SDK_LIB / "vionet.sys"),
     ("System32/Drivers/tdi.sys",      SDK_LIB / "tdi.sys"),
     ("System32/Drivers/tcpip.sys",    SDK_LIB / "tcpip.sys"),
+    ("System32/Drivers/afd.sys",      SDK_LIB / "afd.sys"),
 ]
 
 
