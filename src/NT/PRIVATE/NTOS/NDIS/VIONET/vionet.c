@@ -82,6 +82,11 @@ typedef struct _VIRTIO_NET_CONFIG {
 #define VIONET_RX_BUFS              64
 #define VIONET_TX_BUFS              32
 
+/* Polling fallback period in ms. With a working HAL interrupt path
+   this should be 0 (disabled). 50ms gives ~20Hz ring drain — enough
+   for interactive DNS / TCP without burning the CPU. */
+#define VIONET_POLL_MS              50
+
 #define VIONET_FRAME_MAX            1514       /* Ethernet payload + L2 hdr */
 #define VIONET_BUF_SIZE             (sizeof(VIRTIO_NET_HDR) + VIONET_FRAME_MAX)
 
@@ -103,6 +108,13 @@ typedef struct _VIONET_ADAPTER {
     NDIS_MINIPORT_INTERRUPT  Interrupt;
     BOOLEAN                  InterruptRegistered;
     BOOLEAN                  DriverUp;     /* TRUE once VirtioDevDriverUp ran */
+
+    /* HAL interrupt-routing on this PCI-only HAL doesn't yet deliver
+       INTx to MPISR (verified 2026-04 — ISR never fires, RX rings sit
+       untouched). Until the HAL is fixed, a periodic NDIS timer drains
+       the rings on a coarse cadence. Disable by setting period to 0. */
+    NDIS_TIMER               PollTimer;
+    BOOLEAN                  PollTimerActive;
 
     KSPIN_LOCK        Lock;        /* protects Tx free list, ring access */
 
@@ -153,6 +165,10 @@ static NDIS_STATUS  MPInitialize        (PNDIS_STATUS OpenErrorStatus,
 static VOID         MPHalt              (NDIS_HANDLE Ctx);
 static NDIS_STATUS  MPReset             (PBOOLEAN AddressingReset, NDIS_HANDLE Ctx);
 static NDIS_STATUS  MPSend              (NDIS_HANDLE Ctx, PNDIS_PACKET Packet, UINT Flags);
+static VOID         VioNetPollTick      (NDIS_HANDLE SystemSpecific1,
+                                         PVOID FunctionContext,
+                                         NDIS_HANDLE SystemSpecific2,
+                                         NDIS_HANDLE SystemSpecific3);
 static VOID         MPISR               (PBOOLEAN InterruptRecognized,
                                          PBOOLEAN QueueMiniportHandleInterrupt,
                                          NDIS_HANDLE Ctx);
@@ -353,6 +369,8 @@ MPInitialize(PNDIS_STATUS OpenErrorStatus,
     {
         ULONG vec   = adapter->Pci.InterruptVector;
         KIRQL irql  = adapter->Pci.InterruptLevel;
+        DbgPrint("VIONET: NdisMRegisterInterrupt vec=%lu irql=%u "
+                 "shared=1 levelsens=1\n", vec, (unsigned)irql);
         status = NdisMRegisterInterrupt(&adapter->Interrupt,
                                         adapter->MiniportHandle,
                                         vec, irql,
@@ -364,6 +382,19 @@ MPInitialize(PNDIS_STATUS OpenErrorStatus,
             goto fail;
         }
         adapter->InterruptRegistered = TRUE;
+    }
+
+    /* (9b) Polling fallback — see VIONET_POLL_MS comment. NDIS 3.0
+            only has one-shot NdisSetTimer; the callback re-arms itself
+            at the end so we get a periodic effect. Fires at
+            DISPATCH_LEVEL — same IRQL the real DPC would run at — so
+            MPHandleInterrupt is safe to call from it. */
+    if (VIONET_POLL_MS > 0) {
+        NdisInitializeTimer(&adapter->PollTimer, VioNetPollTick, adapter);
+        adapter->PollTimerActive = TRUE;
+        NdisSetTimer(&adapter->PollTimer, VIONET_POLL_MS);
+        DbgPrint("VIONET: poll fallback armed @ %u ms\n",
+                 (unsigned)VIONET_POLL_MS);
     }
 
     /* (10) Mark driver up. The device may now post received packets
@@ -561,6 +592,13 @@ static VOID
 VioNetTeardown(PVIONET_ADAPTER adapter)
 {
     if (!adapter) return;
+    if (adapter->PollTimerActive) {
+        /* Clear the re-arm gate first, then cancel any in-flight timer.
+           NDIS 3.0 has no exported NdisCancelTimer, so reach into the
+           NDIS_TIMER's embedded KTIMER directly. */
+        adapter->PollTimerActive = FALSE;
+        KeCancelTimer(&adapter->PollTimer.Timer);
+    }
     if (adapter->InterruptRegistered) {
         NdisMDeregisterInterrupt(&adapter->Interrupt);
         adapter->InterruptRegistered = FALSE;
@@ -671,7 +709,16 @@ MPSend(NDIS_HANDLE Ctx, PNDIS_PACKET Packet, UINT Flags)
 /* ------------------------------------------------------------------ *
  * Top-half ISR. Stays minimal: ack the device's ISR register, queue
  * MPHandleInterrupt for DPC-time work.
+ *
+ * DIAG (RX-stall investigation, 2026-04): bumping a pair of static
+ * counters here so the DPC trace can show how many ISR entries and
+ * how many of those VirtioPciIsr considered ours. DbgPrint is unsafe
+ * at DIRQL on some platforms; defer the print to the DPC.
  * ------------------------------------------------------------------ */
+static volatile ULONG g_VionetIsrCalls   = 0;
+static volatile ULONG g_VionetIsrHandled = 0;
+static volatile ULONG g_VionetDpcCalls   = 0;
+
 static VOID
 MPISR(PBOOLEAN InterruptRecognized,
       PBOOLEAN QueueMiniportHandleInterrupt,
@@ -679,6 +726,13 @@ MPISR(PBOOLEAN InterruptRecognized,
 {
     PVIONET_ADAPTER adapter = (PVIONET_ADAPTER)Ctx;
     int handled = VirtioPciIsr(&adapter->Pci);
+    ULONG n = ++g_VionetIsrCalls;
+    if (handled) g_VionetIsrHandled++;
+    /* Print only the first ISR entry so we don't flood. The DPC trace
+       includes the running ISR counter for subsequent visibility. */
+    if (n == 1) {
+        DbgPrint("VIONET: ISR first-call handled=%d\n", handled);
+    }
     *InterruptRecognized           = (BOOLEAN)(handled != 0);
     *QueueMiniportHandleInterrupt  = (BOOLEAN)(handled != 0);
 }
@@ -691,8 +745,33 @@ static VOID
 MPHandleInterrupt(NDIS_HANDLE Ctx)
 {
     PVIONET_ADAPTER adapter = (PVIONET_ADAPTER)Ctx;
+    LARGE_INTEGER tick;
+    KeQueryTickCount(&tick);
+    g_VionetDpcCalls++;
+    DbgPrint("VIONET: DPC #%lu tick=%lu isr=%lu/%lu\n",
+             g_VionetDpcCalls, tick.LowPart,
+             g_VionetIsrHandled, g_VionetIsrCalls);
     VioNetDrainTxComplete(adapter);
     VioNetDrainRx(adapter);
+}
+
+/* Periodic polling fallback. NDIS 3.0 only has one-shot NdisSetTimer,
+   so the tick re-arms itself at the end. The PollTimerActive flag is
+   our gate — VioNetTeardown clears it, then KeCancelTimers the KTIMER,
+   so the next tick (if already queued) finds the flag false and
+   doesn't re-arm. See VIONET_POLL_MS — set to 0 to disable. */
+static VOID
+VioNetPollTick(NDIS_HANDLE SystemSpecific1, PVOID FunctionContext,
+               NDIS_HANDLE SystemSpecific2, NDIS_HANDLE SystemSpecific3)
+{
+    PVIONET_ADAPTER adapter = (PVIONET_ADAPTER)FunctionContext;
+    UNREFERENCED_PARAMETER(SystemSpecific1);
+    UNREFERENCED_PARAMETER(SystemSpecific2);
+    UNREFERENCED_PARAMETER(SystemSpecific3);
+    MPHandleInterrupt((NDIS_HANDLE)adapter);
+    if (adapter->PollTimerActive) {
+        NdisSetTimer(&adapter->PollTimer, VIONET_POLL_MS);
+    }
 }
 
 static VOID
@@ -704,6 +783,7 @@ VioNetDrainTxComplete(PVIONET_ADAPTER adapter)
     ULONG    idx;
     PNDIS_PACKET pkt;
     KIRQL    irql;
+    ULONG    drained = 0;
 
     UNREFERENCED_PARAMETER(used_len);
 
@@ -721,6 +801,7 @@ VioNetDrainTxComplete(PVIONET_ADAPTER adapter)
         adapter->TxFreeList[(adapter->TxFreeHead + adapter->TxFreeCount)
                             % adapter->TxBufCount] = idx;
         adapter->TxFreeCount++;
+        drained++;
 
         /* Send-complete callback runs outside the spinlock to
            avoid recursive acquisition if the protocol re-sends. */
@@ -732,6 +813,7 @@ VioNetDrainTxComplete(PVIONET_ADAPTER adapter)
         KeAcquireSpinLock(&adapter->Lock, &irql);
     }
     KeReleaseSpinLock(&adapter->Lock, irql);
+    if (drained) DbgPrint("VIONET: TX drained %lu\n", drained);
 }
 
 static VOID
@@ -744,10 +826,12 @@ VioNetDrainRx(PVIONET_ADAPTER adapter)
     PUCHAR   frameStart;
     UINT     frameLen;
     BOOLEAN  anyIndicated = FALSE;
+    ULONG    drained = 0;
 
     for (;;) {
         st = VirtqDequeue(adapter->RxQ, &cookie, &used_len);
         if (!NT_SUCCESS(st)) break;
+        drained++;
         /* Cookie was stored as (i+1) so it's never NULL — see VioNetPrepostRx. */
         if (!cookie) continue;
         idx = (ULONG)cookie - 1;
@@ -789,6 +873,10 @@ repost:
     if (anyIndicated) {
         NdisMEthIndicateReceiveComplete(adapter->MiniportHandle);
         VirtqHostNotify(adapter->RxQ);
+    }
+    if (drained) {
+        DbgPrint("VIONET: RX drained %lu indicated=%d\n",
+                 drained, (int)anyIndicated);
     }
 }
 

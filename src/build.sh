@@ -642,12 +642,15 @@ build_vioinput() { run_nmake "$NTOS/DD/VIOINPUT" "VIOINPUT - virtio-input keyboa
 # Whole virtio subsystem: shared lib + every consumer .sys. Because
 # build.sh's mtime prepass only sees per-component .c/.h, a change to
 # RING.C / BUS.C / PCI.C won't relink the .sys files unless we walk
-# the consumers explicitly here.
+# the consumers explicitly here. vionet lives under NDIS/VIONET (not
+# DD/) but it links virtio.lib like everything else, so it belongs
+# in this group too.
 build_virtio() {
     build_virtio_lib   || return $?
     build_viorng       || return $?
     build_vioser       || return $?
     build_vioinput     || return $?
+    build_ndis_vionet  || return $?
 }
 
 # --- Userland (native NT) ----------------------------------------------------
