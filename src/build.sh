@@ -620,12 +620,23 @@ build_bochsvga(){
 # Shared bus + ring + PCI legacy transport. Linked into all virtio device
 # drivers (viorng.sys, vioser.sys, future virtionet.sys, ...). Adapted
 # from Unikraft (BSD-3); algorithms from the virtio spec.
-build_virtio() { run_nmake "$NTOS/VIRTIO" "VIRTIO - bus + ring + PCI legacy (virtio.lib)"; }
+build_virtio_lib() { run_nmake "$NTOS/VIRTIO" "VIRTIO - bus + ring + PCI legacy (virtio.lib)"; }
 
 # Virtio device drivers — each links against virtio.lib.
 build_viorng()   { run_nmake "$NTOS/DD/VIORNG"   "VIORNG - virtio-rng entropy driver"; }
 build_vioser()   { run_nmake "$NTOS/DD/VIOSER"   "VIOSER - virtio-console driver"; }
 build_vioinput() { run_nmake "$NTOS/DD/VIOINPUT" "VIOINPUT - virtio-input keyboard/mouse driver"; }
+
+# Whole virtio subsystem: shared lib + every consumer .sys. Because
+# build.sh's mtime prepass only sees per-component .c/.h, a change to
+# RING.C / BUS.C / PCI.C won't relink the .sys files unless we walk
+# the consumers explicitly here.
+build_virtio() {
+    build_virtio_lib   || return $?
+    build_viorng       || return $?
+    build_vioser       || return $?
+    build_vioinput     || return $?
+}
 
 # --- Userland (native NT) ----------------------------------------------------
 
@@ -634,6 +645,16 @@ build_rtl_user() {
     # TARGETPATH=..\obj puts rtl.lib at RTL/obj/i386/ — ensure it exists.
     mkdir -p "$NTOS/RTL/obj/i386"
     run_nmake "$NTOS/RTL/USER" "RTL_USER - user-mode runtime library"
+}
+
+# gensrv: NT syscall stub generator. NTOS/DLL/DAYTONA's nmake rule
+# invokes bare `gensrv -f ntdll.xtr ...` to generate i386/usrstubs.asm
+# (the user-mode syscall thunks linked into ntdll.dll). Built from
+# source under PRIVATE/SDKTOOLS/GENSRV; UMAPPL=1 in its SOURCES so we
+# preserve that with KEEP_UMAPPL.
+build_gensrv() {
+    KEEP_UMAPPL=1 run_nmake "$NT_ROOT/PRIVATE/SDKTOOLS/GENSRV" "GENSRV - NT syscall stub generator"
+    install_host_tool "$NT_ROOT/PRIVATE/SDKTOOLS/GENSRV/obj/i386/gensrv.exe" "gensrv.exe"
 }
 build_ntdll()  {
     # DAYTONA build dir needs an i386 subdir for generated usrstubs.asm.
@@ -766,6 +787,7 @@ TOOL_TARGETS=(
     link
     mc
     rc
+    gensrv
 )
 
 NTOSKRNL_TARGETS=(
@@ -786,9 +808,6 @@ DRIVER_TARGETS=(
     i8042prt kbdclass mouclass
     vga_miniport bochsvga
     virtio
-    viorng
-    vioser
-    vioinput
     # SCSI subsystem (dependency order: class.lib -> scsiport -> scsidisk).
     # nvme2k is a SCSI miniport on top of scsiport.
     dd_class
