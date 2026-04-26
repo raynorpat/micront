@@ -39,6 +39,7 @@ require('test.thread')
 require('test.sync')
 require('test.io')
 require('test.os')
+require('test.afd')
 
 local ok = t.summary()
 print("")
