@@ -60,9 +60,14 @@ ELSE
 IFIDN <Name>, <SetLowWaitHighThread>
         int 2Ch
 ELSE
+;
+; Direct-dispatch fast path for kernel-mode Zw* callers — see
+; _KiKernelDispatch in KE/I386/sysstubs.asm.  Tail-jmp; no IDT round-trip,
+; no trap frame.  stdRET below is unreachable on the fast path; preserved
+; for FPO/proc framing only.
+;
         mov     eax, ServiceNumber      ; (eax) = service number
-        lea     edx, [esp]+4            ; (edx) -> arguments
-        INT     2Eh                     ; invoke system service
+        jmp     _KiKernelDispatch       ; tail-jmp; helper returns to caller
 ENDIF
 ENDIF
         stdRET  _Zw&Name

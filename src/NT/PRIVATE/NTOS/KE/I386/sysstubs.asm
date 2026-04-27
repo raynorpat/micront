@@ -26,6 +26,15 @@ include ks386.inc
 include callconv.inc
 
 .386
+
+;
+; Externs for the direct-dispatch helper near the top of the _TEXT segment
+; (defined just before the SYSSTUBS_ENTRY1 invocations below).
+;
+        extrn   _KiArgumentTable:dword
+        extrn   _KiServiceTable:dword
+        extrn   _KiServiceLimit:dword
+
 STUBS_BEGIN1 macro t
     TITLE t
 endm
@@ -60,9 +69,14 @@ ELSE
 IFIDN <Name>, <SetLowWaitHighThread>
         int 2Ch
 ELSE
+;
+; Direct-dispatch fast path for kernel-mode Zw* callers — see
+; _KiKernelDispatch in KE/I386/sysstubs.asm.  Tail-jmp; no IDT round-trip,
+; no trap frame.  stdRET below is unreachable on the fast path; preserved
+; for FPO/proc framing only.
+;
         mov     eax, ServiceNumber      ; (eax) = service number
-        lea     edx, [esp]+4            ; (edx) -> arguments
-        INT     2Eh                     ; invoke system service
+        jmp     _KiKernelDispatch       ; tail-jmp; helper returns to caller
 ENDIF
 ENDIF
         stdRET  _Zw&Name
@@ -99,7 +113,16 @@ IFIDN <Name>, <SetLowWaitHighThread>
 ELSE
         mov     eax, ServiceNumber      ; (eax) = service number
         lea     edx, [esp]+4            ; (edx) -> arguments
-        INT     2Eh                     ; invoke system service
+        mov     ecx, esp                ; (ecx) = user ESP; [ecx] = ret-to-caller
+                                        ; KiFastSystemCall reads [ecx] for user EIP,
+                                        ; emulates the stdRET below as part of stdcall
+                                        ; callee-pop, and resumes user at caller-of-Zw.
+        db      0Fh, 34h                ; SYSENTER — invoke system service via SEP
+                                        ; ML 6.11d predates PII; emit raw opcode.
+                                        ; Phase 1: kernel returns via IRET.
+                                        ; Phase 3: kernel returns via SYSEXIT.
+                                        ; Either way control resumes at caller-of-Zw,
+                                        ; not the stdRET below (kept as fallback).
 ENDIF
 ENDIF
         stdRET  _Zw&Name
@@ -129,7 +152,135 @@ endm
         STUBS_BEGIN6 <"System Service Stub Procedures">
         STUBS_BEGIN7 <"System Service Stub Procedures">
         STUBS_BEGIN8 <"System Service Stub Procedures">
-SYSSTUBS_ENTRY1  0, AcceptConnectPort, 6 
+
+;++
+;
+; _KiKernelDispatch — direct-dispatch helper for kernel-mode Zw* callers.
+;
+; Replaces the legacy trap-via-INT-2Eh path.  No IDT round-trip, no
+; ENTER_SYSCALL trap frame, no EXIT_ALL — just a small arg copy (the same
+; copy KiSystemServiceCopyArguments did inside the trap path) and a direct
+; stdcall to the service routine.
+;
+; Re-entrancy: each invocation builds its own kernel-stack frame, so a
+; service that recursively issues `Zw*` (driver code inside NtCreateFile
+; calling ZwOpenKey, etc.) gets a fresh dispatch via the same code without
+; colliding with our state.
+;
+; Defined here, before the SYSSTUBS_ENTRY1 invocations, so MASM resolves
+; the forward symbol in single-pass assembly.
+;
+; Entry (set by SYSSTUBS_ENTRY1's `mov eax,svc; jmp` before reaching us):
+;   eax       = service number (gensrv guarantees in-range)
+;   [esp]     = ret-to-Zw-caller (Zw stub did jmp, didn't push)
+;   [esp+4..] = caller's args
+;
+; Exit:
+;   eax = NTSTATUS from service
+;   stack popped past ret-addr + args (callee-pop stdcall semantics)
+;   ebx/esi/edi/ebp restored to caller's values
+;
+;--
+
+align 4
+        public _KiKernelDispatch
+_KiKernelDispatch proc
+
+;
+; Defensive bounds check.  gensrv only emits valid service numbers, so this
+; should be unreachable in correctly-built code; bug-check loudly if hit.
+;
+        cmp     eax, _KiServiceLimit
+        ja      kkd_bad_service
+
+;
+; Build a small frame: saved non-volatiles + one local for ArgSize so we
+; can do callee-pop stdcall on return to caller.
+;
+;   [ebp+0]   saved_ebp
+;   [ebp+4]   ret-to-caller-of-Zw
+;   [ebp+8..] caller's args
+;   [ebp-4]   saved_ebx
+;   [ebp-8]   saved_esi
+;   [ebp-12]  saved_edi
+;   [ebp-16]  ArgSize local
+;
+        push    ebp
+        mov     ebp, esp
+        push    ebx
+        push    esi
+        push    edi
+        sub     esp, 4
+
+;
+; Look up dispatch info while eax still holds the service number.  ECX
+; receives ArgSize; we stash it in the local for the post-call ret-pop
+; (volatiles are clobbered by the service call).  EDX holds the service
+; routine address; nothing between here and the call clobbers it.
+;
+        movzx   ecx, byte ptr _KiArgumentTable[eax]
+        mov     [ebp-16], ecx
+        mov     edx, _KiServiceTable[eax*4]
+
+;
+; Switch Thread.PreviousMode to KernelMode.  EBX (non-volatile per stdcall)
+; carries the old value across the service call; EDI carries the thread
+; pointer the same way.
+;
+        mov     edi, fs:[PcPrcbData+PbCurrentThread]
+        movzx   ebx, byte ptr [edi+ThPreviousMode]
+        mov     byte ptr [edi+ThPreviousMode], 0
+
+;
+; Copy args from caller's frame into a fresh slot just below esp, then call
+; the service.  After the call's ret-push, the service sees [esp+4..]=args
+; — exactly the layout a direct caller would have produced.
+;
+        sub     esp, ecx
+        lea     esi, [ebp+8]                    ; src = caller's first arg
+        mov     edi, esp                        ; dst = our allocation
+        shr     ecx, 2
+        rep     movsd
+
+;
+; rep movsd advanced edi past the dst region; reload it with the thread
+; pointer so we have it back after the service returns.
+;
+        mov     edi, fs:[PcPrcbData+PbCurrentThread]
+        call    edx
+
+;
+; Service did `ret 4*N` popping its arg copy + return address.  ESP is back
+; to ebp-16 (the local var slot).  EAX = NTSTATUS.  EDI still = thread
+; pointer, EBX still = old prev-mode (both preserved by stdcall).
+;
+        mov     byte ptr [edi+ThPreviousMode], bl
+        mov     ecx, [ebp-16]                   ; ecx = ArgSize for callee-pop
+
+;
+; Tear down the frame.
+;
+        add     esp, 4                          ; deallocate ArgSize local
+        pop     edi
+        pop     esi
+        pop     ebx
+        pop     ebp
+
+;
+; Stack: [esp]=ret-to-Zw-caller, [esp+4..]=original args.  Pop ret-addr
+; into a volatile, skip args (callee-pop stdcall), jmp back.
+;
+        pop     edx
+        add     esp, ecx
+        jmp     edx
+
+kkd_bad_service:
+        int 3
+        jmp     kkd_bad_service
+
+_KiKernelDispatch endp
+
+SYSSTUBS_ENTRY1  0, AcceptConnectPort, 6
 SYSSTUBS_ENTRY2  0, AcceptConnectPort, 6 
 SYSSTUBS_ENTRY3  0, AcceptConnectPort, 6 
 SYSSTUBS_ENTRY4  0, AcceptConnectPort, 6 

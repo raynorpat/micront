@@ -359,14 +359,14 @@ IDTEntry        _KiGetTickCount,  D_INT332          ;2A: KiGetTickCount service
 IDTEntry        _KiSetHighWaitLowThread,  D_INT332  ;2B: KiSetHighWaitLowThread service
 IDTEntry        _KiSetLowWaitHighThread,  D_INT332  ;2C: KiSetLowWaitHighThread service
 IDTEntry        _KiDebugService,  D_INT332          ;2D: debugger calls
-IDTEntry        _KiSystemService, D_INT332          ;2E: legacy INT 2E entry — kept
-                                                    ;    for kernel-mode Zw* callers
-                                                    ;    in sysstubs.asm.  User-mode
-                                                    ;    callers go through SYSENTER →
-                                                    ;    KiFastSystemCall directly.
-                                                    ;    Phase 2 of the SYSENTER cutover
-                                                    ;    will replace sysstubs.asm with
-                                                    ;    direct dispatch and remove this.
+IDTEntry        0, 0                                ;2E: was INT 2E (KiSystemService).
+                                                    ;    User-mode callers use SYSENTER →
+                                                    ;    KiFastSystemCall.  Kernel-mode
+                                                    ;    Zw* callers use _KiKernelDispatch
+                                                    ;    direct dispatch (sysstubs.asm).
+                                                    ;    Vector left invalid so any stray
+                                                    ;    INT 2Eh raises #GP — fast, loud,
+                                                    ;    pinpoints residual callers.
 IDTEntry        _KiTrap0F, D_INT032                 ;2F: Reserved for APIC
 
 ;
@@ -1232,33 +1232,9 @@ Kss_ErrorHandler:
         ENTER_DR_ASSIST kss_a, kss_t,NoAbiosAssist,NoV86Assist
 
 ;
-; Legacy INT 2E entry — kernel-mode Zw* callers from sysstubs.asm.  The CPU
-; has already pushed SS/ESP/EFLAGS/CS/EIP onto the kernel stack as part of
-; the interrupt-gate transition (CPL0→CPL0 stays on same stack; SS/ESP
-; pushes are skipped since CPL doesn't change).  Falls into ENTER_SYSCALL
-; just like before.
-;
-; This entry will go away in Phase 2 of the SYSENTER cutover, when sysstubs.asm
-; is rewritten to call the dispatcher directly.
-;
-
-align 16
-        PUBLIC  _KiSystemService
-_KiSystemService        proc
-;
-; INT 2Eh entry.  Reached when a kernel-mode caller in sysstubs.asm issues
-; INT 2Eh (Phase 2 of the SYSENTER cutover will eliminate this path).  The
-; CPU's interrupt gate has already pushed SS/ESP/EFLAGS/CS/EIP onto the
-; kernel stack as part of the trap, so the trap frame's hardware-pushed
-; portion exists with the canonical layout.  Just chain into the shared
-; body which builds the rest of the frame via ENTER_SYSCALL.
-;
-        jmp     KiSystemServiceShared
-
-_KiSystemService endp
-
-;
-; SYSENTER fast-path entrypoint.  Reached via SYSENTER from CPL3.
+; SYSENTER fast-path entrypoint.  Sole entry to the system-service dispatch
+; body — kernel-mode `Zw*` callers route through `_KiKernelDispatch` in
+; sysstubs.asm (which never reaches here), and IDT[0x2E] is invalid.
 ;
 
 align 16
@@ -1343,21 +1319,18 @@ endif
         mov     ebx, _KiServiceTable[eax*4] ; (ebx)-> service routine
 
 ;
-; Bump TsHardwareEsp past the user stub's "ret 4*NumArgs" — the kernel
-; emulates the stdcall callee-pop on behalf of the user-mode stub so that
-; on IRET (or SYSEXIT) user code resumes at caller-of-Nt<Func> with stack
-; balanced, never re-entering the per-stub `ret 4*NumArgs` instruction.
-; ecx = ArgSize (bytes); +4 for the return address itself.
+; Bump TsHardwareEsp past the user stub's `ret 4*NumArgs` — the kernel
+; emulates the stdcall callee-pop on behalf of the user stub so that on
+; IRET (or SYSEXIT) user code resumes at caller-of-Nt<Func> with the stack
+; balanced, never re-entering the per-stub `ret 4*NumArgs`.  ecx = ArgSize
+; (bytes); +4 for the return address itself.
 ;
-; Only applies to user-mode entries (SYSENTER): TsSegCs has MODE_MASK set.
-; Kernel-mode INT 2E callers (sysstubs.asm — kernel-mode `Zw*` until Phase 2
-; lands) still rely on their own stdRET to pop args, so skip the bump there.
+; Unconditional now: only SYSENTER reaches this body.  IDT[0x2E] is invalid
+; and kernel-mode Zw* callers use _KiKernelDispatch (sysstubs.asm) which
+; never enters here.
 ;
-        test    word ptr [ebp]+TsSegCs, MODE_MASK
-        jz      short kss_skip_esp_bump
         add     [ebp]+TsHardwareEsp, ecx
         add     dword ptr [ebp]+TsHardwareEsp, 4
-kss_skip_esp_bump:
 
         sub     esp, ecx                ; allocate space for arguments
         shr     ecx, 2                  ; (ecx) = number of argument DWORDs
