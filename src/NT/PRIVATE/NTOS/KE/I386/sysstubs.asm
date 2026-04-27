@@ -194,8 +194,9 @@ _KiKernelDispatch proc
         ja      kkd_bad_service
 
 ;
-; Build a small frame: saved non-volatiles + one local for ArgSize so we
-; can do callee-pop stdcall on return to caller.
+; Build a small frame: saved non-volatiles + two locals (ArgSize and
+; saved PCR.ExceptionList) so callee-pop stdcall + SEH-chain restore
+; both work after the service returns.
 ;
 ;   [ebp+0]   saved_ebp
 ;   [ebp+4]   ret-to-caller-of-Zw
@@ -204,13 +205,14 @@ _KiKernelDispatch proc
 ;   [ebp-8]   saved_esi
 ;   [ebp-12]  saved_edi
 ;   [ebp-16]  ArgSize local
+;   [ebp-20]  saved PCR.ExceptionList
 ;
         push    ebp
         mov     ebp, esp
         push    ebx
         push    esi
         push    edi
-        sub     esp, 4
+        sub     esp, 8
 
 ;
 ; Look up dispatch info while eax still holds the service number.  ECX
@@ -232,6 +234,25 @@ _KiKernelDispatch proc
         mov     byte ptr [edi+ThPreviousMode], 0
 
 ;
+; Break the SEH chain to match the legacy ENTER_SYSCALL contract:
+; PCR.ExceptionList = EXCEPTION_CHAIN_END means RtlDispatchException
+; finds no handler if the service routine raises, and the kernel
+; bug-checks with KMODE_EXCEPTION_NOT_HANDLED.
+;
+; By design — and by NT 3.5 documented contract — kernel-mode `Zw*`
+; callers must catch internally and return NTSTATUS.  A service that
+; raises through us is a contract violation and we want it to fail
+; loudly rather than unwind into the caller with a stale PreviousMode.
+;
+; Saved old chain head goes in the local so we restore it on the
+; normal-return path; on the raise path the bug-check happens before
+; anything observes the missing restore.
+;
+        mov     esi, fs:[PcExceptionList]
+        mov     [ebp-20], esi
+        mov     dword ptr fs:[PcExceptionList], EXCEPTION_CHAIN_END
+
+;
 ; Copy args from caller's frame into a fresh slot just below esp, then call
 ; the service.  After the call's ret-push, the service sees [esp+4..]=args
 ; — exactly the layout a direct caller would have produced.
@@ -251,16 +272,18 @@ _KiKernelDispatch proc
 
 ;
 ; Service did `ret 4*N` popping its arg copy + return address.  ESP is back
-; to ebp-16 (the local var slot).  EAX = NTSTATUS.  EDI still = thread
-; pointer, EBX still = old prev-mode (both preserved by stdcall).
+; to ebp-20 (the saved-ExceptionList local).  EAX = NTSTATUS.  EDI still =
+; thread pointer, EBX still = old prev-mode (both preserved by stdcall).
 ;
         mov     byte ptr [edi+ThPreviousMode], bl
+        mov     esi, [ebp-20]                   ; restore PCR.ExceptionList
+        mov     fs:[PcExceptionList], esi
         mov     ecx, [ebp-16]                   ; ecx = ArgSize for callee-pop
 
 ;
 ; Tear down the frame.
 ;
-        add     esp, 4                          ; deallocate ArgSize local
+        add     esp, 8                          ; deallocate both locals
         pop     edi
         pop     esi
         pop     ebx
