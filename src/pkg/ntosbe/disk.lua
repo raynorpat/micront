@@ -1,0 +1,469 @@
+-- ntosbe.disk — MBR + FAT16 raw disk image builder.
+--
+-- Pure-Lua port of tools/mkdisk.py.  Same on-disk format, same partition
+-- layout (1 MB-aligned, FAT16 type 0x06, single primary partition) so
+-- the NT 3.5 atdisk + fastfat path mounts without changes.  Profile
+-- knowledge — i.e. *which* files go on the disk — lives in
+-- pkg/ntosbe/profiles/, not here.  This module just turns a declarative
+-- file/dir tree into the binary image.
+--
+-- GPT and NTFS will land as peer encoders alongside this MBR + FAT16
+-- pair; the public API on DiskImage stays the same.
+--
+-- Usage:
+--     local disk = require('ntosbe.disk')
+--     local img = disk.new{ size_mb = 64 }
+--     img:add_file("System32/ntoskrnl.exe", "/abs/path/to/ntoskrnl.exe")
+--     img:add_bytes("System32/config/SYSTEM", hive_bytes)
+--     img:write(platform.write_file, "/path/to/esp.img")
+
+local ffi = require('ffi')
+local bit = require('bit')
+
+local M = {}
+
+-- ----------------------------------------------------------------
+-- FAT16 + MBR constants.
+-- ----------------------------------------------------------------
+
+local SECTOR_SIZE         = 512
+local SECTORS_PER_CLUSTER = 4         -- 2 KB clusters
+local RESERVED_SECTORS    = 1
+local NUM_FATS            = 2
+local ROOT_DIR_ENTRIES    = 512       -- FAT16 convention — fixed root
+local ROOT_DIR_SECTORS    = (ROOT_DIR_ENTRIES * 32) / SECTOR_SIZE   -- 32
+
+local PARTITION_START_LBA  = 2048     -- 1 MB — modern, QEMU-friendly
+local PARTITION_TYPE_FAT16 = 0x06     -- FAT16 >= 32 MB
+
+local CLUSTER_EOC = 0xFFFF
+
+local ATTR_VOLUME_ID = 0x08
+local ATTR_DIRECTORY = 0x10
+local ATTR_ARCHIVE   = 0x20
+
+-- ----------------------------------------------------------------
+-- 8.3 name encoding.  case-folds to uppercase, space-pads to 11.
+-- ----------------------------------------------------------------
+
+local function encode_83(name)
+    name = name:upper()
+    local stem, ext
+    local dot = name:match("()%.[^.]*$")
+    if dot then
+        stem = name:sub(1, dot - 1)
+        ext  = name:sub(dot + 1)
+    else
+        stem = name
+        ext  = ""
+    end
+    if #stem > 8 or #ext > 3 then
+        error("name " .. name .. " exceeds 8.3 limits", 2)
+    end
+    local function pad(s, n) return s .. string.rep(" ", n - #s) end
+    return pad(stem, 8) .. pad(ext, 3)
+end
+
+-- FAT date / time encoding from a calendar table {year, month, day,
+-- hour, min, sec}.  Returned values are 16-bit integers.
+local function fat_time(cal)
+    local fat_t = bit.bor(bit.lshift(cal.hour, 11),
+                          bit.lshift(cal.min,   5),
+                          math.floor(cal.sec / 2))
+    local fat_d = bit.bor(bit.lshift(cal.year - 1980, 9),
+                          bit.lshift(cal.month, 5),
+                          cal.day)
+    return fat_t, fat_d
+end
+
+-- ----------------------------------------------------------------
+-- Tree of entries built up before layout.  Cluster numbers are filled
+-- in during write().
+-- ----------------------------------------------------------------
+
+local function newentry(name, is_dir, opts)
+    opts = opts or {}
+    -- Validate up-front so errors surface at add-time, not write-time.
+    encode_83(name)
+    return {
+        name          = name:upper(),
+        is_dir        = is_dir,
+        data          = opts.data or "",
+        children      = {},
+        attr          = opts.attr or 0,
+        first_cluster = 0,
+        mtime         = opts.mtime,    -- nil = use platform.now()
+    }
+end
+
+local function find_child(dir, name_upper)
+    for _, c in ipairs(dir.children) do
+        if c.name == name_upper then return c end
+    end
+    return nil
+end
+
+-- ----------------------------------------------------------------
+-- DiskImage — public API.
+-- ----------------------------------------------------------------
+
+local DiskImage = {}
+DiskImage.__index = DiskImage
+
+-- opts = { size_mb, signature, volume_label, volume_serial, now }
+-- now is a unix timestamp used for any directory entry whose own mtime
+-- isn't supplied (root, mkdir'd intermediates, in-memory blobs).  The
+-- caller passes through platform.now() to keep this module pure.
+function M.new(opts)
+    opts = opts or {}
+    local size_mb = opts.size_mb or 16
+    if size_mb < 4 then
+        error("disk must be at least 4 MB", 2)
+    end
+    local label = (opts.volume_label or "NT"):upper():sub(1, 11)
+    local now   = opts.now or 0      -- caller-supplied, zero means epoch
+    return setmetatable({
+        size_bytes    = size_mb * 1024 * 1024,
+        signature     = bit.band(opts.signature or 0x4E544653, 0xFFFFFFFF),
+        volume_label  = label,
+        volume_serial = bit.band(opts.volume_serial or now, 0xFFFFFFFF),
+        now           = now,
+        root          = newentry("ROOT", true, { attr = ATTR_DIRECTORY,
+                                                 mtime = now }),
+    }, DiskImage)
+end
+
+-- mkdir -p style: walks `path` (forward-slash separated; backslashes
+-- accepted too), creating directories along the way.  Returns the
+-- terminal directory entry.
+function DiskImage:mkdir(path)
+    local d = self.root
+    for part in path:gsub("\\", "/"):gmatch("[^/]+") do
+        local existing = find_child(d, part:upper())
+        if existing == nil then
+            local new = newentry(part, true,
+                                 { attr = ATTR_DIRECTORY, mtime = self.now })
+            d.children[#d.children + 1] = new
+            d = new
+        else
+            if not existing.is_dir then
+                error(path .. ": " .. part .. " is a file, not a dir", 2)
+            end
+            d = existing
+        end
+    end
+    return d
+end
+
+-- Internal: split `dest` into (parent dir entry, leaf name).
+local function split_dest(self, dest)
+    local parts = {}
+    for part in dest:gsub("\\", "/"):gmatch("[^/]+") do
+        parts[#parts + 1] = part
+    end
+    if #parts == 0 then
+        error("empty dest path", 3)
+    end
+    local leaf = parts[#parts]
+    local parent
+    if #parts == 1 then
+        parent = self.root
+    else
+        local sub = table.concat(parts, "/", 1, #parts - 1)
+        parent = self:mkdir(sub)
+    end
+    return parent, leaf
+end
+
+-- Add a file from disk.  `data` and `mtime` are read via the supplied
+-- platform module so this code stays portable; we don't assume io.open.
+function DiskImage:add_file(dest, src_path, platform)
+    local parent, leaf = split_dest(self, dest)
+    if find_child(parent, leaf:upper()) then
+        error(dest .. ": already exists", 2)
+    end
+    local data = platform.read_file(src_path)
+    if not data then
+        error("add_file: cannot read " .. src_path, 2)
+    end
+    local entry = newentry(leaf, false, {
+        data  = data,
+        attr  = ATTR_ARCHIVE,
+        mtime = platform.mtime(src_path) or self.now,
+    })
+    parent.children[#parent.children + 1] = entry
+    return entry
+end
+
+-- Add an in-memory blob.
+function DiskImage:add_bytes(dest, data)
+    local parent, leaf = split_dest(self, dest)
+    if find_child(parent, leaf:upper()) then
+        error(dest .. ": already exists", 2)
+    end
+    local entry = newentry(leaf, false, {
+        data  = data,
+        attr  = ATTR_ARCHIVE,
+        mtime = self.now,
+    })
+    parent.children[#parent.children + 1] = entry
+    return entry
+end
+
+-- ----------------------------------------------------------------
+-- Layout + write.  All the FAT16 + MBR maths lives here.
+-- ----------------------------------------------------------------
+
+-- Build one 32-byte FAT directory entry.
+local function dir_entry(name11, attr, first_cluster, size, mtime, platform)
+    if #name11 ~= 11 then error("name11 must be 11 bytes", 2) end
+    local cal = platform.localtime(mtime)
+    -- Year before 1980 (FAT epoch) clamps to 1980-01-01 so encoding doesn't
+    -- under/overflow.  Real timestamps are always far above this; only the
+    -- {mtime = 0} caller (root sentinel) can hit it.
+    if cal.year < 1980 then
+        cal = { year = 1980, month = 1, day = 1, hour = 0, min = 0, sec = 0 }
+    end
+    local fat_t, fat_d = fat_time(cal)
+
+    local buf = ffi.new('uint8_t[32]')
+    ffi.copy(buf, name11, 11)
+    buf[11] = attr
+    -- buf[12..13]: reserved + creation time fine — leave zero
+    ffi.cast('uint16_t*', buf + 14)[0] = fat_t   -- creation time
+    ffi.cast('uint16_t*', buf + 16)[0] = fat_d   -- creation date
+    ffi.cast('uint16_t*', buf + 18)[0] = fat_d   -- last access date
+    -- buf[20..21]: high cluster (FAT32 — 0 here)
+    ffi.cast('uint16_t*', buf + 22)[0] = fat_t   -- last modify time
+    ffi.cast('uint16_t*', buf + 24)[0] = fat_d   -- last modify date
+    ffi.cast('uint16_t*', buf + 26)[0] = bit.band(first_cluster, 0xFFFF)
+    ffi.cast('uint32_t*', buf + 28)[0] = size
+    return ffi.string(buf, 32)
+end
+
+function DiskImage:write(write_file_fn, out_path, platform)
+    if not platform then
+        error("DiskImage:write: pass platform module as 3rd arg", 2)
+    end
+
+    local img = ffi.new('uint8_t[?]', self.size_bytes)
+
+    -- ---- Partition geometry ----
+    local total_sectors = math.floor(self.size_bytes / SECTOR_SIZE)
+    local part_sectors  = total_sectors - PARTITION_START_LBA
+    local spc           = SECTORS_PER_CLUSTER
+
+    -- Solve for sectors_per_fat by iteration (FAT size depends on cluster
+    -- count, which depends on data size, which depends on FAT size).
+    local sectors_per_fat = 1
+    local clusters
+    while true do
+        local data_sectors = part_sectors - RESERVED_SECTORS
+                           - NUM_FATS * sectors_per_fat - ROOT_DIR_SECTORS
+        clusters = math.floor(data_sectors / spc)
+        local needed_fat_bytes   = (clusters + 2) * 2
+        local needed_fat_sectors = math.floor(
+            (needed_fat_bytes + SECTOR_SIZE - 1) / SECTOR_SIZE)
+        if needed_fat_sectors <= sectors_per_fat then break end
+        sectors_per_fat = needed_fat_sectors
+    end
+    local total_clusters = clusters
+
+    local fat1_lba = PARTITION_START_LBA + RESERVED_SECTORS
+    local fat2_lba = fat1_lba + sectors_per_fat
+    local root_lba = fat2_lba + sectors_per_fat
+    local data_lba = root_lba + ROOT_DIR_SECTORS
+
+    -- ---- Cluster assignment ----
+    -- Cluster 0 = media descriptor, 1 = reserved.  Files start at 2.
+    local fat_entries = { [0] = 0xFFF8, [1] = 0xFFFF }
+    local next_cluster = 2
+
+    local function alloc_clusters(n_bytes)
+        if n_bytes == 0 then return 0, 0 end
+        local cluster_bytes = spc * SECTOR_SIZE
+        local n = math.floor((n_bytes + cluster_bytes - 1) / cluster_bytes)
+        local first = next_cluster
+        for i = 0, n - 1 do
+            local cl = next_cluster + i
+            if cl + 1 >= total_clusters + 2 then
+                error("disk full during layout", 2)
+            end
+            fat_entries[cl] = (i + 1 < n) and (cl + 1) or CLUSTER_EOC
+        end
+        next_cluster = next_cluster + n
+        return first, n
+    end
+
+    -- DFS pre-pass: assign first_cluster to every entry.  Directories
+    -- get a chain sized by (2 + #children) entries × 32 bytes (the
+    -- two extra slots are for "." and ".." in non-root dirs); files
+    -- get a chain sized by their data length.
+    local function assign(entry, parent_is_root)
+        if entry.is_dir then
+            if entry ~= self.root then
+                local n_entries = 2 + #entry.children
+                local est_bytes = n_entries * 32
+                if est_bytes < 32 then est_bytes = 32 end
+                local first = alloc_clusters(est_bytes)
+                entry.first_cluster = first
+            end
+            for _, child in ipairs(entry.children) do
+                assign(child, entry == self.root)
+            end
+        else
+            local first = alloc_clusters(#entry.data)
+            entry.first_cluster = first
+        end
+    end
+    assign(self.root, true)
+
+    -- ---- Helpers to stamp regions of the image ----
+    local function copy_to_img(byte_offset, src, n)
+        ffi.copy(img + byte_offset, src, n)
+    end
+
+    -- ---- MBR (sector 0) ----
+    local mbr = ffi.new('uint8_t[?]', SECTOR_SIZE)
+    -- Disk signature at 0x1B8 (LE u32).
+    ffi.cast('uint32_t*', mbr + 0x1B8)[0] = self.signature
+    -- Partition entry at 0x1BE.
+    mbr[0x1BE] = 0x80                              -- active flag
+    -- 0x1BF..0x1C1: CHS start (unused with LBA)
+    mbr[0x1C2] = PARTITION_TYPE_FAT16
+    -- 0x1C3..0x1C5: CHS end (unused)
+    ffi.cast('uint32_t*', mbr + 0x1C6)[0] = PARTITION_START_LBA
+    ffi.cast('uint32_t*', mbr + 0x1CA)[0] = part_sectors
+    -- MBR signature.
+    mbr[0x1FE] = 0x55
+    mbr[0x1FF] = 0xAA
+    copy_to_img(0, mbr, SECTOR_SIZE)
+
+    -- ---- FAT16 boot sector (partition LBA 0) ----
+    local bs = ffi.new('uint8_t[?]', SECTOR_SIZE)
+    -- jmp short + nop so BPB doesn't get executed.
+    bs[0] = 0xEB; bs[1] = 0x3C; bs[2] = 0x90
+    ffi.copy(bs + 3, "MSDOS5.0", 8)                -- OEM name
+    ffi.cast('uint16_t*', bs + 0x0B)[0] = SECTOR_SIZE
+    bs[0x0D] = spc
+    ffi.cast('uint16_t*', bs + 0x0E)[0] = RESERVED_SECTORS
+    bs[0x10] = NUM_FATS
+    ffi.cast('uint16_t*', bs + 0x11)[0] = ROOT_DIR_ENTRIES
+
+    local big_total = 0
+    if part_sectors <= 0xFFFF then
+        ffi.cast('uint16_t*', bs + 0x13)[0] = part_sectors
+    else
+        big_total = part_sectors
+        ffi.cast('uint16_t*', bs + 0x13)[0] = 0
+    end
+    bs[0x15] = 0xF8                                -- media descriptor
+    ffi.cast('uint16_t*', bs + 0x16)[0] = sectors_per_fat
+    ffi.cast('uint16_t*', bs + 0x18)[0] = 63       -- sectors per track
+    ffi.cast('uint16_t*', bs + 0x1A)[0] = 255      -- heads
+    ffi.cast('uint32_t*', bs + 0x1C)[0] = PARTITION_START_LBA   -- hidden
+    ffi.cast('uint32_t*', bs + 0x20)[0] = big_total
+    bs[0x24] = 0x80                                -- drive number
+    bs[0x26] = 0x29                                -- ext boot sig
+    ffi.cast('uint32_t*', bs + 0x27)[0] = self.volume_serial
+    -- Volume label (11 bytes, space-padded).
+    local label_padded = self.volume_label .. string.rep(" ", 11 - #self.volume_label)
+    ffi.copy(bs + 0x2B, label_padded, 11)
+    ffi.copy(bs + 0x36, "FAT16   ", 8)
+    bs[0x1FE] = 0x55
+    bs[0x1FF] = 0xAA
+    copy_to_img(PARTITION_START_LBA * SECTOR_SIZE, bs, SECTOR_SIZE)
+
+    -- ---- FAT tables ----
+    local fat_bytes = sectors_per_fat * SECTOR_SIZE
+    local fat = ffi.new('uint8_t[?]', fat_bytes)
+    for cl, val in pairs(fat_entries) do
+        ffi.cast('uint16_t*', fat + cl * 2)[0] = val
+    end
+    copy_to_img(fat1_lba * SECTOR_SIZE, fat, fat_bytes)
+    copy_to_img(fat2_lba * SECTOR_SIZE, fat, fat_bytes)
+
+    -- ---- Root directory ----
+    local root_bytes_buf = {}
+    if #self.volume_label > 0 then
+        local lbl = self.volume_label .. string.rep(" ", 11 - #self.volume_label)
+        root_bytes_buf[#root_bytes_buf + 1] = dir_entry(
+            lbl, ATTR_VOLUME_ID, 0, 0, self.now, platform)
+    end
+    for _, child in ipairs(self.root.children) do
+        local size = (child.is_dir) and 0 or #child.data
+        root_bytes_buf[#root_bytes_buf + 1] = dir_entry(
+            encode_83(child.name), child.attr,
+            child.first_cluster, size,
+            child.mtime or self.now, platform)
+    end
+    local root_str = table.concat(root_bytes_buf)
+    copy_to_img(root_lba * SECTOR_SIZE, root_str, #root_str)
+
+    -- ---- File data + subdirectory clusters ----
+    local function write_entry(entry, parent_cluster)
+        if entry.is_dir then
+            local parts = {}
+            -- Non-root dirs prepend "." + ".." entries.
+            parts[1] = dir_entry(
+                ".          ", ATTR_DIRECTORY,
+                entry.first_cluster, 0, entry.mtime or self.now, platform)
+            parts[2] = dir_entry(
+                "..         ", ATTR_DIRECTORY,
+                parent_cluster, 0, entry.mtime or self.now, platform)
+            for _, child in ipairs(entry.children) do
+                local size = (child.is_dir) and 0 or #child.data
+                parts[#parts + 1] = dir_entry(
+                    encode_83(child.name), child.attr,
+                    child.first_cluster, size,
+                    child.mtime or self.now, platform)
+            end
+            local s = table.concat(parts)
+            local lba = data_lba + (entry.first_cluster - 2) * spc
+            copy_to_img(lba * SECTOR_SIZE, s, #s)
+            for _, child in ipairs(entry.children) do
+                write_entry(child, entry.first_cluster)
+            end
+        else
+            if entry.first_cluster == 0 then return end   -- empty file
+            local lba = data_lba + (entry.first_cluster - 2) * spc
+            copy_to_img(lba * SECTOR_SIZE, entry.data, #entry.data)
+        end
+    end
+    for _, child in ipairs(self.root.children) do
+        write_entry(child, 0)        -- root: parent cluster = 0
+    end
+
+    -- ---- Compute MBR checksum the kernel will compute in
+    -- IopCreateArcNames: sum of 128 DWORDs of sector 0.  Stored value
+    -- is the two's-complement so (stored + sum) ≡ 0 mod 2^32.
+    --
+    -- All arithmetic stays in uint32_t cdata (wrapping at 2^32); we
+    -- cast back to Lua number at the end with an explicit uint32 mask
+    -- so the printed value isn't sign-extended into a 64-bit shape.
+    local mbr_sum = ffi.cast('uint32_t', 0)
+    for i = 0, 127 do
+        mbr_sum = mbr_sum + ffi.cast('uint32_t*', img + i * 4)[0]
+    end
+    local arc_checksum = tonumber(ffi.cast('uint32_t', -mbr_sum))
+    self._mbr_checksum = arc_checksum
+
+    -- ---- Write out via platform ----
+    write_file_fn(out_path, ffi.string(img, self.size_bytes))
+
+    -- ---- Layout summary ----
+    local used_clusters = next_cluster - 2
+    local free_clusters = total_clusters - used_clusters
+    return {
+        size_mb        = math.floor(self.size_bytes / (1024 * 1024)),
+        signature      = self.signature,
+        partition_lba  = PARTITION_START_LBA,
+        partition_size = part_sectors,
+        used_clusters  = used_clusters,
+        total_clusters = total_clusters,
+        free_kb        = math.floor(free_clusters * spc * SECTOR_SIZE / 1024),
+        mbr_checksum   = arc_checksum,
+    }
+end
+
+return M

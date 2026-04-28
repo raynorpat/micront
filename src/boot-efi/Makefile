@@ -9,7 +9,7 @@
 #   .o  --(ld with elf_x86_64_efi.lds)-->  loader.so  (ELF shared object)
 #   .so --(objcopy PE sections)--------->  BOOTX64.EFI
 #
-# ESP / disk image assembly is handled by tools/mkdisk.py, not here.
+# ESP / disk image assembly is handled by pkg/ntosbe (Lua), not here.
 
 ARCH       := x86_64
 EFI_INC    := /usr/include/efi

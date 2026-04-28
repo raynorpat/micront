@@ -25,8 +25,6 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ESP_IMG="$REPO_ROOT/build/disk/esp.img"
-NVME_IMG="$REPO_ROOT/build/disk/nvme.img"
-NVME_SIZE_MB=64
 
 # --- Argument parsing --------------------------------------------------------
 
@@ -89,19 +87,8 @@ done
 # --- Sanity --------------------------------------------------------
 
 if [ ! -f "$ESP_IMG" ]; then
-    echo "ERROR: $ESP_IMG not found. Run: build.sh" >&2
+    echo "ERROR: $ESP_IMG not found. Run: build.lua disk" >&2
     exit 1
-fi
-
-# NVMe data disk - second drive for the SCSI/NVMe stack to surface.
-# Auto-created on first boot as an MBR + FAT16 formatted image; persists
-# across runs so anything Lua writes survives. Delete the file by hand
-# to start fresh.
-if [ ! -f "$NVME_IMG" ]; then
-    echo "[boot.sh] creating MBR+FAT16 NVMe data disk: $NVME_IMG (${NVME_SIZE_MB} MiB)"
-    mkdir -p "$(dirname "$NVME_IMG")"
-    python3 "$SCRIPT_DIR/tools/mknvmeimg.py" \
-        "$NVME_IMG" --size-mb "$NVME_SIZE_MB"
 fi
 
 cp /usr/share/OVMF/OVMF_VARS_4M.fd OVMF_VARS_4M.fd
@@ -130,8 +117,6 @@ cp /usr/share/OVMF/OVMF_VARS_4M.fd OVMF_VARS_4M.fd
 #   virtio-serial-pci       ->  1AF4:1003 (transitional default)  ->  vioser.sys
 #   virtio-keyboard-pci     ->  1AF4:1052 (modern only)            ->  vioinput.sys
 #   virtio-mouse-pci        ->  1AF4:1052 (modern only)            ->  vioinput.sys
-#   nvme                    ->  PCI class 01:08:02 (NVMe)          ->  nvme2k.sys
-#                                                                       (via scsiport.sys / scsidisk.sys)
 #   virtio-net-pci          ->  1AF4:1000 (transitional default)   ->  vionet.sys
 #                                                                       (NDIS 3.0 miniport; tcpip.sys binds on top)
 #
@@ -139,9 +124,10 @@ cp /usr/share/OVMF/OVMF_VARS_4M.fd OVMF_VARS_4M.fd
 # DHCP server (10.0.2.2). No host bridge configuration required.
 # Guest gets 10.0.2.15 from QEMU's DHCP, gateway 10.0.2.2, DNS 10.0.2.3.
 #
-# NVMe: separate raw-image data disk; atdisk + IDE still own the boot
-# device for milestone A. Once the SCSI stack is verified end-to-end we
-# move boot to NVMe and drop atdisk.
+# Storage profiles (atdisk / nvme / virtio-scsi) are coming as a
+# follow-up; for now boot.sh ships only the IDE path.  Same boot disk
+# image must mount cleanly across all three — that's what the profile
+# matrix exists to verify.
 #
 # virtio-serial: the PCI device hosts ports; we attach a single
 # virtconsole port to a pty chardev. QEMU prints the pty path on stdout
@@ -162,8 +148,6 @@ exec qemu-system-x86_64 -m "$MEM" \
     -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
     -drive if=pflash,format=raw,file=./OVMF_VARS_4M.fd \
     -drive file="$ESP_IMG",format=raw,if=ide \
-    -drive file="$NVME_IMG",format=raw,if=none,id=nvm \
-    -device nvme,drive=nvm,serial=microntdev \
     -chardev stdio,id=serialmux,mux=on \
     -serial chardev:serialmux \
     -object rng-random,id=rng0,filename=/dev/urandom \

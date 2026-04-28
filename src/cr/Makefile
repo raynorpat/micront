@@ -85,12 +85,12 @@ BUILD      := $(REPO)/build/disk
 LUAJIT_SRC := $(MKFILE_DIR)luajit/src
 LUAJIT_OUT := $(LUAJIT_SRC)/luajit.exe
 
-# Init args override.  mkhive.py's defaults point at lua\run.exe and
-# \SystemRoot\lua\main.lua with stdio on \Device\Serial0; the only
-# thing we override here is the script the kernel hands to run.exe,
-# so `make selftest` can swap main.lua for selftest.lua without
-# re-running the rest of the toolchain.  Empty by default → mkhive
-# bakes its own defaults.
+# Init args override.  ntosbe's profiles/ide.lua defaults point at
+# lua\run.exe and \SystemRoot\lua\main.lua with stdio on \Device\Serial0;
+# the only thing we override here is the script the kernel hands to
+# run.exe, so `make selftest` can swap main.lua for selftest.lua without
+# re-running the rest of the toolchain.  Empty by default → profile
+# defaults stick.
 INIT_ARGS_FLAG ?=
 
 # Default target: build lua.dll + run.exe.  Must come before any other
@@ -288,14 +288,18 @@ clean:
 
 # Iteration loop: build run.exe, bake a hive (Control\Init pointing at
 # our run.exe + args overrides from this Makefile), boot under QEMU/OVMF.
-# mkdisk's _runtime_tree_files stages run.exe + the whole src/pkg/ tree
-# under \SystemRoot\lua\.
+# ntosbe's profiles/ide.lua disk_files stages run.exe + the whole
+# src/pkg/ tree under \SystemRoot\lua\.
+HOST_LUAJIT := $(REPO)/build/host-tools/luajit
+
 disk: all
 	mkdir -p $(BUILD)
-	python3 $(TOOLS)/mkhive.py $(INIT_ARGS_FLAG) $(BUILD)/SYSTEM
-	python3 $(TOOLS)/mkdisk.py \
-	    --output-dir $(BUILD) \
-	    --efi-binary $(BOOT_EFI)/BOOTX64.EFI
+	$(SRC)/bootstrap.sh
+	$(HOST_LUAJIT) $(SRC)/ntosbe.lua \
+	    --src-root=$(SRC) \
+	    --output-dir=$(BUILD) \
+	    --efi-binary=$(BOOT_EFI)/BOOTX64.EFI \
+	    $(INIT_ARGS_FLAG)
 
 boot: disk
 	$(SRC)/boot.sh

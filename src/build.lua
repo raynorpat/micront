@@ -1,12 +1,17 @@
--- build.lua — LuaJIT port of build.sh, phase 1 of the self-hosting plan.
+-- build.lua — top-level MicroNT build driver (phase 1 of self-hosting).
 --
--- Faithful translation: same env vars, same wibo invocation shape, same
--- stale-.obj detection, same dispatch surface (./build.sh ke → luajit
--- build.lua ke).  Lives side-by-side with build.sh while it shakes out;
--- once parity is proven we can refactor patterns out.
+-- Originally a faithful translation of build.sh; now the canonical
+-- build entry — the bash orchestrator and its Python helpers
+-- (mkhive.py, mkdisk.py, gen_objects.py, generr.py, libversion.py)
+-- have been retired.  Hive + disk image assembly now lives in
+-- pkg/ntosbe (Lua); generr / gen_objects are inline / in tools/.
 --
 -- Run via the host LuaJIT built by bootstrap.sh:
---    src/bootstrap.sh && build/host-tools/luajit src/build.lua <target>
+--    src/bootstrap.sh && build/host-tools/luajit src/build.lua [<target> ...]
+--
+-- No-arg invocation builds `all`.  Top-level groups: tools, ntoskrnl,
+-- drivers, userland, cr, efi, disk.  See the usage() text at the
+-- bottom of this file for the per-component target list.
 
 local ffi = require('ffi')
 local bit = require('bit')
@@ -850,12 +855,19 @@ end
 
 local targets = {}
 
+-- clean_dirs[name] = { source_dir, ... } — every directory whose `obj/`
+-- subtree gets removed by `clean:<name>`.  Trivial nmake_target builds
+-- self-register; non-trivial / multi-dir targets register manually
+-- below.
+local clean_dirs = {}
+
 local function nmake_target(name, dir, desc, opts, ...)
     local extras = {...}
     targets[name] = function()
         if opts and opts.pre and not opts.pre() then return 1 end
         return run_nmake(dir, desc, extras, opts)
     end
+    clean_dirs[name] = { dir }
 end
 
 -- ----- NTOS core -----
@@ -1261,10 +1273,19 @@ targets.cr = function()
     return run_make(SCRIPT_DIR .. "/cr", nil)
 end
 
--- TODO: port tools/mkhive.py + tools/mkdisk.py to drop these last
--- Python deps from the host build.  generr is already in tools/generr.lua;
--- gen_objects is inline above.  After mkhive/mkdisk land the host build
--- has zero Python dependency.
+-- Disk target: hive + ESP image, both built via pkg/ntosbe (Lua port
+-- of the historical tools/mkhive.py + tools/mkdisk.py pair).  Zero
+-- Python dependency on this path; everything in-tree.
+--
+-- Profiles (and any module ntosbe lazy-requires) need pkg/ on the
+-- search path for the entire run, not just the initial require — so
+-- we prepend permanently rather than save/restore.  The same path
+-- shape works inside MicroNT (Phase E) where pkg/ lives at
+-- \SystemRoot\lua\.
+package.path = SCRIPT_DIR .. "/pkg/?.lua;"
+            .. SCRIPT_DIR .. "/pkg/?/init.lua;"
+            .. package.path
+
 targets.disk = function()
     local out_dir = REPO_ROOT .. "/build/disk"
     local efi_bin = SCRIPT_DIR .. "/boot-efi/BOOTX64.EFI"
@@ -1274,13 +1295,14 @@ targets.disk = function()
         if targets.efi() ~= 0 then return 1 end
     end
 
+    local ntosbe = require('ntosbe')
     mkdir_p(out_dir)
-    if run_python(SCRIPT_DIR .. "/tools/mkhive.py",
-                  out_dir .. "/SYSTEM") ~= 0 then return 1 end
-    if run_python(SCRIPT_DIR .. "/tools/mkdisk.py",
-                  "--output-dir", out_dir,
-                  "--efi-binary", efi_bin) ~= 0 then return 1 end
-    return 0
+    return ntosbe.build_image {
+        profile    = "ide",
+        efi_binary = efi_bin,
+        output_dir = out_dir,
+        src_root   = SCRIPT_DIR,
+    }
 end
 
 -- ------------------------------------------------------------------
@@ -1342,6 +1364,233 @@ targets.all = function()
     return 0
 end
 
+-- ------------------------------------------------------------------
+-- Clean targets — `clean` does the full nuke (port of the historical
+-- clean.sh), `clean:<name>` drops just one component's obj/ tree
+-- (fast iteration), `clean:<group>` recurses over a group's members.
+--
+-- The intermediate-output registry self-populates from nmake_target;
+-- non-trivial targets (custom function-based ones with computed dirs,
+-- multi-dir composites) register here by hand.
+-- ------------------------------------------------------------------
+
+clean_dirs.rtl       = { NTOS .. "/RTL/UP" }
+clean_dirs.rtl_user  = { NTOS .. "/RTL/USER", NTOS .. "/RTL/DAYTONA" }
+clean_dirs.gensrv    = { NT_ROOT .. "/PRIVATE/SDKTOOLS/GENSRV" }
+clean_dirs.ntdll     = { NTOS .. "/DLL/DAYTONA" }
+clean_dirs.hal_stubs = { NTOS .. "/NTHALS/HAL" }
+clean_dirs.hal       = { NTOS .. "/NTHALS/HAL" }
+clean_dirs.init      = { NTOS .. "/INIT/UP" }
+clean_dirs.geni386   = { NTOS .. "/INIT" }
+clean_dirs.tdi_tcpip_ip   = { NTOS .. "/TDI/TCPIP/IP", NTOS .. "/TDI/TCPIP" }
+clean_dirs.vga_miniport   = { NTOS .. "/VIDEO/VGA" }
+
+-- Composites — clean each member's dir.
+clean_dirs.virtio = {
+    NTOS .. "/VIRTIO",
+    NTOS .. "/DD/VIORNG",
+    NTOS .. "/DD/VIOSER",
+    NTOS .. "/DD/VIOINPUT",
+    NTOS .. "/NDIS/VIONET",     -- ndis_vionet's source dir; harmless if absent
+}
+
+-- Group → list of member targets.
+local CLEAN_GROUPS = {
+    tools    = TOOL_TARGETS,
+    ntoskrnl = NTOSKRNL_TARGETS,
+    drivers  = DRIVER_TARGETS,
+    userland = USERLAND_TARGETS,
+}
+
+local function rmrf(path)
+    if not file_exists(path) then return end
+    local rc = spawn_wait("/bin/rm",
+                          strvec({ "rm", "-rf", path }),
+                          strvec(current_env()))
+    if rc ~= 0 then
+        io.stderr:write("rm -rf " .. path .. " failed (rc=" .. rc .. ")\n")
+    else
+        log("  cleaned " .. path:gsub(SCRIPT_DIR .. "/", ""))
+    end
+end
+
+-- Per-component clean: blow away obj/ under each registered source dir.
+-- The component's final output in PUBLIC/SDK/LIB/I386 is left in place
+-- because the next build refreshes it; for a guaranteed-fresh public
+-- output, run `clean` (full) instead.
+local function clean_one(name)
+    -- Special cases that delegate to peer Makefiles.
+    if name == "cr" then
+        log("Cleaning cr/ ...")
+        return spawn_wait("/usr/bin/make",
+                          strvec({ "make", "-C", SCRIPT_DIR .. "/cr", "clean" }),
+                          strvec(current_env()))
+    end
+    if name == "efi" then
+        log("Cleaning boot-efi/ ...")
+        return spawn_wait("/usr/bin/make",
+                          strvec({ "make", "-C", SCRIPT_DIR .. "/boot-efi", "clean" }),
+                          strvec(current_env()))
+    end
+    if name == "disk" then
+        log("Cleaning build/disk/ ...")
+        rmrf(REPO_ROOT .. "/build/disk")
+        return 0
+    end
+
+    -- Group recursion.
+    local group = CLEAN_GROUPS[name]
+    if group then
+        log("Cleaning group: " .. name)
+        for _, t in ipairs(group) do clean_one(t) end
+        return 0
+    end
+
+    -- Per-component obj clean.
+    local dirs = clean_dirs[name]
+    if not dirs then
+        io.stderr:write("clean: unknown target '" .. name .. "'\n")
+        return 1
+    end
+    log("Cleaning " .. name)
+    for _, d in ipairs(dirs) do rmrf(d .. "/obj") end
+    return 0
+end
+
+-- Full clean — port of the historical clean.sh.  Removes every obj/
+-- under NT/PRIVATE, the aggregated TARGETPATH'd obj/ trees, generated
+-- headers, the PUBLIC/SDK/LIB outputs we produce, the wibo-tools symlink
+-- farm, and the build/disk profile artifacts.
+targets.clean = function()
+    log("########################################")
+    log("# Full clean")
+    log("########################################")
+
+    -- Every per-component obj/ tree under NT/PRIVATE.  Use find since
+    -- the set of source dirs grew faster than any hand-maintained list
+    -- (the original clean.sh's note).
+    local nt_priv = NT_ROOT .. "/PRIVATE"
+    local p = io.popen(string.format(
+        "find %q -maxdepth 10 -type d -name obj 2>/dev/null", nt_priv))
+    if p then
+        for d in p:lines() do rmrf(d) end
+        p:close()
+    end
+
+    -- Aggregated TARGETPATH dirs (component .lib files land here).
+    rmrf(NTOS .. "/obj")
+    rmrf(NTOS .. "/RTL/obj")
+    rmrf(NT_ROOT .. "/PRIVATE/WINDOWS/BASE/obj")
+    rmrf(NT_ROOT .. "/PRIVATE/WINDOWS/obj")
+    rmrf(NT_ROOT .. "/PRIVATE/RPC/MIDL20/lib")
+
+    -- nmake / rc temp files.  rc.exe leaves R[CD]<letter><5digits>; nmake
+    -- leaves nm<pid>.  Both have no other meaning so blanket-remove.
+    spawn_wait("/usr/bin/find", strvec({
+        "find", nt_priv, "-maxdepth", "10",
+        "-name", "R[CD][a-z][0-9][0-9][0-9][0-9][0-9]", "-delete",
+    }), strvec(current_env()))
+    spawn_wait("/usr/bin/find", strvec({
+        "find", nt_priv, "-maxdepth", "10",
+        "-name", "nm[0-9]*", "-delete",
+    }), strvec(current_env()))
+
+    -- Generated headers / message resources (rebuilt on demand).
+    os.remove(NT_ROOT .. "/PRIVATE/WINDOWS/GDI/INC/GDII386.INC")
+    for _, f in ipairs({
+        "PRIVATE/WINDOWS/NLSMSG/winerror.h",
+        "PRIVATE/WINDOWS/NLSMSG/winerror.rc",
+        "PRIVATE/WINDOWS/NLSMSG/MSG00001.bin",
+        "PRIVATE/WINDOWS/BASE/CLIENT/winerror.rc",
+        "PRIVATE/WINDOWS/BASE/CLIENT/DAYTONA/MSG00001.bin",
+    }) do os.remove(NT_ROOT .. "/" .. f) end
+
+    -- MIDL-generated stubs (RPC / IDL clients/servers).
+    for _, d in ipairs({
+        "PRIVATE/RPC/RUNTIME/RTIFS",
+        "PRIVATE/RPC/RUNTIME/MTRT",
+        "PRIVATE/WINDOWS/SCREG/WINREG",
+        "PRIVATE/WINDOWS/SCREG/SC",
+        "PRIVATE/EVENTLOG",
+        "PRIVATE/LSA",
+        "PRIVATE/NEWSAM",
+    }) do
+        for _, pat in ipairs({ "*_c.c", "*_s.c", "*rpc.h", "*rpc_c.h" }) do
+            spawn_wait("/usr/bin/find", strvec({
+                "find", NT_ROOT .. "/" .. d, "-maxdepth", "2",
+                "-name", pat, "-delete",
+            }), strvec(current_env()))
+        end
+    end
+
+    -- PUBLIC/SDK/LIB/I386 outputs we produce.  Anything imported from
+    -- the bootstrap libs (LINK.EXE, RC.EXE, ntdll.lib pre-builds)
+    -- stays.
+    local public_lib = NT_ROOT .. "/PUBLIC/SDK/LIB/I386"
+    for _, f in ipairs({
+        "ntoskrnl.lib", "ntoskrnl.exp", "hal.exp", "tmp.lib", "tmp.exp",
+        "ntdll.dll", "ntdll.exp",
+        "kernel32.dll", "kernel32.exp",
+        "advapi32.dll", "advapi32.exp",
+        "rpcrt4.dll", "rpcrt4.exp", "rpcrt4.lib",
+        "samlib.dll", "samlib.exp", "samlib.lib",
+        "samsrv.dll", "samsrv.exp", "samsrv.lib",
+        "lsasrv.dll", "lsasrv.exp", "lsasrv.lib",
+        "csrsrv.dll", "csrsrv.exp", "csrsrv.lib",
+        "basesrv.dll", "basesrv.exp", "basesrv.lib",
+        "atdisk.sys", "null.sys", "fastfat.sys",
+        "class.lib", "scsiport.lib", "scsiport.exp", "scsiport.sys",
+        "scsidisk.sys", "nvme2k.sys",
+        "ndis.lib", "ndis.exp", "ndis.sys",
+        "tdi.lib", "tdi.exp", "tdi.sys", "tcpip.sys", "vionet.sys",
+        "gdisrvl.lib", "efloat.lib", "fscaler.lib", "ttfd.lib",
+        "bmfd.lib", "vtfd.lib", "halftone.lib",
+        "gdi32.dll", "gdi32.exp", "gdi32p.exp", "gdi32p.lib",
+        "usersrvl.lib",
+        "user32.dll", "user32.exp", "user32p.exp", "user32p.lib",
+        "userexts.dll", "userexts.exp", "userexts.lib",
+        "consrvl.lib",
+        "conexts.dll", "conexts.exp", "conexts.lib",
+        "winsrv.dll", "winsrv.exp", "winsrv.lib",
+        "lsadll.lib",
+    }) do
+        local p = public_lib .. "/" .. f
+        if file_exists(p) then
+            os.remove(p)
+            log("  cleaned PUBLIC/SDK/LIB/I386/" .. f)
+        end
+    end
+
+    -- USER files generated by listmung from .TPL + .LST.
+    for _, f in ipairs({
+        "PRIVATE/WINDOWS/USER/INC/callback.h",
+        "PRIVATE/WINDOWS/USER/INC/csuser.h",
+        "PRIVATE/WINDOWS/USER/INC/cscall.h",
+        "PRIVATE/WINDOWS/USER/SERVER/dispcf.c",
+        "PRIVATE/WINDOWS/USER/SERVER/callcf.c",
+        "PRIVATE/WINDOWS/USER/CLIENT/dispcb.c",
+        "PRIVATE/WINDOWS/USER/CLIENT/user32p.def",
+    }) do os.remove(NT_ROOT .. "/" .. f) end
+
+    -- cmd-stub + the wibo-tools symlink farm; both auto-provisioned on
+    -- the next build.
+    os.remove(SCRIPT_DIR .. "/cmd-stub/cmd.obj")
+    os.remove(SCRIPT_DIR .. "/cmd-stub/cmd.exe")
+    rmrf(SCRIPT_DIR .. "/wibo-tools")
+
+    -- Profile-specific disk images under build/.
+    for _, profile in ipairs({ "disk", "micront", "headless", "gui" }) do
+        rmrf(REPO_ROOT .. "/build/" .. profile)
+    end
+
+    -- Delegate to peer Makefiles for the cr + boot-efi trees.
+    clean_one("cr")
+    clean_one("efi")
+
+    log("Clean complete.")
+    return 0
+end
+
 -- No targets are deferred any more; the table-based "not yet ported"
 -- block was retired once this file reached parity with build.sh.
 local NOT_YET_PORTED = {}
@@ -1375,6 +1624,14 @@ local function usage()
     io.stderr:write("  ntoskrnl: " .. table.concat(NTOSKRNL_TARGETS, ", ") .. "\n")
     io.stderr:write("  drivers:  " .. table.concat(DRIVER_TARGETS,  ", ") .. "\n")
     io.stderr:write("  userland: " .. table.concat(USERLAND_TARGETS, ", ") .. "\n")
+    io.stderr:write("\nCleaning:\n")
+    io.stderr:write("  clean              — full nuke (every obj/, all generated headers,\n")
+    io.stderr:write("                       PUBLIC/SDK/LIB outputs, wibo-tools/, build/)\n")
+    io.stderr:write("  clean:<component>  — drop just that component's obj/ tree\n")
+    io.stderr:write("  clean:<group>      — recurse over the group's members\n")
+    io.stderr:write("  clean:cr           — delegates to make -C cr clean\n")
+    io.stderr:write("  clean:efi          — delegates to make -C boot-efi clean\n")
+    io.stderr:write("  clean:disk         — drops build/disk/\n")
     os.exit(1)
 end
 
@@ -1405,12 +1662,20 @@ if #positional == 0 then
 end
 
 for _, name in ipairs(positional) do
-    local fn = targets[name]
-    if not fn then
-        io.stderr:write("Unknown target: " .. name .. "\n")
-        usage()
+    -- clean:<X> → per-component / per-group cleanup.  Bare `clean`
+    -- still routes through targets.clean below.
+    local sub = name:match("^clean:(.+)$")
+    if sub then
+        local rc = clean_one(sub)
+        if rc ~= 0 then os.exit(rc) end
+    else
+        local fn = targets[name]
+        if not fn then
+            io.stderr:write("Unknown target: " .. name .. "\n")
+            usage()
+        end
+        local rc = fn() or 0
+        if rc ~= 0 then os.exit(rc) end
     end
-    local rc = fn() or 0
-    if rc ~= 0 then os.exit(rc) end
 end
 os.exit(0)
