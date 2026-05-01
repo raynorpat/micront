@@ -115,6 +115,31 @@ function M.ensure_serlog()
 end
 
 -- ----------------------------------------------------------------
+-- ensure_cmdmsg — cmd.exe's CMDMSG.MC compiled to cmdmsg.rc/.h +
+-- msg00001.bin before the CMD build.  Same shape as ensure_bugcodes:
+-- the .mc emits CASE.h / CASE.rc on Windows, we lowercase the copies
+-- so cmd.h's `#include "cmdmsg.h"` and cmd.rc's `RCINCLUDE cmdmsg.rc`
+-- find them on a case-sensitive Linux FS.
+-- ----------------------------------------------------------------
+
+function M.ensure_cmdmsg()
+    local dir = cfg.nt_root .. "/PRIVATE/WINDOWS/CMD"
+    if platform.file_exists(dir .. "/cmdmsg.rc")
+       and platform.file_exists(dir .. "/cmdmsg.h")
+       and newer_than(dir .. "/cmdmsg.rc", dir .. "/CMDMSG.MC") then
+        return true
+    end
+    platform.log(">>> mc CMDMSG.MC -> cmdmsg.h/.rc")
+    if toolchain.run_wibo_tool(dir, "mc", "CMDMSG.MC") ~= 0 then
+        platform.log("!!! mc on CMDMSG.MC failed")
+        return false
+    end
+    copy_if_present(dir .. "/CMDMSG.rc",   dir .. "/cmdmsg.rc")
+    copy_if_present(dir .. "/CMDMSG.h",    dir .. "/cmdmsg.h")
+    return true
+end
+
+-- ----------------------------------------------------------------
 -- geni386 — host-side struct offset generator.  Compiles
 -- KE/I386/GENI386.C, links against LIBC + KERNEL32, and runs the
 -- resulting EXE to spit out KS386.INC + HAL386.INC, which assembly

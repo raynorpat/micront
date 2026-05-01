@@ -122,10 +122,13 @@ NTTARGETFILE0=coff.c shared.c data.c
 C_DEFINES = $(C_DEFINES) -DNDEBUG
 !endif
 
+# MicroNT: imagehlp.lib dropped — LINK only used it for
+# UnDecorateSymbolName, and CPP.C / HUNDNAME.CXX now always pull
+# in the in-tree unDName demangler (BUGBUG/UNDNAME.CXX) instead.
+# Removes LINK.EXE's IMAGEHLP.dll import → no DLL to stage on guest.
 UMLIBS= ..\cvtomf\obj\*\cvtomf.lib                  \
         ..\disasm\obj\*\disasm.lib                  \
         ..\disasm68\obj\*\disasm68.lib              \
-        $(BASEDIR)\public\sdk\lib\*\imagehlp.lib    \
         $(BASEDIR)\public\sdk\lib\*\user32.lib
 
 # MicroNT: stock NT shipped LINK.EXE carries a 22KB .rsrc section that

@@ -47,10 +47,14 @@ src/pkg/ntosbe/         NT OS Build Environment (hive + disk + profiles)
 src/cmd-stub/           minimal cmd.exe replacement for NMAKE
 src/tools/              utility scripts (kdserial, pe2gdb, dumphive, …)
 src/wibo-tools/         symlinks into PUBLIC/OAK/BIN/I386 (built first-run)
-src/build.lua           top-level build driver (LuaJIT)
-src/bootstrap.sh        builds the host LuaJIT used to run build.lua
-src/ntosbe.lua          CLI entry into pkg/ntosbe (mkhive + mkdisk replacement)
+src/build.sh            host CLI entry — bootstraps LuaJIT + dispatches into ntosbe.build
+src/bootstrap.sh        builds the host LuaJIT used by build.sh
 ```
+
+The build orchestrator lives in `src/pkg/ntosbe/build.lua` (a regular
+package module) so the same body runs on host and inside the booted
+guest once the in-OS spawn backend lands.  No build code lives at
+`src/` level any more — only the bash wrapper.
 
 `stuff/` and `wibo/` are reference trees. CI fetches a prebuilt
 `wibo-x86_64` from the [wibo fork's release
@@ -67,9 +71,7 @@ sudo apt install gcc gcc-multilib libc6-dev-i386 make gnu-efi \
 git clone --recursive 
 cd nt365
 curl -fL https://github.com/HarryR/wibo/releases/download/v1.1.0-micront.2/wibo-x86_64 -o wibo-x86_64 && chmod +x wibo-x86_64
-cd src
-./bootstrap.sh                                # builds the host LuaJIT
-../build/host-tools/luajit ./build.lua        # builds everything
+./src/build.sh                                # builds everything (auto-runs bootstrap.sh)
 ```
 
 Three toolchains coexist:
@@ -89,7 +91,7 @@ make -C src/cr boot              # boot the disk under QEMU + OVMF
 make -C src/cr selftest          # boot, run selftest.lua, shut down (CI signal)
 ```
 
-`src/boot.sh` (next to `build.lua`) wraps QEMU directly — never invoke
+`src/boot.sh` (next to `build.sh`) wraps QEMU directly — never invoke
 `qemu-system-*` by hand:
 
 ```sh
@@ -103,11 +105,11 @@ debug.sh                         # one-shot: paused QEMU + gdb.script + capture
 
 ## Iteration
 
-- `luajit build.lua <component>` — single component, e.g. `ke`, `mm`,
+- `src/build.sh <component>` — single component, e.g. `ke`, `mm`,
   `virtio`, `ntdll`. Run with no args or unknown name to list targets.
-- `luajit build.lua virtio_lib` rebuilds just `virtio.lib`; `virtio`
+- `src/build.sh virtio_lib` rebuilds just `virtio.lib`; `virtio`
   rebuilds the lib + every consumer `.sys`.
-- `luajit build.lua clean:<component>` drops just that component's
+- `src/build.sh clean:<component>` drops just that component's
   `obj/`; `clean:<group>` (ntoskrnl / drivers / userland / tools)
   recurses; bare `clean` nukes everything.
 - The build skips unchanged objects on `.c` mtime alone. Editing a `.h`

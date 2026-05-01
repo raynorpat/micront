@@ -257,9 +257,11 @@ GUI32_LIBS=$(GUI32_LIBS:lib\*\user32.lib=lib\cairo\*\user32.lib)
 CRT_LIBS=
 
 NT_CRT=$(LIBRARY_PATH)\nt.lib
+!IFNDEF WIN32_LIBS
 WIN32_LIBS=$(LIBC_LIB) \
            $(LIBRARY_PATH)\advapi32.lib \
            $(LIBRARY_PATH)\kernel32.lib
+!ENDIF
 
 NTSS_LIBS=$(NT_LIBS) $(NT_CRT) $(BASEDIR)\public\sdk\lib\*\smdll.lib
 

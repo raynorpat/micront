@@ -27,7 +27,6 @@ local M = {}
 -- ----------------------------------------------------------------
 
 local SECTOR_SIZE         = 512
-local SECTORS_PER_CLUSTER = 4         -- 2 KB clusters
 local RESERVED_SECTORS    = 1
 local NUM_FATS            = 2
 local ROOT_DIR_ENTRIES    = 512       -- FAT16 convention — fixed root
@@ -35,6 +34,19 @@ local ROOT_DIR_SECTORS    = (ROOT_DIR_ENTRIES * 32) / SECTOR_SIZE   -- 32
 
 local PARTITION_START_LBA  = 2048     -- 1 MB — modern, QEMU-friendly
 local PARTITION_TYPE_FAT16 = 0x06     -- FAT16 >= 32 MB
+
+-- FAT16 cluster size scaling.  FAT16 caps at ~65524 clusters; with
+-- 2 KB clusters that's only ~128 MB.  Standard Microsoft FAT16 layout
+-- bumps cluster size with volume so 2 GB stays addressable.  Numbers
+-- here are sectors-per-cluster (each sector = 512 bytes).
+local function default_spc(size_mb)
+    if     size_mb <=   128 then return  4   -- 2 KB clusters
+    elseif size_mb <=   256 then return  8   -- 4 KB
+    elseif size_mb <=   512 then return 16   -- 8 KB
+    elseif size_mb <=  1024 then return 32   -- 16 KB
+    else                        return 64    -- 32 KB (max FAT16: 2 GB)
+    end
+end
 
 local CLUSTER_EOC = 0xFFFF
 
@@ -122,14 +134,16 @@ function M.new(opts)
     end
     local label = (opts.volume_label or "NT"):upper():sub(1, 11)
     local now   = opts.now or 0      -- caller-supplied, zero means epoch
+    local spc   = opts.sectors_per_cluster or default_spc(size_mb)
     return setmetatable({
-        size_bytes    = size_mb * 1024 * 1024,
-        signature     = bit.band(opts.signature or 0x4E544653, 0xFFFFFFFF),
-        volume_label  = label,
-        volume_serial = bit.band(opts.volume_serial or now, 0xFFFFFFFF),
-        now           = now,
-        root          = newentry("ROOT", true, { attr = ATTR_DIRECTORY,
-                                                 mtime = now }),
+        size_bytes          = size_mb * 1024 * 1024,
+        sectors_per_cluster = spc,
+        signature           = bit.band(opts.signature or 0x4E544653, 0xFFFFFFFF),
+        volume_label        = label,
+        volume_serial       = bit.band(opts.volume_serial or now, 0xFFFFFFFF),
+        now                 = now,
+        root                = newentry("ROOT", true, { attr = ATTR_DIRECTORY,
+                                                       mtime = now }),
     }, DiskImage)
 end
 
@@ -251,7 +265,7 @@ function DiskImage:write(write_file_fn, out_path, platform)
     -- ---- Partition geometry ----
     local total_sectors = math.floor(self.size_bytes / SECTOR_SIZE)
     local part_sectors  = total_sectors - PARTITION_START_LBA
-    local spc           = SECTORS_PER_CLUSTER
+    local spc           = self.sectors_per_cluster
 
     -- Solve for sectors_per_fat by iteration (FAT size depends on cluster
     -- count, which depends on data size, which depends on FAT size).

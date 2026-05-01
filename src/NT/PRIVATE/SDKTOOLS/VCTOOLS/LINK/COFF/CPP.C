@@ -14,11 +14,18 @@ Abstract:
 
 #include "shared.h"
 
-#ifndef NT_BUILD
- #define M_I386 1
- #define _loadds
- #include "undname.h"
-#endif
+/* MicroNT: always use the in-tree unDName demangler (HUNDNAME.CXX
+ * compiled into LINK.EXE) instead of imagehlp.dll's
+ * UnDecorateSymbolName.  This drops LINK.EXE's only IMAGEHLP.dll
+ * import — the rest of the file is name-mangling for diagnostic
+ * pretty-printing, fully covered by the static implementation.
+ *
+ * Define unconditionally rather than removing -DNT_BUILD globally
+ * (NT_BUILD gates other behaviours in COFF.C / LIB.C / etc. we want
+ * to keep). */
+#define M_I386 1
+#define _loadds
+#include "undname.h"
 
 PUCHAR
 SzOutputSymbolName(
@@ -28,12 +35,8 @@ SzOutputSymbolName(
 {
     PUCHAR szDname;
     BOOL fImport;
-#ifdef NT_BUILD
-#define DEC_BUFFER_SIZE 512
-    char szUndecorated[DEC_BUFFER_SIZE];
-#else
+    /* MicroNT: always use the local unDName (in-tree HUNDNAME.CXX). */
     PUCHAR szUndecorated;
-#endif
     size_t cchOut;
     PUCHAR szOut;
 
@@ -50,13 +53,6 @@ SzOutputSymbolName(
         return(szIn);
     }
 
-#ifdef NT_BUILD
-    if (UnDecorateSymbolName(szDname, szUndecorated, sizeof(szUndecorated), UNDNAME_COMPLETE) == 0) {
-        // Undecorator failed
-
-        return(szIn);
-    }
-#else
     szUndecorated = unDName(NULL, szDname, 0,
 #ifdef  _INC_DMALLOC
                             (Alloc_t) D_malloc, (Free_t) D_free,
@@ -70,7 +66,6 @@ SzOutputSymbolName(
 
         return(szIn);
     }
-#endif
 
     // Alloc: '(', undname, ')', '\0'
 
@@ -106,9 +101,11 @@ SzOutputSymbolName(
     strcat(szOut, szUndecorated);
     strcat(szOut, ")");
 
-#ifndef NT_BUILD
+    /* MicroNT: unDName allocates szUndecorated via the passed Alloc_t
+     * (malloc) — must free unconditionally now that the imagehlp
+     * (caller-buffer) path is gone.  Original code had this under
+     * #ifndef NT_BUILD; we drop the guard. */
     free(szUndecorated);
-#endif
 
     return(szOut);
 }

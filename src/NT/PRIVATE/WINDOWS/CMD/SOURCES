@@ -1,0 +1,68 @@
+MAJORCOMP=os2pgms
+MINORCOMP=cmd
+
+TARGETNAME=cmd
+TARGETPATH=obj
+TARGETTYPE=LIBRARY
+
+# NTDEBUG=cvp
+# NTDEBUGTYPE=windbg
+
+SOURCES=cmd.rc \
+        cbatch.c \
+        cchcp.c \
+        cclock.c \
+        cdata.c \
+        cdebug.c \
+        cenv.c \
+        cext.c \
+        cfile.c \
+        cinfo.c \
+        cinit.c \
+        ckeys.c \
+        clex.c \
+        cmem.c \
+        cop.c \
+        console.c \
+        cother.c \
+        cparse.c \
+        cpath.c \
+        cpparse.c \
+        cpwork.c \
+        csig.c \
+        ctools1.c \
+        ctools2.c \
+        ctools3.c \
+        del.c   \
+        dir.c \
+        display.c \
+        ffirst.c \
+        hstoi.c \
+        start.c \
+        string.c \
+        tree.c  \
+        uipriv.c
+
+
+C_DEFINES=-DCOMMAND=1 -DENABLE_NLS=0 -DUNICODE -D_UNICODE
+
+UMTYPE=console
+UMAPPL=cmd
+# user32.lib + advapi32.lib dropped from upstream link line:
+# - user32: only needed for wsprintf (5 callsites).  We moved
+#   wsprintfA/W into kernel32 (see BASE/CLIENT/WSPRINTF.C); the
+#   __imp__wsprintfW thunks now resolve via kernel32.lib.
+# - advapi32: only needed for IsTextUnicode (one callsite, TYPE
+#   builtin, CINFO.C:216).  Stock advapi32!IsTextUnicode is a thin
+#   wrapper around ntdll!RtlIsTextUnicode; we call Rtl directly,
+#   resolved via ntdll.lib.
+#
+# UMTYPE=console pulls in WIN32_LIBS via MAKEFILE.DEF:310.  The DEF
+# now wraps the default WIN32_LIBS in !IFNDEF, so setting our own
+# value here actually wins.  Drop advapi32, add ntdll.
+WIN32_LIBS=$(LIBC_LIB) $(LIBRARY_PATH)\kernel32.lib $(LIBRARY_PATH)\ntdll.lib
+UMLIBS=obj\*\cmd.lib
+UMRES=obj\*\cmd.res
+COFFBASE=cmd
+
+NTTARGETFILE0=cmdmsg.h

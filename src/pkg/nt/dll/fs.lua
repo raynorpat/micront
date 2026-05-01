@@ -22,10 +22,12 @@
 -- File handles from this module close via NtClose in nt.dll.ob:
 --     require('nt.dll.ob').NtClose(h)
 
+local bit    = require('bit')
 local ffi    = require('ffi')
 local ntdll  = require('nt.dll')
 local err    = require('nt.dll.errors')
 local handle = require('nt.dll.handle')
+local oa     = require('nt.dll.oa')
 local str    = require('nt.dll.str')
 
 -- Pack(4) for LARGE_INTEGER-bearing structs; see nt.dll.sys for the
@@ -157,12 +159,17 @@ NTSTATUS __stdcall NtReadFile  (HANDLE FileHandle,
                                 LARGE_INTEGER *ByteOffset,
                                 ULONG *Key);
 
+/* Buffer is `const void *` here (semantically — kernel reads from
+ * it, doesn't write).  The looser declaration matches what LuaJIT
+ * can auto-convert from a Lua string, so callers can pass a string
+ * directly without an intermediate cdata copy.  NT API headers
+ * declare it as plain `PVOID` but the kernel respects const. */
 NTSTATUS __stdcall NtWriteFile (HANDLE FileHandle,
                                 HANDLE Event,
                                 void *ApcRoutine,
                                 void *ApcContext,
                                 IO_STATUS_BLOCK *IoStatusBlock,
-                                void *Buffer,
+                                const void *Buffer,
                                 ULONG Length,
                                 LARGE_INTEGER *ByteOffset,
                                 ULONG *Key);
@@ -177,6 +184,14 @@ NTSTATUS __stdcall NtDeviceIoControlFile(HANDLE FileHandle,
                                          ULONG InputBufferLength,
                                          void *OutputBuffer,
                                          ULONG OutputBufferLength);
+
+/* Cheap stat — populates FILE_BASIC_INFORMATION without opening a
+ * handle.  NT 3.5 has the syscall (NTOS/IO/MISC.C:657); NT 4.0 added
+ * NtQueryFullAttributesFile which also returns size in one call.  We
+ * only have NtQueryAttributesFile here; size still needs an open. */
+NTSTATUS __stdcall NtQueryAttributesFile(
+    OBJECT_ATTRIBUTES      *ObjectAttributes,
+    FILE_BASIC_INFORMATION *FileInformation);
 ]]
 
 -- STATUS_END_OF_FILE has severity ERROR, so the uniform is_error
@@ -409,6 +424,149 @@ function M.NtQueryDirectoryFile(h, buffer, length, restart_scan)
                                           restart_scan and 1 or 0)
     if err.is_error(st) then err.raise('NtQueryDirectoryFile', st) end
     return iosb.Information, err.normalize(st)
+end
+
+-- ------------------------------------------------------------------
+-- Higher-level wrappers built on the primitives above.  These exist
+-- so callers in ntosbe.platform (and any other consumer) don't have
+-- to re-derive the same flag soup at every site.
+-- ------------------------------------------------------------------
+
+local STATUS_OBJECT_NAME_NOT_FOUND = 0xC0000034
+local STATUS_OBJECT_PATH_NOT_FOUND = 0xC000003A
+
+-- query_attributes(path) → FILE_BASIC_INFORMATION cdata, or nil if the
+-- file/dir is missing.  One syscall, no handle alloc.  Wraps
+-- NtQueryAttributesFile (NT 3.5; NT 4.0+ has NtQueryFullAttributesFile
+-- which also returns size, but we don't need that for the build path).
+--
+-- Use cases: file_exists(p) = query_attributes(p) ~= nil ;
+--            is_dir(p)      = bit.band(.FileAttributes, FILE_ATTRIBUTE_DIRECTORY) ~= 0;
+--            mtime(p)       = .LastWriteTime → rtl.li_to_unix.
+function M.query_attributes(path)
+    local noa  = oa.path(path)
+    local info = ffi.new('FILE_BASIC_INFORMATION')
+    local st   = ntdll.NtQueryAttributesFile(noa.oa, info)
+    local stu  = err.normalize(st)
+    if stu == STATUS_OBJECT_NAME_NOT_FOUND
+       or stu == STATUS_OBJECT_PATH_NOT_FOUND then
+        return nil
+    end
+    if err.is_error(st) then err.raise('NtQueryAttributesFile', st) end
+    return info
+end
+
+-- create_dir(path) → handle, was_created.  Composes NtCreateFile with
+-- the right flag mix for "ensure directory exists; return a handle to
+-- it".  was_created is true if the dir was just created (FILE_CREATED
+-- = 2 in IoStatusBlock) vs already-existed (FILE_OPENED = 1).  The
+-- handle is returned as an NT_HANDLE — caller :close() when done.
+--
+-- Used by platform.mkdir_p which walks each component.
+M.FILE_OPENED  = 1
+M.FILE_CREATED = 2
+
+function M.create_dir(path)
+    local noa = oa.path(path)
+    local h, info = M.NtCreateFile(
+        bit.bor(M.FILE_GENERIC_READ, M.SYNCHRONIZE),
+        noa.oa,
+        nil,                                       -- AllocationSize
+        M.FILE_ATTRIBUTE_DIRECTORY,
+        bit.bor(M.FILE_SHARE_READ, M.FILE_SHARE_WRITE),
+        M.FILE_OPEN_IF,
+        bit.bor(M.FILE_DIRECTORY_FILE, M.FILE_SYNCHRONOUS_IO_NONALERT),
+        nil, 0)
+    return h, info == M.FILE_CREATED
+end
+
+-- iter_dir(handle) → iterator yielding (name, info) pairs.
+--
+-- Wraps NtQueryDirectoryFile + linked-list parse over a single 8 KB
+-- buffer.  NextEntryOffset = 0 marks the last record in a buffer; we
+-- re-call NtQueryDirectoryFile (restart_scan=false) for the next
+-- batch, until STATUS_NO_MORE_FILES.
+--
+-- `info` is a pointer into the buffer at the current
+-- FILE_DIRECTORY_INFORMATION record — caller can read .FileAttributes,
+-- .LastWriteTime, .EndOfFile inline without a second syscall.  Don't
+-- store the pointer beyond one iteration; the next yield reuses the
+-- buffer.
+--
+-- "." and ".." are filtered out (callers never want them).
+local BUF_BYTES = 8 * 1024
+
+function M.iter_dir(h)
+    local buf       = ffi.new('uint8_t[?]', BUF_BYTES)
+    local first_call = true
+    local cur        = nil       -- pointer to current FILE_DIRECTORY_INFORMATION
+    local end_ptr    = nil       -- buf + bytes_written
+
+    local function refill()
+        local bytes, st = M.NtQueryDirectoryFile(h, buf, BUF_BYTES, first_call)
+        first_call = false
+        if st == M.STATUS_NO_MORE_FILES then
+            return false
+        end
+        cur     = ffi.cast('FILE_DIRECTORY_INFORMATION *', buf)
+        end_ptr = ffi.cast('uint8_t *', buf) + bytes
+        return true
+    end
+
+    local function next_entry()
+        ::again::
+        if cur == nil then
+            if not refill() then return nil end
+        end
+        local info = cur
+        local n_chars = math.floor(info.FileNameLength / 2)
+        -- FileName is declared `wchar_t FileName[1]` but the kernel
+        -- writes FileNameLength bytes inline starting at that offset.
+        -- Cast explicitly so str.from_wchars indexes via pointer
+        -- arithmetic rather than struct-field access semantics.
+        local wp = ffi.cast('uint16_t *', info.FileName)
+        local name = str.from_wchars(wp, n_chars)
+
+        -- Advance.
+        if info.NextEntryOffset == 0 then
+            cur = nil       -- forces refill on next call
+        else
+            cur = ffi.cast('FILE_DIRECTORY_INFORMATION *',
+                           ffi.cast('uint8_t *', cur) + info.NextEntryOffset)
+        end
+
+        if name == "." or name == ".." then goto again end
+        return name, info
+    end
+
+    return next_entry
+end
+
+-- Convenience: list_dir(path) opens, drains, closes.  Returns an array
+-- of file names (no "." / "..").  Mirrors host platform.list_dir
+-- exactly so callers don't have to branch.
+--
+-- pcall + always-close pattern: NtQueryDirectoryFile may raise on
+-- (e.g.) STATUS_INSUFFICIENT_RESOURCES; we still want the handle
+-- closed deterministically rather than waiting for __gc.  Same shape
+-- as ps.RtlCreateUserProcess's RtlDestroyProcessParameters guard.
+function M.list_dir(path)
+    local noa = oa.path(path)
+    local h = M.NtOpenFile(
+        bit.bor(M.FILE_GENERIC_READ, M.SYNCHRONIZE),
+        noa.oa,
+        bit.bor(M.FILE_SHARE_READ, M.FILE_SHARE_WRITE),
+        bit.bor(M.FILE_DIRECTORY_FILE, M.FILE_SYNCHRONOUS_IO_NONALERT))
+    local ok, ret = pcall(function()
+        local names = {}
+        for name, _info in M.iter_dir(h) do
+            names[#names + 1] = name
+        end
+        return names
+    end)
+    h:close()
+    if not ok then error(ret, 0) end
+    return ret
 end
 
 return M

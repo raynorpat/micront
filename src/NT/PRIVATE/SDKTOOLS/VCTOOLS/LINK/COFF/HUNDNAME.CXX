@@ -12,7 +12,13 @@ Abstract:
 
 --*/
 
-#ifdef NT_BUILD
+/* MicroNT: always pull in the local in-tree dname undecorator
+ * (UNDNAME.CXX in BUGBUG/) — drops LINK.EXE's IMAGEHLP.dll import.
+ * Original code skipped this under NT_BUILD because the host build
+ * linked imagehlp.lib for UnDecorateSymbolName; we don't.  See
+ * CPP.C for the matching call-site change. */
+
+#if 0 /* was: #ifdef NT_BUILD */
 
     //
     //  Uses ImageHlp.DLL

@@ -1,10 +1,10 @@
 -- ntosbe — the NT OS Build Environment.
 --
 -- The MicroNT build system as a self-sufficient Lua package, with no
--- Python dependency and no host-only assumptions.  Runs on the host
--- during bootstrap (src/build.lua dispatches into here) and, once
--- Phase E lands, inside MicroNT itself — closing the orobouros
--- self-build loop.
+-- Python dependency and no host-only assumptions.  Host entry is
+-- src/build.sh → ntosbe.build.main; the in-OS entry will route through
+-- the same ntosbe.build module once the platform.spawn_wait NT
+-- backend lands, closing the orobouros self-build loop.
 --
 -- pkg/ntosbe/ is staged at \SystemRoot\lua\ntosbe\ on disk like every
 -- other package, so a booted MicroNT image automatically carries its
@@ -90,8 +90,14 @@ function M.build_image(opts)
     end
 
     -- ---- Build disk image ----
+    -- Default 512 MiB — enough for OS + toolchain + the staged NT
+    -- source tree (~144 MB used today) with comfortable headroom.
+    -- Larger sizes are honoured but materialise a bigger Lua string
+    -- through ffi.string + write_file, which dominates `make disk`
+    -- time on host.  FAT16 max is 2 GB at 32 KB clusters; bump
+    -- size_mb if a heavier source tree shows up.
     local img = M.disk.new {
-        size_mb      = opts.size_mb or 64,
+        size_mb      = opts.size_mb or 512,
         signature    = 0x4E544653,
         volume_label = "NT",
         now          = now,
@@ -103,6 +109,11 @@ function M.build_image(opts)
                                    f.dest, sz, basename))
         img:add_file(f.dest, f.src, platform)
     end
+    -- Empty writable directories.  TEMP / TMP environment values point
+    -- at C:\tmp; CL.EXE writes per-compile intermediate files there
+    -- (e.g. C:\tmp\<NNNNNN>sy).  No file content to seed — just an
+    -- empty directory entry on the FAT16 image.
+    img:mkdir("tmp")
     -- Embed the SYSTEM hive at the path the kernel reads.
     img:add_bytes("System32/config/SYSTEM", hive_bytes)
 
@@ -179,7 +190,7 @@ function M.main(argv)
         efi_binary = opts.efi_binary,
         output_dir = opts.output_dir,
         src_root   = opts.src_root,
-        size_mb    = tonumber(opts.size_mb) or 64,
+        size_mb    = tonumber(opts.size_mb) or 2000,
     }
 end
 

@@ -374,6 +374,27 @@ function M.disk_files(paths, list_tree)
         { dest = "pkg/msvc20/CL32.MSG",     src = msvc .. "/CL32.MSG"     },
         { dest = "pkg/msvc20/MSVCRT20.DLL", src = msvc .. "/MSVCRT20.DLL" },
         { dest = "pkg/msvc20/DBI.DLL",      src = msvc .. "/DBI.DLL"      },
+        -- NMAKE.EXE — deferred earlier; pulled in for the self-host
+        -- attempt where ntosbe.build runs in-OS and drives nmake.
+        { dest = "pkg/msvc20/NMAKE.EXE",    src = msvc .. "/NMAKE.EXE"    },
+        { dest = "pkg/msvc20/NMAKE.ERR",    src = msvc .. "/NMAKE.ERR"    },
+        -- CRTDLL.DLL is the CRT used by NMAKE / LINK / CVTRES.  It
+        -- lives in PUBLIC/SDK/LIB on the host tree (not OAK/BIN with
+        -- the toolchain EXEs) — so the source path differs, but it's
+        -- still a toolchain-runtime artifact and belongs alongside
+        -- the EXEs that import it.  ps.spawn passes the msvc20 dir
+        -- as DllPath so the loader resolves it from there.
+        { dest = "pkg/msvc20/CRTDLL.DLL",   src = paths.sdk_lib .. "/CRTDLL.DLL" },
+        -- NT 3.5 cmd.exe (lifted from stuff/, in-tree at WINDOWS/CMD/).
+        -- NMAKE shells inline commands through COMSPEC; we point
+        -- COMSPEC at this exact path via tchain's NT_ENV.  Drops the
+        -- former cmd-stub staging — that's a host-side wibo-iteration
+        -- binary, conceptually wrong on guest.  Real cmd.exe handles
+        -- `if exist`, `for`, `set`, `%VAR%` expansion that cmd-stub
+        -- can't, so any future MAKEFILE.DEF rule we add gets full
+        -- shell semantics.
+        { dest = "pkg/msvc20/cmd.exe",
+          src  = paths.nt .. "/PRIVATE/WINDOWS/CMD/obj/i386/cmd.exe" },
     }
     for _, e in ipairs(msvc_files) do files[#files + 1] = e end
 
@@ -386,6 +407,85 @@ function M.disk_files(paths, list_tree)
             dest = "lua/" .. rel,
             src  = paths.pkg_root .. "/" .. rel,
         }
+    end
+
+    -- ----------------------------------------------------------------
+    -- NT source tree → \SystemRoot\src\NT\…
+    --
+    -- Self-host enabler: the booted guest needs the SOURCES files,
+    -- C/asm/inc inputs, MAKEFILEs, and PUBLIC/{SDK,OAK}/{INC,LIB} on
+    -- disk so ntosbe.build can drive NMAKE.EXE in-process.  Filtered
+    -- staging — drops obj/ outputs, wibo-tools/, RC/MIDL temp files,
+    -- and (until renamed) the few 8.3-violating MicroNT additions
+    -- (NVME2K/VIRTIO/HAL extras).  null.sys + ntoskrnl path is clean.
+    --
+    -- Anything top-level under src/ that's host-only (cr/, boot-efi/,
+    -- wibo-tools/, cmd-stub/, tools/, build.sh, bootstrap.sh, boot.sh,
+    -- OVMF*.fd) is deliberately excluded — guest can't run gcc/mingw,
+    -- doesn't need the host bootstrap helpers.
+    -- ----------------------------------------------------------------
+
+    local function is_8_3(name)
+        local stem, ext = name:match("^(.+)%.([^.]+)$")
+        if not stem then return #name <= 8 end
+        return #stem <= 8 and #ext <= 3
+    end
+
+    local nt_skip_dirs = {
+        ["obj"] = true, ["Obj"] = true,
+    }
+    local nt_skip_basenames = {
+        -- nmake / rc temp droppings (RC[a-z]NNNNN, nmNNN).  Filter
+        -- here so a stale tree doesn't block the disk build; the
+        -- clean target removes them properly on host.
+    }
+
+    -- Pre-walk to drop files inside any obj/ subdir.  list_tree
+    -- doesn't expose intermediate dir names, so we test path segments.
+    local function nt_path_excluded(rel)
+        for seg in rel:gmatch("[^/]+") do
+            if nt_skip_dirs[seg] then return true end
+        end
+        return false
+    end
+
+    -- FAT16 is case-insensitive: a dir holding both `SERLOG.h` (mc.exe
+    -- output) and `serlog.h` (the lower-case copy ensure_serlog stages
+    -- alongside it) collides.  Keep the lower-case form when both
+    -- exist; the codegen-normalised name is the canonical one the
+    -- include path looks for.
+    local seen = {}                 -- key = upper(rel) → idx in files
+    local skipped_8_3 = {}
+    for _, rel in ipairs(list_tree(paths.nt)) do
+        if not nt_path_excluded(rel) then
+            local base = rel:match("([^/]+)$") or rel
+            if is_8_3(base) then
+                local key = rel:upper()
+                local existing = seen[key]
+                local entry = {
+                    dest = "src/NT/" .. rel,
+                    src  = paths.nt .. "/" .. rel,
+                }
+                if existing then
+                    -- Prefer the all-lowercase basename when one
+                    -- variant clashes with another.
+                    if base == base:lower() then
+                        files[existing] = entry
+                    end
+                    -- Otherwise leave the existing entry alone.
+                else
+                    files[#files + 1] = entry
+                    seen[key] = #files
+                end
+            else
+                skipped_8_3[#skipped_8_3 + 1] = rel
+            end
+        end
+    end
+    if #skipped_8_3 > 0 then
+        print(string.format(
+            "  ide.lua: skipped %d 8.3-violating NT source files (rename or NTFS to include)",
+            #skipped_8_3))
     end
 
     return files

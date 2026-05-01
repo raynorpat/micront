@@ -21,24 +21,6 @@ Revision History:
 #include <assert.h>
 #include "mc.h"
 
-typedef BOOL (*PISTEXTUNICODE_ROUTINE)(
-    CONST LPVOID lpBuffer,
-    int cb,
-    LPINT lpi
-    );
-
-PISTEXTUNICODE_ROUTINE OptionalIsTextUnicode = NULL;
-
-BOOL
-DefaultIsTextUnicode(
-    CONST LPVOID lpBuffer,
-    int cb,
-    LPINT lpi
-    )
-{
-    return FALSE;
-}
-
 PNAME_INFO
 McAddName(
     PNAME_INFO *NameListHead,
@@ -212,19 +194,6 @@ IsFileUnicode (char * fName)
     LPVOID   lpBuf;
     BOOLEAN  result;
 
-    if (OptionalIsTextUnicode == NULL) {
-        /* Was: GetProcAddress( LoadLibrary("ADVAPI32.DLL"), "IsTextUnicode" )
-         * Wibo's advapi32 shim doesn't implement IsTextUnicode, and its
-         * GetProcAddress returns a stub-pointer for missing exports
-         * rather than NULL — calling that stub aborts wibo with
-         * "call reached missing import IsTextUnicode from advapi32".
-         * Our .mc inputs (BUGCODES.MC, WIN31EVT.MC, WINERROR.MC, …) are
-         * all ANSI; DefaultIsTextUnicode (returns FALSE) is the correct
-         * branch.  Same pattern as the GetOEMCP patch above.
-         */
-        OptionalIsTextUnicode = DefaultIsTextUnicode;
-        }
-
     if ( ( fp = fopen( fName, "rb" ) ) == NULL )
         return (FALSE);
 
@@ -235,7 +204,20 @@ IsFileUnicode (char * fName)
     }
 
     cbRead = fread( lpBuf, 1, CCH_READ_MAX, fp );
-    result = (BOOLEAN) (*OptionalIsTextUnicode)( lpBuf, cbRead, &value );
+    /* Stock mc.exe used GetProcAddress("ADVAPI32.DLL","IsTextUnicode")
+     * for dynamic resolution.  mc.exe runs on both host (under wibo,
+     * whose ntdll/advapi32 shims don't implement IsTextUnicode or
+     * RtlIsTextUnicode — a hard import would fail at startup, a
+     * GetProcAddress returns a stub-pointer that aborts when called)
+     * and on guest (during the in-OS build, against real ntdll where
+     * RtlIsTextUnicode works).  Rather than #ifdef the two paths,
+     * hard-code FALSE: every .mc input we feed mc.exe (BUGCODES.MC,
+     * WIN31EVT.MC, WINERROR.MC, …) is ANSI, so the heuristic would
+     * answer FALSE anyway.  cmd.exe's TYPE builtin (CINFO.C) needs
+     * the real heuristic and uses ntdll!RtlIsTextUnicode directly —
+     * cmd.exe only runs guest-side. */
+    (void) lpBuf; (void) cbRead;
+    result = FALSE;
 
     fclose( fp );
     free( lpBuf );

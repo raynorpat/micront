@@ -262,7 +262,12 @@ Return Value:
     PPEB Peb;
     DWORD InputMode;
 
-    *lpNumberOfBytesRead = 0;
+    /* See WriteFile above for the NULL-guard rationale: technically a
+     * caller-bug per MSDN but the stock kernel32 / wibo shim guard it,
+     * so MicroNT does too. */
+    if (ARGUMENT_PRESENT(lpNumberOfBytesRead)) {
+        *lpNumberOfBytesRead = 0;
+    }
 
     Peb = NtCurrentPeb();
 
@@ -291,7 +296,9 @@ Return Value:
             if (InputMode & ENABLE_PROCESSED_INPUT) {
                 try {
                     if (*(PCHAR)lpBuffer == 0x1A) {
-                        *lpNumberOfBytesRead = 0;
+                        if (ARGUMENT_PRESENT(lpNumberOfBytesRead)) {
+                            *lpNumberOfBytesRead = 0;
+                        }
                         }
                     }
                 except( EXCEPTION_EXECUTE_HANDLER ) {
@@ -332,12 +339,16 @@ Return Value:
 
 
         if ( NT_SUCCESS(Status) && Status != STATUS_PENDING) {
-            *lpNumberOfBytesRead = lpOverlapped->InternalHigh;
+            if (ARGUMENT_PRESENT(lpNumberOfBytesRead)) {
+                *lpNumberOfBytesRead = lpOverlapped->InternalHigh;
+            }
             return TRUE;
             }
         else
         if (Status == STATUS_END_OF_FILE) {
-            *lpNumberOfBytesRead = 0;
+            if (ARGUMENT_PRESENT(lpNumberOfBytesRead)) {
+                *lpNumberOfBytesRead = 0;
+            }
             BaseSetLastNTError(Status);
             return FALSE;
             }
@@ -369,17 +380,23 @@ Return Value:
             }
 
         if ( NT_SUCCESS(Status) ) {
-            *lpNumberOfBytesRead = IoStatusBlock.Information;
+            if (ARGUMENT_PRESENT(lpNumberOfBytesRead)) {
+                *lpNumberOfBytesRead = IoStatusBlock.Information;
+            }
             return TRUE;
             }
         else
         if (Status == STATUS_END_OF_FILE) {
-            *lpNumberOfBytesRead = 0;
+            if (ARGUMENT_PRESENT(lpNumberOfBytesRead)) {
+                *lpNumberOfBytesRead = 0;
+            }
             return TRUE;
             }
         else {
             if ( NT_WARNING(Status) ) {
-                *lpNumberOfBytesRead = IoStatusBlock.Information;
+                if (ARGUMENT_PRESENT(lpNumberOfBytesRead)) {
+                    *lpNumberOfBytesRead = IoStatusBlock.Information;
+                }
                 }
             BaseSetLastNTError(Status);
             return FALSE;
@@ -464,7 +481,17 @@ Return Value:
     IO_STATUS_BLOCK IoStatusBlock;
     PPEB Peb;
 
-    *lpNumberOfBytesWritten = 0;
+    /* MicroNT: original NT 3.5 unconditionally wrote
+     *      *lpNumberOfBytesWritten = 0;
+     * here, AVing if the caller passed NULL for both that and
+     * lpOverlapped (technically invalid per MSDN — NULL bytes-written
+     * is only legal in the overlapped case — but RCDLL.DLL's debug
+     * trace at RCDLL.C:37 does exactly that, and stock kernel32 /
+     * wibo's shim guard the write).  Match that defensive behaviour
+     * here so a stray NULL doesn't tear down the process. */
+    if (ARGUMENT_PRESENT(lpNumberOfBytesWritten)) {
+        *lpNumberOfBytesWritten = 0;
+    }
 
     Peb = NtCurrentPeb();
     switch( (DWORD)hFile ) {
@@ -504,7 +531,9 @@ Return Value:
                 );
 
         if ( !NT_ERROR(Status) && Status != STATUS_PENDING) {
-            *lpNumberOfBytesWritten = lpOverlapped->InternalHigh;
+            if (ARGUMENT_PRESENT(lpNumberOfBytesWritten)) {
+                *lpNumberOfBytesWritten = lpOverlapped->InternalHigh;
+            }
             return TRUE;
             }
         else  {
@@ -534,12 +563,16 @@ Return Value:
             }
 
         if ( NT_SUCCESS(Status)) {
-            *lpNumberOfBytesWritten = IoStatusBlock.Information;
+            if (ARGUMENT_PRESENT(lpNumberOfBytesWritten)) {
+                *lpNumberOfBytesWritten = IoStatusBlock.Information;
+            }
             return TRUE;
             }
         else {
             if ( NT_WARNING(Status) ) {
-                *lpNumberOfBytesWritten = IoStatusBlock.Information;
+                if (ARGUMENT_PRESENT(lpNumberOfBytesWritten)) {
+                    *lpNumberOfBytesWritten = IoStatusBlock.Information;
+                }
                 }
             BaseSetLastNTError(Status);
             return FALSE;

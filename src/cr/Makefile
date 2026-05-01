@@ -295,11 +295,7 @@ HOST_LUAJIT := $(REPO)/build/host-tools/luajit
 disk: all
 	mkdir -p $(BUILD)
 	$(SRC)/bootstrap.sh
-	$(HOST_LUAJIT) $(SRC)/ntosbe.lua \
-	    --src-root=$(SRC) \
-	    --output-dir=$(BUILD) \
-	    --efi-binary=$(BOOT_EFI)/BOOTX64.EFI \
-	    $(INIT_ARGS_FLAG)
+	$(HOST_LUAJIT) -e 'package.path="$(SRC)/pkg/?.lua;$(SRC)/pkg/?/init.lua;"..package.path; os.exit(require("ntosbe").main(arg))' -- ntosbe --src-root=$(SRC) --output-dir=$(BUILD) --efi-binary=$(BOOT_EFI)/BOOTX64.EFI $(INIT_ARGS_FLAG)
 
 boot: disk
 	$(SRC)/boot.sh

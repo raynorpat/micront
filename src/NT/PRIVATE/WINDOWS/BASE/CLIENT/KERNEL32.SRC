@@ -421,6 +421,10 @@ EXPORTS
     lstrlen = lstrlenA
     lstrlenA
     lstrlenW
+    ; MicroNT: wsprintf moved here from user32 — see WSPRINTF.C.
+    wsprintf = wsprintfA
+    wsprintfA
+    wsprintfW
     MapViewOfFile
     MapViewOfFileEx
     MoveFileA

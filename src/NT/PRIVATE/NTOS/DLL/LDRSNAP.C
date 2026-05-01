@@ -2053,6 +2053,51 @@ LdrpNtNamespaceSearchPath (
     RtlInitUnicodeString(&dllStr, DllName);
     dllNameLen = dllStr.Length;
 
+    //
+    // Short-circuit: if DllName is already an NT-namespace absolute
+    // path ('\...'), the search path is irrelevant — just open the
+    // file directly.  Otherwise joining "<entry>\<absolute-DllName>"
+    // produces nonsense like
+    //   "\SystemRoot\System32\\SystemRoot\pkg\msvc20\CRTDLL.dll"
+    // which the object manager rejects with STATUS_OBJECT_PATH_NOT_FOUND.
+    // Happens whenever a DllMain LoadLibrary's a DLL by full path,
+    // or when CreateProcessW resolves the target EXE and hands
+    // LdrpMapDll the fully-qualified name.
+    //
+    if (DllName[0] == L'\\') {
+        if (dllNameLen + sizeof(UNICODE_NULL) <= BufferLengthBytes) {
+            UNICODE_STRING NtName;
+            OBJECT_ATTRIBUTES Obja;
+            IO_STATUS_BLOCK IoStatus;
+            HANDLE handle;
+            NTSTATUS Status;
+
+            RtlMoveMemory(Buffer, dllStr.Buffer, dllNameLen);
+            Buffer[dllNameLen / sizeof(WCHAR)] = UNICODE_NULL;
+
+            NtName.Buffer        = Buffer;
+            NtName.Length        = dllNameLen;
+            NtName.MaximumLength = dllNameLen + (USHORT)sizeof(UNICODE_NULL);
+
+            InitializeObjectAttributes(&Obja, &NtName,
+                                       OBJ_CASE_INSENSITIVE, NULL, NULL);
+
+            Status = NtOpenFile(&handle,
+                                SYNCHRONIZE | FILE_READ_DATA,
+                                &Obja,
+                                &IoStatus,
+                                FILE_SHARE_READ | FILE_SHARE_DELETE,
+                                FILE_SYNCHRONOUS_IO_NONALERT |
+                                    FILE_NON_DIRECTORY_FILE);
+            DbgPrint("LDR: NT-direct %wZ -> %X\n", &NtName, Status);
+            if (NT_SUCCESS(Status)) {
+                NtClose(handle);
+                return dllNameLen;
+            }
+        }
+        return 0;
+    }
+
     while (*pathStart) {
         PWSTR pathEnd = pathStart;
         USHORT entryLen;
@@ -2063,10 +2108,16 @@ LdrpNtNamespaceSearchPath (
 
         entryLen = (USHORT)((PUCHAR)pathEnd - (PUCHAR)pathStart);
 
-        if (entryLen) {
+        //
+        // MicroNT runs everything in the NT object namespace; entries
+        // not starting with '\' (relative, '.', or DOS-rooted) are
+        // skipped.  Win32 DOS-path resolution would need a CurDir
+        // and \DosDevices\<letter>: symlinks the system doesn't have.
+        //
+        if (entryLen && pathStart[0] == L'\\') {
             BOOLEAN needSep = (BOOLEAN)(pathEnd[-1] != L'\\');
-            USHORT candLen = entryLen + dllNameLen
-                             + (needSep ? (USHORT)sizeof(WCHAR) : 0);
+            USHORT  candLen = entryLen + dllNameLen
+                              + (needSep ? (USHORT)sizeof(WCHAR) : 0);
 
             if (candLen + sizeof(UNICODE_NULL) <= BufferLengthBytes) {
                 PWSTR p = Buffer;
@@ -2177,11 +2228,10 @@ Return Value:
         // (starts with '\'), each ';'-separated entry is an NT-namespace
         // directory rather than a DOS-shaped path.  We probe by joining
         // "<entry>\<DllName>" and calling NtOpenFile directly, bypassing
-        // RtlDosSearchPath_U / RtlDosPathNameToNtPathName_U / RtlGetFullPathName_Ustr —
-        // those are DOS-path APIs that prepend \DosDevices\ and demand a
-        // drive-letter prefix in CurDir.DosPath, neither of which exists
-        // on a system without DOS.  \SystemRoot is an OB symbolic link;
-        // the kernel resolves it directly.
+        // RtlDosSearchPath_U / RtlDosPathNameToNtPathName_U — those are
+        // DOS-path APIs that demand a CurDir.DosPath and \DosDevices
+        // drive-letter symlinks the booted system doesn't carry.
+        // \SystemRoot is an OB symbolic link the kernel resolves directly.
         //
         if (Path && Path[0] == L'\\') {
             Length = LdrpNtNamespaceSearchPath(Path, DllName,

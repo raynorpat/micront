@@ -68,9 +68,8 @@ local M = {}
 -- Make sure \NLS exists. Without this, NtCreateSection on \NLS\Foo
 -- returns STATUS_OBJECT_PATH_NOT_FOUND.
 local function ensure_nls_directory()
-    local DIRECTORY_ALL_ACCESS = 0xF000F
     local noa = oa.path(NLS_DIR, PERMANENT_NAMED)
-    ob.NtCreateDirectoryObject(DIRECTORY_ALL_ACCESS, noa.oa):close()
+    ob.NtCreateDirectoryObject(ob.DIRECTORY_ALL_ACCESS, noa.oa):close()
 end
 
 -- Publish one named section backed by a file. No pcall — STATUS_*

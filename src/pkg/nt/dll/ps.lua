@@ -126,16 +126,25 @@ NTSTATUS __stdcall RtlCreateUserThread(
  * create dups them into the child's handle table).  Layout up through
  * StandardError is enough — anything past that we treat as opaque. */
 typedef struct _RTL_USER_PROCESS_PARAMETERS_HEADER {
-    ULONG  MaximumLength;
-    ULONG  Length;
-    ULONG  Flags;
-    ULONG  DebugFlags;
-    HANDLE ConsoleHandle;
-    ULONG  ConsoleFlags;
-    HANDLE StandardInput;
-    HANDLE StandardOutput;
-    HANDLE StandardError;
-    /* CURDIR / DllPath / ImagePathName / ... follow but we don't expose. */
+    ULONG          MaximumLength;
+    ULONG          Length;
+    ULONG          Flags;
+    ULONG          DebugFlags;
+    HANDLE         ConsoleHandle;
+    ULONG          ConsoleFlags;
+    HANDLE         StandardInput;
+    HANDLE         StandardOutput;
+    HANDLE         StandardError;
+    /* CURDIR layout (at +0x24): UNICODE_STRING DosPath, HANDLE Handle. */
+    UNICODE_STRING CurrentDirectoryDosPath;
+    HANDLE         CurrentDirectoryHandle;
+    UNICODE_STRING DllPath;
+    UNICODE_STRING ImagePathName;
+    UNICODE_STRING CommandLine;
+    /* Environment block: opaque UTF-16 K=V\0K=V\0\0 buffer.  NULL means
+     * the kernel hasn't installed one yet (rare; implies parent inherit). */
+    void          *Environment;
+    /* Window/console fields follow but we don't expose them. */
 } RTL_USER_PROCESS_PARAMETERS_HEADER;
 
 /* Opaque full-struct alias for the ntdll API surface — callers pass
@@ -254,10 +263,24 @@ layout.check_offsets {
     },
     -- All-4-byte fields, natural alignment matches pack(2), but we
     -- still assert in case a future cdef tweak shifts something.
+    -- UNICODE_STRING is 8 bytes (USHORT Length + USHORT MaximumLength
+    -- + PWSTR Buffer), so the post-StandardError offsets cascade as:
+    --   0x24 CurrentDirectoryDosPath  (UNICODE_STRING, 8)
+    --   0x2C CurrentDirectoryHandle   (HANDLE, 4)
+    --   0x30 DllPath                  (UNICODE_STRING, 8)
+    --   0x38 ImagePathName            (UNICODE_STRING, 8)
+    --   0x40 CommandLine              (UNICODE_STRING, 8)
+    --   0x48 Environment              (void*, 4)
     RTL_USER_PROCESS_PARAMETERS_HEADER = {
-        StandardInput  = 0x18,
-        StandardOutput = 0x1C,
-        StandardError  = 0x20,
+        StandardInput            = 0x18,
+        StandardOutput           = 0x1C,
+        StandardError            = 0x20,
+        CurrentDirectoryDosPath  = 0x24,
+        CurrentDirectoryHandle   = 0x2C,
+        DllPath                  = 0x30,
+        ImagePathName            = 0x38,
+        CommandLine              = 0x40,
+        Environment              = 0x48,
     },
     PROCESS_BASIC_INFORMATION = {
         ExitStatus     = 0x00,
@@ -490,22 +513,106 @@ end
 -- function exists so tests can exercise the raw shape of the
 -- ntdll API without ps.spawn's defaulting in the way.
 -- ------------------------------------------------------------------
+-- Build a UTF-16 environment block from a Lua array of "K=V" strings.
+-- Block layout: each entry NUL-terminated, block terminated by an
+-- additional empty entry (so the bytes end ...\0\0\0\0 = two UTF-16
+-- NULs).  Returns the cdata buffer; caller holds it through the
+-- RtlCreateProcessParameters call so the pointer stays valid.
+local function build_env_block(env_array)
+    -- Compute total wchar count: sum of (#entry+1) for each, plus a
+    -- final NUL terminator for the block.
+    local total = 1                                  -- final block NUL
+    local entries = {}
+    for i, kv in ipairs(env_array) do
+        if type(kv) ~= 'string' then
+            error("ps: env[" .. i .. "] must be a string", 3)
+        end
+        local wchars = str.decode_utf8(kv)
+        entries[i]   = wchars
+        total        = total + #wchars + 1           -- entry + NUL
+    end
+    local buf = ffi.new('uint16_t[?]', total)
+    local pos = 0
+    for _, wchars in ipairs(entries) do
+        for k = 1, #wchars do
+            buf[pos] = wchars[k]
+            pos = pos + 1
+        end
+        buf[pos] = 0                                 -- entry NUL
+        pos = pos + 1
+    end
+    buf[pos] = 0                                     -- block-terminating NUL
+    return buf
+end
+
 function M.RtlCreateUserProcess(image_path, command_line, opts)
     opts = opts or {}
-    local ipath = str.to_utf16(image_path)
+    -- The caller's image_path serves two consumers with conflicting
+    -- expectations:
+    --
+    --   ProcessParameters.ImagePathName — read back by Win32
+    --     GetModuleFileName(NULL); must be DOS-form (e.g.
+    --     "C:\pkg\msvc20\NMAKE.EXE") so derived siblings (nmake.err
+    --     etc.) resolve via Win32 fopen rules.
+    --
+    --   RtlCreateUserProcess.NtImagePathName — the kernel's image
+    --     loader opens this via NtOpenFile; needs NT-namespace
+    --     ("\Device\…" or "\DosDevices\C:\…").
+    --
+    -- We don't hand-roll the DOS→NT prefix here; ntdll's
+    -- RtlDosPathNameToNtPathName_U handles drive letters, UNC paths,
+    -- and "\\?\…" escapes correctly.  rtl.dos_to_nt_path wraps it
+    -- with a GC'd auto-free.  An NT-namespace input (no drive letter)
+    -- is already what the kernel wants — pass it through.
+    local rtl = require('nt.dll.rtl')
+    local ipath_dos = str.to_utf16(image_path)
+    local ipath_nt_owned             -- pin the heap allocation
+    local ipath_nt_arg               -- what we pass to RtlCreateUserProcess
+    if image_path:match("^[%a]:\\") then
+        ipath_nt_owned = rtl.dos_to_nt_path(image_path)
+        ipath_nt_arg   = ipath_nt_owned
+    else
+        ipath_nt_arg   = ipath_dos.us
+    end
     -- CommandLine is *never* defaulted from parent's PEB — would leak
     -- our parent's argv into the child.  Always explicit-or-image_path.
     local cline = str.to_utf16(command_line or image_path)
 
+    -- Optional cwd / env / dll_path.  Each nil → ntdll inherits from
+    -- parent's PEB.  dll_path is the search list the kernel image
+    -- loader uses for non-explicit-path DLL imports — bundled
+    -- toolchains (msvc20) need this to find their own CRT/RC DLLs
+    -- without staging them in System32.
+    --
+    -- dll_path accepts either a single string (with `;`-separated
+    -- entries, NT-namespace) or a Lua array of dirs which we join.
+    local cwd_us = opts.cwd and str.to_utf16(opts.cwd) or nil
+    local dll_us
+    if opts.dll_path then
+        local s
+        if type(opts.dll_path) == 'table' then
+            s = table.concat(opts.dll_path, ";")
+        else
+            s = opts.dll_path
+        end
+        dll_us = str.to_utf16(s)
+    end
+    local env_buf
+    local env_ptr  = nil
+    if opts.env then
+        env_buf = build_env_block(opts.env)         -- pin via local
+        env_ptr = ffi.cast('void *', env_buf)
+    end
+
     local pp_out = ffi.new('RTL_USER_PROCESS_PARAMETERS *[1]')
     local st = ntdll.RtlCreateProcessParameters(
         pp_out,
-        ipath.us,           -- ImagePathName
-        nil,                -- DllPath          (nil → ntdll default)
-        nil,                -- CurrentDirectory (nil → parent's PEB)
-        cline.us,           -- CommandLine
-        nil,                -- Environment      (nil → parent's PEB)
-        nil, nil, nil, nil) -- WindowTitle / Desktop / Shell / Runtime
+        ipath_dos.us,                                -- ImagePathName (Win32 sees)
+        dll_us and dll_us.us or nil,                 -- DllPath
+        cwd_us and cwd_us.us or nil,                 -- CurrentDirectory
+        cline.us,                                    -- CommandLine
+        env_ptr,                                     -- Environment
+        nil, nil, nil, nil)                          -- WindowTitle / Desktop / Shell / Runtime
     if err.is_error(st) then err.raise('RtlCreateProcessParameters', st) end
 
     -- finally-guard: whatever happens between here and the destroy
@@ -526,7 +633,7 @@ function M.RtlCreateUserProcess(image_path, command_line, opts)
 
         local inherit = opts.inherit_handles ~= false   -- default true
         local create_st = ntdll.RtlCreateUserProcess(
-            ipath.us,
+            ipath_nt_arg,                             -- kernel opens via NT-form
             oa.OBJ_CASE_INSENSITIVE,
             pp_out[0],
             nil,                          -- ProcessSecurityDescriptor
@@ -580,6 +687,23 @@ end
 --   cmdline   Command line as a single string.  Defaults to `exe`
 --             so argv[0] is the EXE name (NEVER inherits parent's
 --             cmdline — that would leak our argv into the child).
+--   cwd       NT path string for the child's working directory.
+--             Defaults to parent's PEB.CurrentDirectory.  Required
+--             when spawning toolchain children (NMAKE, CL) that
+--             expect to find SOURCES / .obj outputs in cwd.
+--   env       Lua array of "KEY=VALUE" strings — passed verbatim,
+--             no inheritance.  nil → child inherits parent's env.
+--             Same shape as host platform.spawn_wait{env=...}.
+--   dll_path  Search list the kernel image loader uses for DLL
+--             imports that don't have an explicit path.  Accepts
+--             either a Lua array of NT-namespace dirs (joined with
+--             `;`) or a pre-built `;`-separated string — both end
+--             up as ProcessParameters.DllPath.  Examples:
+--                 dll_path = { "\\SystemRoot\\pkg\\msvc20",
+--                              "\\SystemRoot\\System32" }
+--                 dll_path = "\\SystemRoot\\System32"
+--             nil → child inherits parent's, which on init is just
+--             "\SystemRoot\System32".
 --   stdin/    Borrowed or owned NT_HANDLE.  Defaults to parent's
 --   stdout/     PEB std handle (read via parent_stdio).  Pass an
 --   stderr      explicit handle (e.g. a pipe write-end) to redirect.
@@ -589,7 +713,9 @@ end
 --
 -- Returns the same table RtlCreateUserProcess returns:
 --   { process, thread, pid, tid, image = { entry, ... } }
--- The thread starts SUSPENDED — caller must NtResumeThread to run it.
+-- The thread starts SUSPENDED — caller must NtResumeThread to run it
+-- (or use ps.wait_exit which does Resume + Wait + query exit_status
+-- in one call).
 function M.spawn(opts)
     if type(opts) == 'string' then opts = { exe = opts } end
     if type(opts) ~= 'table' or not opts.exe then
@@ -619,6 +745,35 @@ function M.NtQueryInformationProcess_Basic(h)
         pid              = pbi.UniqueProcessId,
         ppid             = pbi.InheritedFromUniqueProcessId,
     }
+end
+
+-- wait_exit(proc) → exit_status (NTSTATUS as a Lua number).
+--
+-- Compose helper over the standard "spawn → run to completion" sequence:
+--   NtResumeThread(proc.thread)
+--   NtWaitForSingleObject(proc.process, false, nil)
+--   NtQueryInformationProcess_Basic(proc.process).exit_status
+--   close both handles
+--
+-- Same sequence pkg/test/msvc.lua has been using inline since the
+-- spawn surface landed.  Promoting here means platform.spawn_wait
+-- stays a one-liner.  `proc` is the table ps.spawn returned; this
+-- function consumes (closes) proc.thread and proc.process even on
+-- error so handles don't leak until __gc.
+--
+-- Returns the raw NTSTATUS from the child — most tools use 0=ok, but
+-- callers that care about specific status codes get them unmodified.
+function M.wait_exit(proc)
+    local ke = require('nt.dll.ke')
+    local ok, ret = pcall(function()
+        M.NtResumeThread(proc.thread)
+        ke.NtWaitForSingleObject(proc.process, false, nil)
+        return M.NtQueryInformationProcess_Basic(proc.process).exit_status
+    end)
+    proc.thread:close()
+    proc.process:close()
+    if not ok then error(ret, 0) end
+    return ret
 end
 
 return M

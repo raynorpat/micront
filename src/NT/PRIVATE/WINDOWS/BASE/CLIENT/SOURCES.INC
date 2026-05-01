@@ -34,9 +34,17 @@ TARGETTYPE=DYNLINK
 # `..\..\obj` = BASE/obj and `..\..\..\obj` = WINDOWS/obj.  We're flat
 # (no DAYTONA leaf) so paths shift one up: `..\obj` = BASE/obj and
 # `..\..\obj` = WINDOWS/obj.
+# libcntpr.lib pulled in for wsprintf.c's vsprintf/vswprintf (kernel32
+# now exports wsprintf{,A,W} so user32 can be dropped from cmd.exe's
+# UMLIBS — see WSPRINTF.C for rationale).  We use libcntpr (the
+# no-CRT-startup variant), not libc, because libc drags in malloc.obj
+# and crt0.obj which create circular references back to kernel32's
+# own HeapAlloc / HeapFree exports and fail to find _main (kernel32 is
+# a DLL, not an EXE).  libcntpr ships only the pure-function pieces.
 LINKLIBS=..\obj\*\baselib.lib \
        ..\..\obj\*\nlslib.lib \
-       $(BASEDIR)\public\sdk\lib\*\ntdll.lib
+       $(BASEDIR)\public\sdk\lib\*\ntdll.lib \
+       $(BASEDIR)\public\sdk\lib\*\libcntpr.lib
 
 DLLENTRY=BaseDllInitialize
 
@@ -113,6 +121,7 @@ SOURCES= ..\base.rc    \
          ..\thread.c   \
          ..\ustubs.c   \
          ..\stdio.c    \
+         ..\wsprintf.c \
          ..\csrstub.c  \
          ..\comm.c     \
          ..\vdm.c      \

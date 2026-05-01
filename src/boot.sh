@@ -87,7 +87,7 @@ done
 # --- Sanity --------------------------------------------------------
 
 if [ ! -f "$ESP_IMG" ]; then
-    echo "ERROR: $ESP_IMG not found. Run: build.lua disk" >&2
+    echo "ERROR: $ESP_IMG not found. Run: src/build.sh disk" >&2
     exit 1
 fi
 

@@ -321,7 +321,11 @@ end
 
 function M.nuke_stale_objs(linux_dir)
     local obj_dir  = linux_dir .. "/obj/i386"
-    local src_dirs = { linux_dir, linux_dir .. "/..", linux_dir .. "/i386" }
+    -- Use dirname() rather than `linux_dir .. "/.."` — the latter
+    -- works on POSIX paths but NT's object manager rejects unresolved
+    -- ".." with STATUS_OBJECT_NAME_INVALID (0xC0000033) at every
+    -- query_attributes call.
+    local src_dirs = { linux_dir, dirname(linux_dir), linux_dir .. "/i386" }
 
     -- Pass 1: stale .obj per source file.
     for _, d in ipairs(src_dirs) do

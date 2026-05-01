@@ -153,10 +153,20 @@ Return Value:
         //   - CsrNewThread() to register the initial thread with csrss
         // None of those exist in MicroNT.  Version comes from the build
         // (no PEB version fields in NT 3.5; basesrv was the canonical
-        // owner).  System directories are hardcoded: \SystemRoot is a
-        // kernel-installed symbolic link, resolved by the OB path-walker
-        // on every NtOpenFile, so callers get correct files without us
-        // doing the symlink walk at init.
+        // owner).
+        //
+        // System directories use DOS form (C:\, C:\System32) rather
+        // than the NT-namespace \SystemRoot.  Reason: GetSystemDirectoryW
+        // / GetWindowsDirectoryW return these to Win32 callers, who
+        // then concatenate with relative paths and feed back into
+        // CreateFileW; the round-trip needs to stay inside DOS-path
+        // rules.  Stock NT had \DosDevices\C: set up by HAL's
+        // IoAssignDriveLetters; MicroNT publishes it from Lua boot
+        // (nt.dosdev) since we've stripped ARC.  CreateProcessW
+        // builds the child PEB.DllPath from BaseDefaultPath below,
+        // which uses these strings — keeping them DOS means the
+        // ntdll loader's RtlDosSearchPath_U handles the whole
+        // search path cleanly without per-entry classification.
         //
 
         // Stamped by src/tools/stamp-version.py (libversion.py owns the
@@ -167,9 +177,9 @@ Return Value:
         BaseCSDVersion          = VER_PRODUCTBUILD_QFE;
 
         RtlInitUnicodeString( &BaseWindowsDirectory,
-                              L"\\SystemRoot" );
+                              L"C:" );
         RtlInitUnicodeString( &BaseWindowsSystemDirectory,
-                              L"\\SystemRoot\\System32" );
+                              L"C:\\System32" );
 
         //
         // MicroNT: populate a process-local BASE_STATIC_SERVER_DATA so

@@ -80,6 +80,14 @@ end
 -- ----------------------------------------------------------------
 
 function M.path_to_win(p)
+    -- Optional NT-namespace prefix strip.  On guest, paths internally
+    -- start with /SystemRoot/ (the kernel's symlink) but the toolchain
+    -- expects DOS form rooted at C:\ (which is the same volume as
+    -- SystemRoot).  Strip the prefix if configured, then prepend
+    -- drive_root.  On host, path_strip is nil and we just prepend.
+    if cfg.path_strip and p:sub(1, #cfg.path_strip) == cfg.path_strip then
+        p = p:sub(#cfg.path_strip + 1)
+    end
     return cfg.drive_root .. p:gsub("/", "\\")
 end
 
@@ -89,7 +97,7 @@ end
 -- ----------------------------------------------------------------
 
 local function build_nt_env()
-    return {
+    local env = {
         "_NTDRIVE="    .. cfg.drive_root,
         "_NTROOT="     .. nt_root_naked,
         "BASEDIR="     .. nt_root_win,
@@ -100,7 +108,6 @@ local function build_nt_env()
         "NTDEBUG=",
         "NTDEBUGTYPE=",
         "PATH="        .. wibo_tools_win,
-        "WIBO_PATH="   .. cfg.wibo_tools,
         "COMSPEC="     .. wibo_tools_win .. "\\cmd.exe",
         "TEMP="        .. cfg.drive_root .. "\\tmp",
         "TMP="         .. cfg.drive_root .. "\\tmp",
@@ -109,6 +116,15 @@ local function build_nt_env()
                        .. nt_root_win .. "\\PUBLIC\\SDK\\INC\\CRT",
         "LIB="         .. nt_root_win .. "\\PUBLIC\\SDK\\LIB\\I386",
     }
+    -- WIBO_PATH is only meaningful on host (where wibo is the
+    -- runtime translator).  Guest runs everything natively against
+    -- our own kernel32, so propagating /SystemRoot/-form unix paths
+    -- as env vars to a Win32 toolchain child is just confusing
+    -- (mixed slash style + meaningless on guest).
+    if cfg.wibo_bin then
+        env[#env + 1] = "WIBO_PATH=" .. cfg.wibo_tools
+    end
+    return env
 end
 
 function M.build_envp(extra)
@@ -155,11 +171,33 @@ local function spawn_tool(cwd, tool_path, tool_args, envp)
             argv = argv, env = envp, path = cfg.wibo_bin,
         }
     else
-        -- NT: native, with explicit cwd.
-        local argv = { tool_path }
+        -- NT: native, with explicit cwd + DllPath pointing at the
+        -- toolchain bundle so msvc20-shipped runtime DLLs (CRTDLL,
+        -- MSVCRT20, RCDLL, DBI) resolve from there.  Toolchain dir
+        -- comes first so its DLLs win over any same-name DLL in
+        -- System32.
+        --
+        -- The exe path AND cwd MUST be DOS form (e.g. "C:\pkg\msvc20\
+        -- NMAKE.EXE", "C:\src\NT\..."), not NT-namespace ("\SystemRoot
+        -- \..."), because Win32 toolchain children read both via
+        -- GetModuleFileName / GetCurrentDirectory and combine them
+        -- with relative paths through DOS-namespace rules.  A "\..."-
+        -- prefixed path with no drive letter is interpreted as
+        -- drive-relative and resolves wrong (nmake.err / MAKEFILE
+        -- searches expand to nonexistent C:\SystemRoot\... paths).
+        -- ps.spawn handles the kernel-side NT-namespace conversion
+        -- internally (prepends \??\ to DOS paths for the syscall).
+        -- DllPath stays NT-namespace because the kernel image loader
+        -- walks it directly via NtCreateFile, not Win32 path rules.
+        local tools_nt = cfg.wibo_tools:gsub("/", "\\")
+        local exe_dos  = M.path_to_win(tool_path)
+        local argv = { exe_dos }
         for _, a in ipairs(tool_args) do argv[#argv + 1] = a end
         return platform.spawn_wait{
-            argv = argv, env = envp, cwd = cwd,
+            argv     = argv,
+            env      = envp,
+            cwd      = M.path_to_win(cwd),
+            dll_path = { tools_nt, "\\SystemRoot\\System32" },
         }
     end
 end
@@ -322,13 +360,23 @@ function M.configure(opts)
         wibo_tools = assert(opts.wibo_tools, "configure: wibo_tools required"),
         wibo_bin   = opts.wibo_bin,
         drive_root = opts.drive_root or "Z:",
+        -- Optional prefix to strip from /-form paths before prepending
+        -- drive_root.  On guest: "/SystemRoot" (no trailing slash) —
+        -- the leading '/' survives the strip and becomes '\\' after
+        -- gsub, so "/SystemRoot/pkg/msvc20" → "/pkg/msvc20" →
+        -- "\pkg\msvc20" → "C:\pkg\msvc20" (valid absolute DOS path).
+        -- Stripping with a trailing slash would produce "C:pkg\..."
+        -- (drive-relative — toolchain quietly resolves wrong).
+        -- On host: nil (host filesystem is mounted at Z:\).
+        path_strip = opts.path_strip,
     }
     if platform.on_host and not cfg.wibo_bin then
         error("ntosbe.toolchain.configure: wibo_bin required on host", 2)
     end
-    nt_root_win    = cfg.drive_root .. cfg.nt_root:gsub("/", "\\")
-    nt_root_naked  = cfg.nt_root:gsub("/", "\\")
-    wibo_tools_win = cfg.drive_root .. cfg.wibo_tools:gsub("/", "\\")
+    nt_root_win    = M.path_to_win(cfg.nt_root)
+    nt_root_naked  = (cfg.path_strip and cfg.nt_root:sub(#cfg.path_strip + 1)
+                                     or cfg.nt_root):gsub("/", "\\")
+    wibo_tools_win = M.path_to_win(cfg.wibo_tools)
     NT_ENV = build_nt_env()
     M.setup_wibo_tools()
 end

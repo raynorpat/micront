@@ -246,9 +246,21 @@ STUB_BOOL  (GetConsoleDisplayMode,           (LPDWORD m))
 STUB_BOOL  (SetConsoleDisplayMode,           (HANDLE h, DWORD m, PCOORD c))
 STUB_BOOL  (SetConsoleMaximumWindowSize,     (HANDLE h, COORD c))
 
-/* --- Title --- */
-STUB_DWORD (GetConsoleTitleA,                (LPSTR  buf, DWORD n))
-STUB_DWORD (GetConsoleTitleW,                (LPWSTR buf, DWORD n))
+/* --- Title ---
+ * MicroNT: stub-but-NUL-terminate.  Real NT's GetConsoleTitle writes
+ * an empty string + NUL when there's no title; callers (cmd.exe's
+ * Init() at CINIT.C:358) then mystrcpy() the result without checking
+ * the return value.  A bare-stub that doesn't touch the buffer
+ * leaves uninitialised heap content there and the wcscpy walks off
+ * into uncommitted memory.  Cheap fix: write a single NUL. */
+DWORD WINAPI GetConsoleTitleA (LPSTR  buf, DWORD n) {
+    if (buf && n > 0) buf[0] = 0;
+    return 0;
+}
+DWORD WINAPI GetConsoleTitleW (LPWSTR buf, DWORD n) {
+    if (buf && n > 0) buf[0] = 0;
+    return 0;
+}
 STUB_BOOL  (SetConsoleTitleA,                (LPCSTR  s))
 STUB_BOOL  (SetConsoleTitleW,                (LPCWSTR s))
 

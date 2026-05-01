@@ -224,6 +224,28 @@ HalReportResourceUsage(VOID)
 
 /* ===== IO Manager partition stubs ===== */
 
+/*
+ * IoAssignDriveLetters - minimal MicroNT implementation.
+ *
+ * The standard NT 3.5 routine walks LoaderBlock->ArcDiskInformation,
+ * reads partition tables, and assigns letters across multiple disks.
+ * MicroNT boots from a single FAT16 partition (the IDE volume QEMU
+ * exposes), and the only consumer of drive-letter resolution today
+ * is the toolchain we run under self-host.  So we just create
+ *
+ *     \DosDevices\C: -> <NtDeviceName>
+ *
+ * where NtDeviceName is the boot device the kernel passes us
+ * (typically "\Device\Harddisk0\Partition1").  Without this symlink,
+ * Win32 children's CreateFile("C:\...") - which goes through
+ * RtlDosPathNameToNtPathName_U + the "\DosDevices\" prefix - cannot
+ * resolve, breaking fopen / GetCurrentDirectory / GetModuleFileName
+ * for any Win32 toolchain process.
+ *
+ * NtSystemPath / NtSystemPathString are already populated by INIT.C
+ * (which sprintf's "C:%s" + LoaderBlock->NtBootPathName before we
+ * run); leaving the OUT params untouched is correct.
+ */
 VOID
 IoAssignDriveLetters(
     IN PLOADER_PARAMETER_BLOCK LoaderBlock,
@@ -232,6 +254,30 @@ IoAssignDriveLetters(
     OUT PSTRING NtSystemPathString
     )
 {
+    UNICODE_STRING linkName;
+    UNICODE_STRING targetName;
+    ANSI_STRING    ansiTarget;
+    NTSTATUS       status;
+
+    /* NtDeviceName is ANSI (PSTRING).  Convert to UNICODE_STRING for
+     * IoCreateSymbolicLink.  RtlAnsiStringToUnicodeString allocates
+     * the wide buffer when the third arg is TRUE; we free it below. */
+    ansiTarget.Buffer        = NtDeviceName->Buffer;
+    ansiTarget.Length        = NtDeviceName->Length;
+    ansiTarget.MaximumLength = NtDeviceName->MaximumLength;
+
+    status = RtlAnsiStringToUnicodeString(&targetName, &ansiTarget, TRUE);
+    if (!NT_SUCCESS(status)) {
+        return;
+    }
+
+    /* \DosDevices\C: -> NtDeviceName.  Errors (already-exists,
+     * out-of-pool) are ignored — there's no recovery path here, and a
+     * missing symlink will surface as a CreateFile failure later. */
+    RtlInitUnicodeString(&linkName, L"\\DosDevices\\C:");
+    (VOID) IoCreateSymbolicLink(&linkName, &targetName);
+
+    RtlFreeUnicodeString(&targetName);
 }
 
 NTSTATUS

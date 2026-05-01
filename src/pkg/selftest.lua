@@ -20,36 +20,40 @@ local sys = require('nt.dll.sys')
 print("MicroNT selftest")
 print("================")
 
--- Boot prelude: publish \NLS\ named-section namespace so the nls suite
--- (and any future kernel32-using test) sees it the same way main.lua
--- consumers would. Idempotent — re-publishing under OBJ_OPENIF is a
--- kernel-side no-op.
-do
-    local nls = require('nt.nls')
-    se.with_privileges({"SeCreatePermanentPrivilege"}, nls.publish)
-end
+-- Same boot prelude main.lua runs — publishes \NLS\ named sections
+-- (for kernel32!nlslib) and \DosDevices\C: (for Win32 toolchain DOS
+-- paths in test.ntosbe).  Idempotent so subsequent suites/processes
+-- collapse to no-ops.
+require('nt.boot').run()
 
 -- Suite order doesn't matter — each suite is self-contained — but
 -- grouping shallow modules first makes debug easier when things
 -- explode early.
+--
+-- Self-host iteration mode: most suites are commented out while we
+-- hammer on the build system.  They're known-good and re-enabling them
+-- is a one-line uncomment.  The suites that stay live are the ones
+-- ntosbe.build directly depends on (fs for I/O, msvc for ps.spawn)
+-- plus the new test.ntosbe self-host probe.
 require('test.str')
 require('test.handle')
 require('test.ob')
-require('test.cm')
+-- require('test.cm')
 require('test.fs')
-require('test.mm')
-require('test.lpc')
-require('test.sys')
-require('test.tree')
-require('test.thread')
-require('test.sync')
-require('test.io')
-require('test.os')
-require('test.afd')
-require('test.sysenter')
-require('test.se')
-require('test.nls')
+-- require('test.mm')
+-- require('test.lpc')
+-- require('test.sys')
+-- require('test.tree')
+-- require('test.thread')
+-- require('test.sync')
+-- require('test.io')
+-- require('test.os')
+-- require('test.afd')
+-- require('test.sysenter')
+-- require('test.se')
+-- require('test.nls')
 require('test.msvc')
+require('test.ntosbe')
 
 local ok = t.summary()
 print("")

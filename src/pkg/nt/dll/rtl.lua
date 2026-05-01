@@ -56,6 +56,27 @@ unsigned char __stdcall RtlTimeFieldsToTime(TIME_FIELDS *TimeFields, LARGE_INTEG
 NTSTATUS __stdcall RtlQueryEnvironmentVariable_U(void *Environment,
                                                  UNICODE_STRING *Name,
                                                  UNICODE_STRING *Value);
+
+/* RtlSetEnvironmentVariable_U(EnvBlock**, Name, Value) — Environment
+ * is a void** so ntdll can resize/reallocate the env block.  Pass NULL
+ * for current process (uses PEB->ProcessParameters->Environment). */
+NTSTATUS __stdcall RtlSetEnvironmentVariable(void **Environment,
+                                             UNICODE_STRING *Name,
+                                             UNICODE_STRING *Value);
+
+/* DOS path → NT-namespace path.  Caller passes a NUL-terminated
+ * UTF-16 DOS path (e.g. "C:\foo\bar"); ntdll fills in NtFileName as
+ * a UNICODE_STRING with a heap-allocated Buffer that the caller must
+ * free via RtlFreeUnicodeString.  Knows about all the DOS quirks
+ * (drive letters, UNC paths, "\\?\..." escapes, current-dir
+ * resolution).  Returns TRUE on success. */
+unsigned char __stdcall RtlDosPathNameToNtPathName_U(
+    const wchar_t  *DosFileName,
+    UNICODE_STRING *NtFileName,
+    wchar_t       **FilePart,
+    void           *RelativeName);
+
+void __stdcall RtlFreeUnicodeString(UNICODE_STRING *s);
 ]]
 
 local STATUS_BUFFER_TOO_SMALL    = 0xC0000023
@@ -219,6 +240,119 @@ function M.query_env(name)
             return str.from_utf16(ns_value.us)
         end
     end
+end
+
+-- DOS path → NT-namespace path via ntdll's canonical conversion.
+-- Returns a `UNICODE_STRING[1]` cdata with a finalizer that releases
+-- ntdll's heap allocation when the cdata is collected — caller can
+-- treat it as a UNICODE_STRING * for FFI calls and forget about
+-- memory ownership.  Use for image paths, file paths, anything that
+-- crosses from DOS-form into a kernel syscall:
+--
+--   local nt = rtl.dos_to_nt_path("C:\\pkg\\msvc20\\NMAKE.EXE")
+--   ntdll.NtCreateFile(handle, ..., oa_with(nt), ...)
+--   -- nt freed when GC reclaims the local
+--
+-- The Lua-side path is UTF-8; we widen to UTF-16 internally.  The
+-- to_utf16'd buffer must stay live through the ntdll call (it's the
+-- DosFileName arg); we capture it in a local that the closure-style
+-- caller naturally retains.
+function M.dos_to_nt_path(dos_path)
+    local wpath = str.to_utf16(dos_path)
+    local us    = ffi.new('UNICODE_STRING[1]')
+    if ntdll.RtlDosPathNameToNtPathName_U(
+            wpath.us.Buffer, us, nil, nil) == 0 then
+        error("RtlDosPathNameToNtPathName_U failed for " .. dos_path, 2)
+    end
+    return ffi.gc(us, function(p) ntdll.RtlFreeUnicodeString(p) end)
+end
+
+-- Set or unset an environment variable in the current process.  Pass
+-- value=nil to delete.  Mirrors query_env's UTF-8 contract.
+--
+-- ntdll may reallocate the env block under us (when the new value
+-- doesn't fit in current capacity); we pass nil for Environment so
+-- ntdll uses PEB->ProcessParameters->Environment as both source and
+-- target.  Return value: nothing on success, raises on error.
+function M.set_env(name, value)
+    local ns_name  = str.to_utf16(name)
+    local ns_value = value and str.to_utf16(value) or nil
+    local st = ntdll.RtlSetEnvironmentVariable(
+        nil, ns_name.us, ns_value and ns_value.us or nil)
+    if err.is_error(st) then err.raise('RtlSetEnvironmentVariable', st) end
+end
+
+-- ------------------------------------------------------------------
+-- PEB / ProcessParameters readers — environ() and getcwd().
+--
+-- Both walk: NtQueryInformationProcess(self, BasicInformation) →
+-- PebBaseAddress → ProcessParameters → header.  The PEB_HEAD and
+-- RTL_USER_PROCESS_PARAMETERS_HEADER cdefs live in nt.dll.ps; we just
+-- consume them.  Requiring ps here is fine: ps doesn't reach for rtl.
+-- ------------------------------------------------------------------
+
+require('nt.dll.ps')                     -- PEB_HEAD + ProcParams cdefs
+
+-- Cache the ProcessParameters header pointer.  Stable for the process's
+-- lifetime — the kernel allocates it once at process startup; ntdll's
+-- RtlSetEnvironmentVariable may reallocate the *Environment block*
+-- inside it, but the header itself doesn't move.
+local pp_header_ptr
+
+local function get_pp_header()
+    if pp_header_ptr ~= nil then return pp_header_ptr end
+    local pbi = ffi.new('PROCESS_BASIC_INFORMATION')
+    local ret = ffi.new('ULONG[1]')
+    -- Pseudo-handle for current process is (HANDLE)-1.  Inline the
+    -- cast so we don't pull in ps.NtCurrentProcess at module load.
+    local CURRENT_PROCESS = ffi.cast('HANDLE', ffi.cast('intptr_t', -1))
+    local st = ntdll.NtQueryInformationProcess(
+        CURRENT_PROCESS, 0,                   -- ProcessBasicInformation
+        pbi, ffi.sizeof('PROCESS_BASIC_INFORMATION'), ret)
+    if err.is_error(st) then
+        err.raise('NtQueryInformationProcess(self) for PEB', st)
+    end
+    local peb = ffi.cast('PEB_HEAD *', pbi.PebBaseAddress)
+    if peb == nil or peb.ProcessParameters == nil then
+        error("rtl.environ/getcwd: PEB.ProcessParameters is NULL", 2)
+    end
+    pp_header_ptr = ffi.cast('RTL_USER_PROCESS_PARAMETERS_HEADER *',
+                             peb.ProcessParameters)
+    return pp_header_ptr
+end
+
+-- environ() → array of "KEY=VALUE" UTF-8 strings.  Walks the env block
+-- pointed at by ProcessParameters.Environment — UTF-16 layout
+-- "KEY=VALUE\0KEY=VALUE\0\0".  Returns {} if no env block exists.
+function M.environ()
+    local hdr = get_pp_header()
+    local block = ffi.cast('uint16_t *', hdr.Environment)
+    if block == nil then return {} end
+
+    local out = {}
+    local i = 0
+    -- Find the end of each NUL-terminated UTF-16 entry.  Block ends
+    -- with a double-NUL (an empty entry), so a single-iteration where
+    -- block[i] == 0 at start means we're done.
+    while block[i] ~= 0 do
+        local start = i
+        while block[i] ~= 0 do i = i + 1 end
+        -- Copy [start..i-1] as wchars and decode to UTF-8.
+        local n = i - start
+        out[#out + 1] = str.from_wchars(block + start, n)
+        i = i + 1                          -- skip the NUL terminator
+    end
+    return out
+end
+
+-- getcwd() → UTF-8 path string from PEB.ProcessParameters
+-- .CurrentDirectory.DosPath.  Always present at process start (kernel
+-- inherits parent's or the image's directory).  Returns "" if the
+-- field is empty (shouldn't happen in practice).
+function M.getcwd()
+    local hdr = get_pp_header()
+    if hdr.CurrentDirectoryDosPath.Length == 0 then return "" end
+    return str.from_utf16(hdr.CurrentDirectoryDosPath)
 end
 
 return M

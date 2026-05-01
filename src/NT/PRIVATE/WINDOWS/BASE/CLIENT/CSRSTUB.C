@@ -28,9 +28,20 @@ Abstract:
     get NULL, but `GetProcAddress(kernel32, "CsrFoo")` returns our
     stub.  Acceptable until the toolchain runs and we revisit.
 
-    All bodies fail with STATUS_PORT_DISCONNECTED — semantically
-    accurate ("the LPC port to csrss is not available") and the
-    standard NT error every Csr* caller already knows how to handle.
+    Originally all bodies returned STATUS_PORT_DISCONNECTED to fail
+    loudly ("the LPC port to csrss is not available"), the standard
+    NT error every Csr* caller knows how to handle.  That design
+    breaks the kernel32 CreateProcess flow though: PROCESS.C calls
+    CsrClientCallServer to register the just-created child with
+    csrss, and on a failure return it terminates the child and
+    returns FALSE.  Self-host needs CreateProcess to succeed (NMAKE
+    drives it via CRTDLL _spawn → kernel32 CreateProcess → child).
+    So CsrClientCallServer now sets m->ReturnValue = STATUS_SUCCESS
+    and returns STATUS_SUCCESS; the underlying state CSRSS would
+    have updated (process tree, console association, atom table)
+    just doesn't get touched — fine for tools that don't depend on
+    it (CL, LINK, NMAKE, RC, MC).  The capture-buffer / message-
+    pointer stubs stay null/no-op since their callers null-check.
 
 Author:
 
@@ -57,9 +68,9 @@ CsrClientCallServer(
     UNREFERENCED_PARAMETER(ApiNumber);
     UNREFERENCED_PARAMETER(ArgLength);
     if (m) {
-        m->ReturnValue = STATUS_PORT_DISCONNECTED;
+        m->ReturnValue = STATUS_SUCCESS;
     }
-    return STATUS_PORT_DISCONNECTED;
+    return STATUS_SUCCESS;
 }
 
 PCSR_CAPTURE_HEADER

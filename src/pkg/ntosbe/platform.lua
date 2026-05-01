@@ -537,39 +537,333 @@ else
 -- the OS side even before the file-I/O backend lands.
 -- ----------------------------------------------------------------
 
-local function todo(name)
-    return function(...)
-        error("ntosbe.platform." .. name ..
-              ": MicroNT backend not implemented yet", 2)
+-- All paths the build code passes are forward-slash joined (e.g.
+-- "/SystemRoot/src/NT/PRIVATE/NTOS/DD/NULL/SOURCES").  NT syscalls
+-- want backslash-joined NT-namespace paths.  Convert at the syscall
+-- boundary; build code stays platform-agnostic.
+local function to_nt_path(p)
+    return (p:gsub("/", "\\"))
+end
+
+local FS_FILE_GENERIC_READ            = 0x00120089
+local FS_FILE_GENERIC_WRITE           = 0x00120116
+local FS_DELETE                       = 0x00010000
+local FS_SYNCHRONIZE                  = 0x00100000
+local FS_FILE_SHARE_READ              = 0x00000001
+local FS_FILE_SHARE_WRITE             = 0x00000002
+local FS_FILE_OPEN                    = 1
+local FS_FILE_OVERWRITE_IF            = 5
+local FS_FILE_DIRECTORY_FILE          = 0x00000001
+local FS_FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020
+local FS_FILE_NON_DIRECTORY_FILE      = 0x00000040
+local FS_FILE_ATTRIBUTE_NORMAL        = 0x00000080
+local FS_FILE_ATTRIBUTE_DIRECTORY     = 0x00000010
+
+-- Lazy module imports.  Doing them at platform-load time would cycle
+-- (nt.dll.* lazy-load through their own require chains and some test
+-- code may load platform before nt is ready).  Instead, defer to
+-- first-use; the require cache handles re-entry.
+local _bit, _ffi, _fs, _oa, _rtl, _ps, _ke
+local function lazy_imports()
+    if _fs then return end
+    _bit = require('bit')
+    _ffi = require('ffi')
+    _fs  = require('nt.dll.fs')
+    _oa  = require('nt.dll.oa')
+    _rtl = require('nt.dll.rtl')
+    _ps  = require('nt.dll.ps')
+    _ke  = require('nt.dll.ke')
+end
+
+-- ---------------- File I/O ----------------
+
+function M.read_file(path)
+    lazy_imports()
+    local nt_path = to_nt_path(path)
+    local noa = _oa.path(nt_path)
+    local ok, h = pcall(_fs.NtOpenFile,
+        _bit.bor(FS_FILE_GENERIC_READ, FS_SYNCHRONIZE),
+        noa.oa,
+        _bit.bor(FS_FILE_SHARE_READ, FS_FILE_SHARE_WRITE),
+        FS_FILE_SYNCHRONOUS_IO_NONALERT)
+    if not ok then return nil end           -- missing / unreadable
+
+    local ok2, ret = pcall(function()
+        local std = _fs.query_standard(h)
+        local n = tonumber(std.EndOfFile.QuadPart)
+        if n == 0 then return "" end
+        local buf = _ffi.new('uint8_t[?]', n)
+        local got, _st = _fs.NtReadFile(h, buf, n, nil)
+        return _ffi.string(buf, got)
+    end)
+    h:close()
+    if not ok2 then error(ret, 0) end
+    return ret
+end
+
+function M.write_file(path, bytes)
+    lazy_imports()
+    local nt_path = to_nt_path(path)
+    local noa = _oa.path(nt_path)
+    local h = _fs.NtCreateFile(
+        _bit.bor(FS_FILE_GENERIC_WRITE, FS_SYNCHRONIZE),
+        noa.oa,
+        nil,                                 -- AllocationSize
+        FS_FILE_ATTRIBUTE_NORMAL,
+        _bit.bor(FS_FILE_SHARE_READ, FS_FILE_SHARE_WRITE),
+        FS_FILE_OVERWRITE_IF,
+        _bit.bor(FS_FILE_NON_DIRECTORY_FILE, FS_FILE_SYNCHRONOUS_IO_NONALERT),
+        nil, 0)
+    local ok, ret = pcall(function()
+        if #bytes > 0 then
+            _fs.NtWriteFile(h, bytes, #bytes, nil)
+        end
+    end)
+    h:close()
+    if not ok then error(ret, 0) end
+end
+
+function M.copy_file(src, dst)
+    -- Naive: read all + write all.  All build-path files (SOURCES,
+    -- _objects.mac, .h/.c outputs, .lib/.obj) fit in RAM comfortably.
+    local data = M.read_file(src)
+    if not data then return false, "open " .. src end
+    M.write_file(dst, data)
+    return true
+end
+
+function M.file_size(path)
+    -- Composed: open + query_standard + close.  Used only by
+    -- disk.lua (host-side); on guest the build path doesn't reach
+    -- for it.  Provide it anyway so future callers don't trip.
+    lazy_imports()
+    local noa = _oa.path(to_nt_path(path))
+    local ok, h = pcall(_fs.NtOpenFile,
+        _bit.bor(FS_FILE_GENERIC_READ, FS_SYNCHRONIZE),
+        noa.oa,
+        _bit.bor(FS_FILE_SHARE_READ, FS_FILE_SHARE_WRITE),
+        FS_FILE_SYNCHRONOUS_IO_NONALERT)
+    if not ok then return nil end
+    local std = _fs.query_standard(h)
+    h:close()
+    return tonumber(std.EndOfFile.QuadPart)
+end
+
+-- ---------------- Stat-like ----------------
+
+function M.file_exists(path)
+    lazy_imports()
+    return _fs.query_attributes(to_nt_path(path)) ~= nil
+end
+
+function M.is_dir(path)
+    lazy_imports()
+    local info = _fs.query_attributes(to_nt_path(path))
+    if info == nil then return false end
+    return _bit.band(info.FileAttributes, FS_FILE_ATTRIBUTE_DIRECTORY) ~= 0
+end
+
+function M.is_executable(path)
+    -- NT 3.5 has no executable bit.  Build code only checks this for
+    -- the host-side wibo binary, gated by `platform.on_host` already.
+    -- On guest, return true for any existing file so callers don't
+    -- false-negative.
+    return M.file_exists(path)
+end
+
+function M.mtime(path)
+    lazy_imports()
+    local info = _fs.query_attributes(to_nt_path(path))
+    if info == nil then return nil end
+    return _rtl.li_to_unix(info.LastWriteTime)
+end
+
+-- ---------------- Directory ops ----------------
+
+function M.list_dir(path)
+    lazy_imports()
+    return _fs.list_dir(to_nt_path(path))
+end
+
+function M.list_tree(root)
+    -- Recursive walk; returns root-relative paths, files only.
+    -- Pure Lua over list_dir + is_dir.
+    local out = {}
+    local function walk(rel)
+        local full = (rel == "") and root or (root .. "/" .. rel)
+        for _, name in ipairs(M.list_dir(full)) do
+            local sub = (rel == "") and name or (rel .. "/" .. name)
+            if M.is_dir(full .. "/" .. name) then
+                walk(sub)
+            else
+                out[#out + 1] = sub
+            end
+        end
+    end
+    walk("")
+    return out
+end
+
+function M.mkdir_p(path)
+    -- Walk components, ensure each exists as a directory.  Uses the
+    -- create_dir helper which combines NtCreateFile(DIR, OPEN_IF).
+    lazy_imports()
+    local nt_path = to_nt_path(path)
+    -- Split on backslashes and re-accumulate, opening at each step.
+    -- Skip empty leading component (absolute paths begin with `\`).
+    local parts = {}
+    for p in nt_path:gmatch("[^\\]+") do parts[#parts + 1] = p end
+    local accum = nt_path:sub(1, 1) == "\\" and "" or parts[1]
+    if nt_path:sub(1, 1) ~= "\\" then table.remove(parts, 1) end
+    for _, comp in ipairs(parts) do
+        accum = accum .. "\\" .. comp
+        local ok, h = pcall(_fs.create_dir, accum)
+        if ok then h:close() end
+        -- Errors are tolerated — a path component that's a file
+        -- (rather than a missing dir) will surface later when an op
+        -- inside that path fails.
     end
 end
 
-M.read_file     = todo("read_file")
-M.write_file    = todo("write_file")
-M.copy_file     = todo("copy_file")
-M.file_size     = todo("file_size")
-M.file_exists   = todo("file_exists")
-M.is_dir        = todo("is_dir")
-M.is_executable = todo("is_executable")
-M.mtime         = todo("mtime")
-M.now           = todo("now")
-M.localtime     = todo("localtime")
-M.list_dir      = todo("list_dir")
-M.list_tree     = todo("list_tree")
-M.mkdir_p       = todo("mkdir_p")
-M.unlink        = todo("unlink")
-M.rmdir         = todo("rmdir")
-M.rmrf          = todo("rmrf")
-M.realpath      = todo("realpath")
-M.getcwd        = todo("getcwd")
-M.setenv        = todo("setenv")
-M.getenv        = todo("getenv")
-M.environ       = todo("environ")
-M.spawn_wait    = todo("spawn_wait")
-M.die           = todo("die")
+function M.unlink(path)
+    lazy_imports()
+    local noa = _oa.path(to_nt_path(path))
+    local ok, h = pcall(_fs.NtOpenFile,
+        _bit.bor(FS_DELETE, FS_SYNCHRONIZE),
+        noa.oa,
+        _bit.bor(FS_FILE_SHARE_READ, FS_FILE_SHARE_WRITE,
+                 0x00000004 --[[FILE_SHARE_DELETE]]),
+        FS_FILE_SYNCHRONOUS_IO_NONALERT)
+    if not ok then return false end
+    local ok2 = pcall(_fs.set_disposition, h, true)
+    h:close()
+    return ok2
+end
+
+function M.rmdir(path)
+    -- NT 3.5 set_disposition works on directory handles too — same
+    -- code path as unlink.
+    return M.unlink(path)
+end
+
+function M.rmrf(path)
+    if not M.file_exists(path) then return true end
+    if not M.is_dir(path) then
+        return M.unlink(path)
+    end
+    -- Post-order: collect dir paths going in, delete files going down,
+    -- then rmdir going back up.  Same shape as host rmrf.
+    local dirs = {}
+    local function walk(p)
+        dirs[#dirs + 1] = p
+        for _, name in ipairs(M.list_dir(p)) do
+            local sub = p .. "/" .. name
+            if M.is_dir(sub) then
+                walk(sub)
+            else
+                M.unlink(sub)
+            end
+        end
+    end
+    walk(path)
+    for i = #dirs, 1, -1 do
+        M.rmdir(dirs[i])
+    end
+    return not M.file_exists(path)
+end
+
+function M.realpath(path)
+    -- Build code uses this only for the host-side bootstrap.  On
+    -- guest, return the input unchanged — caller has already
+    -- normalised it.
+    return path
+end
+
+function M.getcwd()
+    lazy_imports()
+    return _rtl.getcwd()
+end
+
+-- ---------------- Time ----------------
+
+function M.now()
+    lazy_imports()
+    return _rtl.li_to_unix(_ke.NtQuerySystemTime())
+end
+
+function M.localtime(t)
+    lazy_imports()
+    return _rtl.unix_to_table(t)
+end
+
+-- ---------------- Env ----------------
+
+function M.setenv(name, value)
+    lazy_imports()
+    _rtl.set_env(name, value)
+end
+
+function M.getenv(name)
+    lazy_imports()
+    return _rtl.query_env(name)
+end
+
+function M.environ()
+    lazy_imports()
+    return _rtl.environ()
+end
+
+-- ---------------- Process spawn ----------------
+
+-- Quote an argv element if it contains spaces, tabs, or double-quotes.
+-- Embedded quotes get backslash-escaped (Win32 / NT cmdline convention).
+local function quote_arg(s)
+    if s:find('[ \t"]') then
+        return '"' .. s:gsub('"', '\\"') .. '"'
+    end
+    return s
+end
+
+local function argv_to_cmdline(argv)
+    local parts = {}
+    for i, a in ipairs(argv) do
+        parts[i] = quote_arg(a)
+    end
+    return table.concat(parts, " ")
+end
+
+function M.spawn_wait(opts)
+    lazy_imports()
+    if not opts.argv or #opts.argv == 0 then
+        error("ntosbe.platform.spawn_wait: argv required", 2)
+    end
+    if opts.search_path then
+        error("ntosbe.platform.spawn_wait: search_path not supported on NT (pass an absolute path)", 2)
+    end
+
+    local exe     = to_nt_path(opts.path or opts.argv[1])
+    local cmdline = argv_to_cmdline(opts.argv)
+    local cwd     = opts.cwd and to_nt_path(opts.cwd) or nil
+
+    local proc = _ps.spawn{
+        exe      = exe,
+        cmdline  = cmdline,
+        env      = opts.env,
+        cwd      = cwd,
+        dll_path = opts.dll_path,                    -- toolchain DLL search list
+    }
+    return _ps.wait_exit(proc)
+end
+
+-- ---------------- Logging ----------------
 
 function M.log(msg)
     print(msg)
+end
+
+function M.die(msg)
+    print("ntosbe: " .. msg)
+    error(msg, 0)
 end
 
 end

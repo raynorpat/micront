@@ -550,7 +550,18 @@ Return Value:
 	while (*s || *(s+1))		// find end of block
 	    s++;
 
-	Ansi.Length = Ansi.MaximumLength = s - Ansi.Buffer + 1;
+	// MicroNT: stock NT 3.5 used `+ 1` here, copying through only
+	// the first NUL of the block's "\0\0" trailer.  The Unicode
+	// env block then ended with a single wchar NUL instead of
+	// two, and the child's env walker (looking for double-NUL
+	// end-of-block) ran off the end.  On stock NT this was masked
+	// because NtAllocateVirtualMemory commits a full zero-filled
+	// 4 KB page so over-reads landed on benign zeros — but when
+	// the allocation ends exactly at a page boundary (as ours
+	// does), the over-read AVs in the next uncommitted page.
+	// `+ 2` includes BOTH trailer NULs so the converted Unicode
+	// block is properly double-NUL terminated.
+	Ansi.Length = Ansi.MaximumLength = s - Ansi.Buffer + 2;
         MemoryInformation.RegionSize = Ansi.Length * sizeof(WCHAR);
         Unicode.Buffer = NULL;
         Status = NtAllocateVirtualMemory( NtCurrentProcess(),

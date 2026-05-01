@@ -121,6 +121,18 @@ typedef struct _OBJECT_TYPE_INFORMATION {
 
 local M = {}
 
+-- Object-type access masks.  Definitions match SDK ntobapi.h /
+-- winnt.h — exposed here so callers don't redefine these constants
+-- at every site.
+M.DIRECTORY_QUERY              = 0x00000001
+M.DIRECTORY_TRAVERSE           = 0x00000002
+M.DIRECTORY_CREATE_OBJECT      = 0x00000004
+M.DIRECTORY_CREATE_SUBDIRECTORY = 0x00000008
+M.DIRECTORY_ALL_ACCESS         = 0x000F000F
+
+M.SYMBOLIC_LINK_QUERY          = 0x00000001
+M.SYMBOLIC_LINK_ALL_ACCESS     = 0x000F0001
+
 -- Explicit close of an NT_HANDLE. We detach (clear ownership) before
 -- the syscall so the wrapper's __gc skips this handle when collected
 -- later — no double-close.
