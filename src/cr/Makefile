@@ -297,10 +297,35 @@ disk: all
 	$(SRC)/bootstrap.sh
 	$(HOST_LUAJIT) -e 'package.path="$(SRC)/pkg/?.lua;$(SRC)/pkg/?/init.lua;"..package.path; os.exit(require("ntosbe").main(arg))' -- ntosbe --src-root=$(SRC) --output-dir=$(BUILD) --efi-binary=$(BOOT_EFI)/BOOTX64.EFI $(INIT_ARGS_FLAG)
 
+# MACHINE / DISK pass through to boot.sh as --machine / --disk so
+# `make boot MACHINE=q35 DISK=nvme` exercises the modern shape.  Unset
+# defaults fall through to boot.sh's own defaults (pc + ide).
+BOOT_FLAGS :=
+ifdef MACHINE
+BOOT_FLAGS += --machine $(MACHINE)
+endif
+ifdef DISK
+BOOT_FLAGS += --disk $(DISK)
+endif
+
 boot: disk
-	$(SRC)/boot.sh
+	$(SRC)/boot.sh $(BOOT_FLAGS)
 
 selftest: INIT_ARGS_FLAG = --init-args '\SystemRoot\lua\selftest.lua'
 selftest: boot
 
-.PHONY: all rebuild clean info disk boot selftest luajit-clean
+# Smoke test — minimal "did the system boot on this hardware shape?"
+# check.  Disk has Init\Args pointed at smoke.lua, which prints
+# 'SMOKE OK' and powers off.  Use across the (MACHINE, DISK) matrix
+# in CI for ~10 s coverage per combo, vs ~4 min for the full selftest.
+#
+# `smoke-disk` builds just the smoke-flavour disk image so CI can
+# build once and reboot it 4× across the matrix without rebuilding
+# the disk per combo.
+smoke-disk: INIT_ARGS_FLAG = --init-args '\SystemRoot\lua\smoke.lua'
+smoke-disk: disk
+
+smoketest: INIT_ARGS_FLAG = --init-args '\SystemRoot\lua\smoke.lua'
+smoketest: boot
+
+.PHONY: all rebuild clean info disk boot selftest smoketest smoke-disk luajit-clean

@@ -50,23 +50,35 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
 
     if (fs_init(ImageHandle) != EFI_SUCCESS) goto halt;
 
-    /* Load only what the kernel handoff needs: the kernel itself, HAL,
-     * the boot drivers required to mount the boot volume (atdisk + fastfat),
-     * the registry hive, and the NLS tables. User-mode images (smss,
-     * ntdll, kernel32) stay on-disk — the kernel mounts the boot volume
-     * via atdisk+fastfat and reads them at runtime, just like OSLOADER. */
-    void *blob_kernel  = 0, *blob_hal    = 0;
-    void *blob_atdisk  = 0, *blob_fastfat = 0;
-    UINTN sz_kernel, sz_hal, sz_atdisk, sz_fastfat, sz_dummy;
+    /* Load what the kernel handoff needs: the kernel itself, HAL, every
+     * candidate boot-disk driver (atdisk for legacy IDE, scsiport+
+     * scsidisk+nvme2k for NVMe), the FS driver (fastfat), the registry
+     * hive, and NLS.  We pre-load *all* candidate disk drivers
+     * unconditionally — discovery in each driver's DriverEntry decides
+     * which one binds at runtime.  Same image boots on pc+IDE (atdisk
+     * wins, nvme2k bails on PCI walk) and q35+NVMe (atdisk reads zero
+     * CMOS and bails, nvme2k claims the controller).  All disk drivers
+     * have ErrorControl=Normal so a no-hardware return is logged, not
+     * bugchecked.  User-mode images (ntdll, kernel32) stay on disk —
+     * kernel reads them at runtime via the now-mounted boot volume. */
+    void *blob_kernel   = 0, *blob_hal      = 0;
+    void *blob_atdisk   = 0, *blob_scsiport = 0;
+    void *blob_scsidisk = 0, *blob_nvme2k   = 0;
+    void *blob_fastfat  = 0;
+    UINTN sz_kernel, sz_hal;
+    UINTN sz_atdisk, sz_scsiport, sz_scsidisk, sz_nvme2k, sz_fastfat;
     {
         void  *buf;
         UINTN  size;
-        fs_read(L"\\System32\\ntoskrnl.exe",          PK_FIRMWARE_TEMP, &blob_kernel,  &sz_kernel);
-        fs_read(L"\\System32\\hal.dll",                PK_FIRMWARE_TEMP, &blob_hal,     &sz_hal);
-        fs_read(L"\\System32\\Drivers\\atdisk.sys",    PK_FIRMWARE_TEMP, &blob_atdisk,  &sz_atdisk);
-        fs_read(L"\\System32\\Drivers\\fastfat.sys",   PK_FIRMWARE_TEMP, &blob_fastfat, &sz_fastfat);
-        fs_read(L"\\System32\\config\\SYSTEM",         PK_REGISTRY,     &buf, &size); (void)size;
-        (void)buf; (void)sz_dummy;
+        fs_read(L"\\System32\\ntoskrnl.exe",            PK_FIRMWARE_TEMP, &blob_kernel,   &sz_kernel);
+        fs_read(L"\\System32\\hal.dll",                  PK_FIRMWARE_TEMP, &blob_hal,      &sz_hal);
+        fs_read(L"\\System32\\Drivers\\atdisk.sys",      PK_FIRMWARE_TEMP, &blob_atdisk,   &sz_atdisk);
+        fs_read(L"\\System32\\Drivers\\scsiport.sys",    PK_FIRMWARE_TEMP, &blob_scsiport, &sz_scsiport);
+        fs_read(L"\\System32\\Drivers\\scsidisk.sys",    PK_FIRMWARE_TEMP, &blob_scsidisk, &sz_scsidisk);
+        fs_read(L"\\System32\\Drivers\\nvme2k.sys",      PK_FIRMWARE_TEMP, &blob_nvme2k,   &sz_nvme2k);
+        fs_read(L"\\System32\\Drivers\\fastfat.sys",     PK_FIRMWARE_TEMP, &blob_fastfat,  &sz_fastfat);
+        fs_read(L"\\System32\\config\\SYSTEM",           PK_REGISTRY,      &buf, &size); (void)size;
+        (void)buf;
     }
 
     /* NLS: NT's Phase1Initialization (NTOS/INIT/INIT.C:392) computes
@@ -112,13 +124,47 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
 
     /* Stage kernel + HAL + boot drivers via the PE loader: sections to
      * their virtual addresses, base relocations applied. Then resolve
-     * imports so calls between modules get patched to real addresses. */
+     * imports so calls between modules get patched to real addresses.
+     *
+     * Drivers staged unconditionally as a profile-agnostic candidate
+     * set: atdisk (legacy IDE), scsiport+scsidisk+nvme2k (NVMe via the
+     * SCSI miniport stack), fastfat (FS).  Each disk driver decides at
+     * DriverEntry whether its hardware is present; the losers return
+     * STATUS_NO_SUCH_DEVICE and the kernel logs + skips.  Order in the
+     * pre-load list doesn't dictate runtime load order — the kernel's
+     * IopInitializeBootDrivers walks LoadOrderList by ServiceGroupOrder
+     * and DependOnService dependencies. */
     static pe_image_t kernel, hal;
-    static pe_image_t drivers[2];
+    static pe_image_t drivers[5];   /* atdisk, scsiport, scsidisk, nvme2k, fastfat */
     UINTN n_drivers = 0;
     {
-        pe_image_t all[4];
+        pe_image_t all[2 + 5];      /* kernel + hal + drivers[] */
         UINTN n = 0;
+
+        /* Order matters: the kernel's IopInitializeBootDrivers walks
+         * LoaderBlock->BootDriverListHead in the order we wire it here
+         * (it does NOT re-sort by ServiceGroupOrder — real NT's
+         * OSLOADER sorted before handoff; we hand-sort instead).
+         *
+         * Constraints:
+         *   - scsiport.sys before nvme2k.sys (miniport imports the
+         *     framework's ScsiPortInitialize).
+         *   - All SCSI miniports (today: just nvme2k) before scsidisk:
+         *     scsidisk's DriverEntry eagerly walks \Device\ScsiPort0..N
+         *     and returns STATUS_NO_SUCH_DEVICE if the namespace is
+         *     empty.  Loading scsidisk before any miniport has
+         *     registered surfaces zero disks even when the hardware
+         *     is present.
+         *   - fastfat.sys at any point — it doesn't touch disk state
+         *     at DriverEntry. */
+        struct { void *blob; UINTN size; const char *name; } stage_list[] = {
+            { blob_atdisk,   sz_atdisk,   "atdisk.sys"   },
+            { blob_scsiport, sz_scsiport, "scsiport.sys" },
+            { blob_nvme2k,   sz_nvme2k,   "nvme2k.sys"   },
+            { blob_scsidisk, sz_scsidisk, "scsidisk.sys" },
+            { blob_fastfat,  sz_fastfat,  "fastfat.sys"  },
+        };
+        const UINTN N_STAGE = sizeof(stage_list) / sizeof(stage_list[0]);
 
         if (blob_kernel && pe_stage(blob_kernel, sz_kernel,
                                     PK_KERNEL_IMAGE, "ntoskrnl.exe",
@@ -126,19 +172,26 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
         if (blob_hal && pe_stage(blob_hal, sz_hal,
                                  PK_HAL_IMAGE, "hal.dll",
                                  &hal) == EFI_SUCCESS) all[n++] = hal;
-        if (blob_atdisk && pe_stage(blob_atdisk, sz_atdisk,
-                                    PK_BOOT_DRIVER, "atdisk.sys",
-                                    &drivers[n_drivers]) == EFI_SUCCESS) {
-            all[n++] = drivers[n_drivers]; n_drivers++;
-        }
-        if (blob_fastfat && pe_stage(blob_fastfat, sz_fastfat,
-                                     PK_BOOT_DRIVER, "fastfat.sys",
-                                     &drivers[n_drivers]) == EFI_SUCCESS) {
-            all[n++] = drivers[n_drivers]; n_drivers++;
+
+        for (UINTN i = 0; i < N_STAGE; i++) {
+            if (!stage_list[i].blob) {
+                BXLOG(L"%a: missing blob, skipping", stage_list[i].name);
+                continue;
+            }
+            if (pe_stage(stage_list[i].blob, stage_list[i].size,
+                         PK_BOOT_DRIVER, stage_list[i].name,
+                         &drivers[n_drivers]) == EFI_SUCCESS) {
+                all[n++] = drivers[n_drivers];
+                n_drivers++;
+            } else {
+                BXLOG(L"%a: pe_stage failed", stage_list[i].name);
+            }
         }
 
         /* Two passes for ntoskrnl<->hal circular dep: both are staged
-         * before any import resolution. */
+         * before any import resolution.  scsidisk imports scsiport,
+         * nvme2k imports scsiport — same pre-stage-then-resolve pattern
+         * handles those naturally. */
         for (UINTN i = 0; i < n; i++) pe_resolve_imports(&all[i], all, n);
     }
 

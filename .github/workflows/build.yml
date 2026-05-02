@@ -90,12 +90,56 @@ jobs:
         # mingw target (the host build above was wiped after bootstrap).
         run: make -C src/cr all
 
+      - name: smoke matrix across (machine, disk)
+        # Far cheaper than the full selftest (~10 s/combo vs ~4 min
+        # for one): boot the system on each hardware shape, confirm
+        # Lua reaches `print("SMOKE OK")`, power off.  Catches
+        # boot-side regressions across the full matrix without
+        # paying the in-OS rebuild cost on every shape.
+        #
+        # Runs BEFORE the full selftest so a boot-side regression
+        # fails the workflow fast, before paying the ~4 min in-OS
+        # rebuild on the default shape.
+        #
+        # Build the smoke disk once (Init\Args pointed at smoke.lua)
+        # and reboot it across the cartesian (machines × disks) — the
+        # disk image is profile-agnostic per the same-image-everywhere
+        # design, so one bake covers every combo.
+        #
+        # 60 s timeout per boot is generous: cold-cache OVMF + kernel
+        # init + driver init + Lua "print + shutdown" runs in <15 s
+        # on a runner.
+        run: |
+          make -C src/cr smoke-disk
+          fail=0
+          machines="q35 pc"
+          disks="nvme ide"
+          for machine in $machines; do
+            for disk in $disks; do
+              log="smoke-$machine-$disk.log"
+              echo "=== smoke: machine=$machine disk=$disk ==="
+              timeout 60 src/boot.sh --machine "$machine" --disk "$disk" \
+                < /dev/null 2>&1 | tee "$log" || true
+              if grep -q '^SMOKE OK' "$log"; then
+                echo "  PASS: $machine+$disk"
+              else
+                echo "  FAIL: $machine+$disk (no SMOKE OK in log)"
+                fail=1
+              fi
+            done
+          done
+          exit $fail
+
       - name: run cr selftest under QEMU
         # Boot micront under OVMF/QEMU with INIT_ARGS pointed at
         # selftest.lua; the Lua harness prints a summary and shuts
         # down cleanly. TCG-only (no /dev/kvm in containers); selftest
-        # is ~1min on a GitHub runner. 5-minute wall timeout prevents
-        # a hung VM from stalling the whole workflow.
+        # is ~4 min on a GitHub runner (full in-OS rebuild). 5-minute
+        # wall timeout prevents a hung VM from stalling the workflow.
+        #
+        # Runs AFTER the smoke matrix so any boot-side regression
+        # fails the workflow before this step starts the in-OS rebuild
+        # ouroboros.
         #
         # Tee to selftest.log and grep for the harness's ALL PASSED
         # sentinel. Any failed tests print FAILURES instead so grep -q

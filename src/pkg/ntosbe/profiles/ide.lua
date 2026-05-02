@@ -105,21 +105,27 @@ function M.apply(h, init)
 
     -- SCSI miniport framework.  Provides ScsiPortInitialize + the SRB
     -- dispatch surface miniports register against.
+    --
+    -- Boot-start (Start=0) so the loader pre-loads it alongside atdisk.
+    -- This lets the same image boot from either an IDE or NVMe disk:
+    -- whichever controller is present at runtime, the matching driver
+    -- claims the boot volume; the other returns STATUS_NO_SUCH_DEVICE
+    -- and gets logged (ErrorControl=Normal, not Critical).
     services:key("scsiport")
-        :set_dword("Type", 1):set_dword("Start", 1):set_dword("ErrorControl", 1)
+        :set_dword("Type", 1):set_dword("Start", 0):set_dword("ErrorControl", 1)
         :set_sz("Group", "SCSI miniport")
 
     -- nvme2k — NVMe storage controller miniport.  Registers via scsiport;
     -- SCSIDISK presents the namespace as \Device\Harddisk<N>.
     services:key("nvme2k")
-        :set_dword("Type", 1):set_dword("Start", 1):set_dword("ErrorControl", 1)
+        :set_dword("Type", 1):set_dword("Start", 0):set_dword("ErrorControl", 1)
         :set_sz("Group", "SCSI miniport")
         :set_multi_sz("DependOnService", { "scsiport" })
 
     -- SCSI disk class driver — walks miniports' device chains, parses
     -- partition tables, surfaces \Device\Harddisk<N>\Partition<P>.
     services:key("scsidisk")
-        :set_dword("Type", 1):set_dword("Start", 1):set_dword("ErrorControl", 1)
+        :set_dword("Type", 1):set_dword("Start", 0):set_dword("ErrorControl", 1)
         :set_sz("Group", "SCSI Class")
         :set_multi_sz("DependOnService", { "scsiport" })
 

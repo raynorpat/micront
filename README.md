@@ -6,6 +6,16 @@ NT 3.50 "Daytona", built from source on Linux, booting under UEFI on QEMU, with 
 
 Implemented:
 
+- [x] **Self-hosting** — booted MicroNT image rebuilds its own
+  kernel, drivers, and userland from source via NMAKE driving the
+  in-OS NT 3.5 toolchain (CL/C1/C2/RC/CVTRES/LINK on top of our
+  kernel32 + cmd.exe).  See *Self-host* below.
+- [x] **Multi-shape boot** — same disk image boots on `q35 + NVMe`
+  (canonical modern shape, true PCIe), `q35 + IDE` (piix3-ide
+  bridge), `pc + NVMe`, and `pc + IDE` (classic legacy shape).
+  All four combos exercised in CI as a smoke matrix.  Driver
+  discovery decides which controller binds at runtime; no per-
+  profile loader, hive, or disk image.
 - [x] 64-bit UEFI bootloader (`BOOTX64.EFI`, OVMF on qemu)
 - [x] PCI-native HAL (BAR relocation above 4 GiB, no PC/AT assumptions)
 - [x] Fast `SYSENTER`/`SYSEXIT` & Zw* kernel service dispatch
@@ -16,6 +26,8 @@ Implemented:
 - [x] NDIS 3 + TDI + AFD + TCP / UDP / ICMP / IP
 - [x] NVMe (SCSI miniport on top of `scsiport.sys`)
 - [x] Native-NT Lua userland (LuaJIT 2.1, FFI to `ntdll`)
+- [x] kernel32 + lifted NT 3.5 cmd.exe (no csrss, no user32) — runs
+  unmodified Microsoft NT 3.5 toolchain binaries
 
 Coming next:
 
@@ -23,6 +35,31 @@ Coming next:
 - [ ] SMP
 - [ ] GPT partitions (currently MBR via `mkdisk.py`)
 - [ ] Modern display path (Bochs VBE miniport works; need GOP-handoff loader path)
+
+## Self-host
+
+The booted MicroNT image can rebuild itself.  `test.ntosbe`'s
+`'full OS rebuild on guest'` selftest drives `ntosbe.build` (the same
+Lua orchestrator the host uses) inside the running guest:
+
+```
+NMAKE.EXE  →  cmd.exe /c …
+              ├── CL386 → CL → C1 → C2     (kernel/driver C compile)
+              ├── RC → CVTRES               (resource compile)
+              └── LINK -lib | LINK          (librarian + executable link)
+```
+
+…against our kernel32, ntdll, and the NT 3.5 toolchain binaries
+staged at `\SystemRoot\pkg\msvc20\`.  Output is a fresh
+`ntoskrnl.exe` + drivers + userland built entirely under the OS
+that's running.  No Wine, no wibo, no host-side participation
+beyond having previously built the image.
+
+The build orchestrator (`src/pkg/ntosbe/build.lua`) is a regular Lua
+package module — the *same* code runs on host (against the wibo PE
+loader) and on guest (native NT spawn).  All file I/O, process
+spawn, and codegen helpers route through `ntosbe.platform`, which
+has both backends.
 
 ## Lua as init
 
@@ -53,7 +90,8 @@ src/bootstrap.sh        builds the host LuaJIT used by build.sh
 
 The build orchestrator lives in `src/pkg/ntosbe/build.lua` (a regular
 package module) so the same body runs on host and inside the booted
-guest once the in-OS spawn backend lands.  No build code lives at
+guest — the in-OS spawn backend lives in `ntosbe.platform`'s NT-side
+implementation (NtCreateFile / ps.spawn).  No build code lives at
 `src/` level any more — only the bash wrapper.
 
 `stuff/` and `wibo/` are reference trees. CI fetches a prebuilt
@@ -87,20 +125,27 @@ Output lands in `build/disk/` (`esp.img`, `nvme.img`, `SYSTEM` hive).
 ## Run
 
 ```sh
-make -C src/cr boot              # boot the disk under QEMU + OVMF
+make -C src/cr boot              # canonical: q35 + NVMe (modern PCIe)
+make -C src/cr boot MACHINE=pc DISK=ide   # legacy fallback shape
 make -C src/cr selftest          # boot, run selftest.lua, shut down (CI signal)
+make -C src/cr smoketest         # ~10 s "did it boot?" smoke
 ```
 
 `src/boot.sh` (next to `build.sh`) wraps QEMU directly — never invoke
-`qemu-system-*` by hand:
+`qemu-system-*` by hand.  `--machine` (default `q35`) and `--disk`
+(default `nvme`) pick the hardware shape; the same disk image boots
+every supported combo:
 
 ```sh
-boot.sh                          # COM1+COM2 muxed to stdio
-boot.sh --gdb                    # freeze CPU, listen on :1234 for gdb
-boot.sh --trace                  # -d int,cpu_reset,in_asm → ./qemu.log
-boot.sh --vga                    # add a VGA window
-boot.sh --mem 256                # bump guest RAM (default 128 MiB)
-debug.sh                         # one-shot: paused QEMU + gdb.script + capture
+boot.sh                              # default: q35 + nvme
+boot.sh --machine pc  --disk ide     # legacy classic shape
+boot.sh --machine pc  --disk nvme    # NVMe on i440fx
+boot.sh --machine q35 --disk ide     # piix3-ide bridge on q35
+boot.sh --gdb                        # freeze CPU, listen on :1234 for gdb
+boot.sh --trace                      # -d int,cpu_reset,in_asm → ./qemu.log
+boot.sh --vga                        # add a VGA window
+boot.sh --mem 256                    # bump guest RAM (default 128 MiB)
+debug.sh                             # one-shot: paused QEMU + gdb.script + capture
 ```
 
 ## Iteration
