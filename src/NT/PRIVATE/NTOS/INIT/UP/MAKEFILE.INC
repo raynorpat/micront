@@ -25,7 +25,7 @@ $(BASEDIR)\public\sdk\lib\$(TARGET_DIRECTORY)\ntoskrnl.lib $(BASEDIR)\public\sdk
         $(TARGETPATH)\$(TARGET_DIRECTORY)\ntosrtl.lib\
         $(TARGETPATH)\$(TARGET_DIRECTORY)\se.lib     \
         $(TARGETPATH)\$(TARGET_DIRECTORY)\vdm.lib
-    -lib @<<
+    link -lib @<<
 -def:obj\$(TARGET_DIRECTORY)\ntoskrnl.def
 -out:$(@D)\tmp.lib
 -machine:$(TARGET_DIRECTORY)
@@ -53,7 +53,7 @@ $(BASEDIR)\public\sdk\lib\$(TARGET_DIRECTORY)\libcntpr.lib
 <<NOKEEP
     -erase $(@R).exp
     ren $(@D)\tmp.exp $(@B).exp
-    -lib -out:$(@R).lib @<<
+    link -lib -out:$(@R).lib @<<
 -machine:$(TARGET_DIRECTORY)
 $(@D)\tmp.lib
 !if exist($(BASEDIR)\public\sdk\lib\$(TARGET_DIRECTORY)\exsup.lib)

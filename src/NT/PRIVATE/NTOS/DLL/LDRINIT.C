@@ -970,14 +970,6 @@ Return Value:
     LdrpInsertMemoryTableEntry(LdrDataTableEntry);
     LdrDataTableEntry->Flags |= LDRP_ENTRY_PROCESSED;
 
-    DbgPrint( "LDR: NEW PROCESS\n" );
-    DbgPrint( "     Image Path: %wZ (%wZ)\n",
-              &LdrDataTableEntry->FullDllName,
-              &LdrDataTableEntry->BaseDllName
-            );
-    DbgPrint( "     Current Directory: %wZ\n", &CurDir );
-    DbgPrint( "     Search Path: %wZ\n", &LdrpDefaultPath );
-
     //
     // The process references the system DLL, so map this one next. Since
     // we have already mapped this one, we need to do the allocation by

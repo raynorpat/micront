@@ -9,22 +9,47 @@
 -- Output:
 --   - PRIVATE/NTOS/RTL/error.h    (run-length-encoded translation tables)
 --
--- Returned as a module so build.lua can `dofile` it and call run().
+-- All file I/O routes through ntosbe.platform so this module runs
+-- unchanged on host (Lua stdlib io) and inside MicroNT (where stdlib
+-- io is unavailable — guest LuaJIT speaks NtCreateFile only).
+
+local platform = require('ntosbe.platform')
 
 local M = {}
 
 local function read_file(path)
-    local f = io.open(path, "rb")
-    if not f then return nil end
-    local data = f:read("*all")
-    f:close()
-    return data
+    return platform.read_file(path)
 end
 
 local function file_exists(path)
-    local f = io.open(path, "rb")
-    if f then f:close(); return true end
-    return false
+    return platform.file_exists(path)
+end
+
+-- Iterator over lines of `path`.  Replaces io.lines, which doesn't
+-- exist on guest.  Reads the whole file once, then yields each
+-- newline-terminated chunk; trailing partial line is yielded too.
+local function read_lines(path)
+    local data = platform.read_file(path)
+    if data == nil then
+        return function() return nil end
+    end
+    local pos = 1
+    return function()
+        if pos > #data then return nil end
+        local nl = data:find("\n", pos, true)
+        local line
+        if nl then
+            line = data:sub(pos, nl - 1)
+            pos  = nl + 1
+        else
+            line = data:sub(pos)
+            pos  = #data + 1
+        end
+        -- Strip trailing \r so CRLF inputs (vintage NT headers are
+        -- CRLF) match the original io.lines behaviour.
+        if line:sub(-1) == "\r" then line = line:sub(1, -2) end
+        return line
+    end
 end
 
 -- ------------------------------------------------------------------
@@ -35,7 +60,7 @@ local function load_status_codes(ntstatus_h)
     -- Match: #define STATUS_xxx ((NTSTATUS)0xNNNNNNNN[L])
     local vals = {}
     if not file_exists(ntstatus_h) then return vals end
-    for line in io.lines(ntstatus_h) do
+    for line in read_lines(ntstatus_h) do
         local stripped = line:gsub("^%s+", ""):gsub("%s+$", "")
         local name, hex = stripped:match(
             "^#define%s+([%w_]+)%s+%(%(NTSTATUS%)0x(%x+)L?%)")
@@ -59,7 +84,7 @@ local function load_error_codes(winerror_h)
     -- Match: #define ERROR_xxx N[L]    (decimal Win32 codes)
     local vals = {}
     if not file_exists(winerror_h) then return vals end
-    for line in io.lines(winerror_h) do
+    for line in read_lines(winerror_h) do
         local stripped = line:gsub("^%s+", ""):gsub("%s+$", "")
         local name, dec = stripped:match("^#define%s+([%w_]+)%s+(%d+)L?")
         if name and dec and is_winerror_name(name) then
@@ -116,13 +141,13 @@ local function extract_code_pairs(generr_c, status_vals, error_vals)
         elseif all_vals[tok] then
             pairs_out[#pairs_out + 1] = all_vals[tok]
         else
-            io.stderr:write(("WARNING: Unknown symbol '%s', using 0\n"):format(tok))
+            platform.log(("GENERR: WARNING: Unknown symbol '%s', using 0"):format(tok))
             pairs_out[#pairs_out + 1] = 0
         end
     end
 
     if (#pairs_out % 2) ~= 0 then
-        io.stderr:write(("WARNING: Odd number of entries (%d), dropping last\n"):format(#pairs_out))
+        platform.log(("GENERR: WARNING: Odd number of entries (%d), dropping last"):format(#pairs_out))
         pairs_out[#pairs_out] = nil
     end
 
@@ -178,24 +203,28 @@ local function generate_error_h(pairs_in, out_path)
         pairs_sorted[#pairs_sorted + 1] = p[2]
     end
 
-    local f = assert(io.open(out_path, "w"))
+    -- Buffer all output into a table, concat at the end, write
+    -- once via platform.write_file.  Avoids io.open which doesn't
+    -- exist on guest.
+    local buf = {}
+    local function out(s) buf[#buf + 1] = s end
 
-    f:write("//\n")
-    f:write("// Define run length table entry structure type.\n")
-    f:write("//\n")
-    f:write("\n")
-    f:write("typedef struct _RUN_ENTRY {\n")
-    f:write("    ULONG BaseCode;\n")
-    f:write("    USHORT RunLength;\n")
-    f:write("    USHORT CodeSize;\n")
-    f:write("} RUN_ENTRY, *PRUN_ENTRY;\n")
-    f:write("\n")
-    f:write("//\n")
-    f:write("// Declare translation table array.\n")
-    f:write("//\n")
-    f:write("\n")
-    f:write("USHORT RtlpStatusTable[] = {")
-    f:write("\n    ")
+    out("//\n")
+    out("// Define run length table entry structure type.\n")
+    out("//\n")
+    out("\n")
+    out("typedef struct _RUN_ENTRY {\n")
+    out("    ULONG BaseCode;\n")
+    out("    USHORT RunLength;\n")
+    out("    USHORT CodeSize;\n")
+    out("} RUN_ENTRY, *PRUN_ENTRY;\n")
+    out("\n")
+    out("//\n")
+    out("// Declare translation table array.\n")
+    out("//\n")
+    out("\n")
+    out("USHORT RtlpStatusTable[] = {")
+    out("\n    ")
 
     local run_table = {}
     local count     = 0
@@ -213,38 +242,39 @@ local function generate_error_h(pairs_in, out_path)
             local dos_err = pairs_sorted[k + j * 2 + 1]
             if size == 1 then
                 count = count + 1
-                f:write(("0x%04x, "):format(dos_err % 0x10000))
+                out(("0x%04x, "):format(dos_err % 0x10000))
             else
                 count = count + 2
-                f:write(("0x%04x, 0x%04x, "):format(
+                out(("0x%04x, 0x%04x, "):format(
                     dos_err % 0x10000,
                     math.floor(dos_err / 0x10000) % 0x10000))
             end
 
             if count > 6 then
                 count = 0
-                f:write("\n    ")
+                out("\n    ")
             end
         end
 
         k = k + length * 2
     end
 
-    f:write("0x0};\n")
-    f:write("\n")
-    f:write("//\n")
-    f:write("// Declare run length table array.\n")
-    f:write("//\n")
-    f:write("\n")
-    f:write("RUN_ENTRY RtlpRunTable[] = {\n")
+    out("0x0};\n")
+    out("\n")
+    out("//\n")
+    out("// Declare run length table array.\n")
+    out("//\n")
+    out("\n")
+    out("RUN_ENTRY RtlpRunTable[] = {\n")
 
     for _, e in ipairs(run_table) do
-        f:write(("    {0x%08x, %d, %d},\n"):format(
+        out(("    {0x%08x, %d, %d},\n"):format(
             e.base_code, e.run_length, e.code_size))
     end
 
-    f:write("    {0x0, 0x0, 0x0}};\n")
-    f:close()
+    out("    {0x0, 0x0, 0x0}};\n")
+
+    platform.write_file(out_path, table.concat(buf))
 end
 
 -- ------------------------------------------------------------------
@@ -262,22 +292,22 @@ function M.run(nt_root, out_path)
     local winerror_h = nt_root .. "/PUBLIC/SDK/INC/WINERROR.H"
     local generr_c   = nt_root .. "/PRIVATE/NTOS/RTL/GENERR.C"
 
-    io.stderr:write("GENERR: Loading status codes...\n")
+    platform.log("GENERR: Loading status codes...")
     local status_vals = load_status_codes(ntstatus_h)
     local n_status = 0; for _ in pairs(status_vals) do n_status = n_status + 1 end
-    io.stderr:write(("GENERR: %d NTSTATUS codes\n"):format(n_status))
+    platform.log(("GENERR: %d NTSTATUS codes"):format(n_status))
 
     local error_vals = load_error_codes(winerror_h)
     local n_error = 0; for _ in pairs(error_vals) do n_error = n_error + 1 end
-    io.stderr:write(("GENERR: %d error codes\n"):format(n_error))
+    platform.log(("GENERR: %d error codes"):format(n_error))
 
-    io.stderr:write(("GENERR: Extracting code pairs from %s...\n"):format(generr_c))
+    platform.log(("GENERR: Extracting code pairs from %s..."):format(generr_c))
     local pairs_out = extract_code_pairs(generr_c, status_vals, error_vals)
-    io.stderr:write(("GENERR: %d code pairs\n"):format(math.floor(#pairs_out / 2)))
+    platform.log(("GENERR: %d code pairs"):format(math.floor(#pairs_out / 2)))
 
-    io.stderr:write(("GENERR: Writing %s...\n"):format(out_path))
+    platform.log(("GENERR: Writing %s..."):format(out_path))
     generate_error_h(pairs_out, out_path)
-    io.stderr:write("GENERR: Done.\n")
+    platform.log("GENERR: Done.")
 end
 
 return M

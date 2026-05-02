@@ -2,7 +2,7 @@
 -- nmake builds.  All four wrap a fixed-shape "if output is missing or
 -- input newer, run a tool" recipe.
 --
---   ensure_error_h   tools/generr.lua → NTOS/RTL/error.h
+--   ensure_error_h   ntosbe.generr      → NTOS/RTL/error.h
 --   ensure_bugcodes  mc BUGCODES.MC   → NTOS/INC/bugcodes.h, INIT/bugcodes.rc
 --   ensure_serlog    mc SERLOG.MC     → DD/SERIAL/serlog.h, /serlog.rc
 --   geni386          cl386 + link + run → SDK/INC/KS386.INC, NTOS/INC/HAL386.INC
@@ -15,7 +15,7 @@
 --
 -- configure{ nt_root, src_root } binds the two roots:
 --   nt_root  - absolute path to NT/    (SDK headers, NLS sources)
---   src_root - absolute path to src/   (where tools/generr.lua lives)
+--   src_root - absolute path to src/   (host-tool spawn cwd for geni386)
 
 local platform  = require('ntosbe.platform')
 local toolchain = require('ntosbe.tchain')
@@ -46,19 +46,16 @@ local function copy_if_present(src, dst)
 end
 
 -- ----------------------------------------------------------------
--- ensure_error_h — wraps tools/generr.lua, which is pure Lua and runs
--- on host or NT identically.  Cached per process: dofile() once, then
--- call .run() per invocation.
+-- ensure_error_h — wraps ntosbe.generr (pure Lua port of the stock
+-- NT generr.exe).  Loaded as a regular pkg module via require, so
+-- the same code path works on host and inside MicroNT — no need to
+-- ship src/tools/ as a special case.
 -- ----------------------------------------------------------------
 
-local generr_module
-
 function M.ensure_error_h()
-    if not generr_module then
-        generr_module = dofile(cfg.src_root .. "/tools/generr.lua")
-    end
-    local ok, err = pcall(generr_module.run,
-                          cfg.nt_root, cfg.ntos .. "/RTL/error.h")
+    local generr  = require('ntosbe.generr')
+    local ok, err = pcall(generr.run, cfg.nt_root,
+                          cfg.ntos .. "/RTL/error.h")
     if not ok then
         platform.log("GENERR: " .. tostring(err))
         return false

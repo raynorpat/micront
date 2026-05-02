@@ -404,31 +404,15 @@ function M.main(opts)
     targets.init = function()
         if targets.hal_stubs() ~= 0 then return 1 end
         if not ensure_bugcodes() then return 1 end
-
-        local linux_dir = NTOS .. "/INIT/UP"
-        local desc      = "INIT - NTOSKRNL.EXE"
-        banner(desc)
-
-        mkdir_p(linux_dir .. "/obj/i386")
-        if not gen_objects(linux_dir) then return 1 end
-
-        local rel_path    = linux_dir:sub(#NT_ROOT + 1)
-        local makedir_win = NT_ROOT_WIN .. rel_path:gsub("/", "\\")
-
-        local argv = {
-            "wibo", "--chdir", linux_dir,
-            WIBO_TOOLS .. "/NMAKE.EXE", "/NOLOGO",
-            "UMTEST=", "UMAPPL=",
-        }
-        local envp = build_envp({ "MAKEDIR=" .. makedir_win })
-        local rc = platform.spawn_wait{ argv = argv, env = envp, path = WIBO_BIN }
-
-        if rc == 0 then
-            log(">>> " .. desc .. ": OK")
-        else
-            log((">>> %s: FAILED (rc=%d)"):format(desc, rc))
-        end
-        return rc
+        -- INIT's SOURCES depends on NTTEST=ntoskrnl reaching NMAKE so
+        -- MAKEFILE.DEF selects the ntoskrnl.exe link rule.  Use the
+        -- standard run_nmake with keep_nttest=true; this dispatches
+        -- through tchain.spawn_tool which handles host (wibo) and
+        -- guest (native NT) uniformly.
+        return run_nmake(NTOS .. "/INIT/UP",
+                         "INIT - NTOSKRNL.EXE",
+                         nil,
+                         { keep_nttest = true })
     end
 
     -- ----- GENI386 (struct offset generator → KS386.INC + HAL386.INC) -----

@@ -242,10 +242,19 @@ function M.run_nmake(linux_dir, desc, extra_args, opts)
 
     local nmake = M.wibo_tool_path("NMAKE.EXE")
             or (cfg.wibo_tools .. "/NMAKE.EXE")
-    local tool_args = {
-        "/NOLOGO",
-        "NTTEST=", "UMTEST=",
-    }
+    local tool_args = { "/NOLOGO" }
+
+    -- NTTEST= / UMTEST= overrides clear the developer's local-build
+    -- NMAKE convention (passing NTTEST=foo to build just one .c).
+    -- Almost every component wants these neutralised.  The kernel
+    -- INIT target is the exception: its SOURCES file relies on
+    -- NTTEST=ntoskrnl to select the EXE link rule via MAKEFILE.DEF,
+    -- so opts.keep_nttest=true skips the override.
+    if not opts.keep_nttest then
+        tool_args[#tool_args + 1] = "NTTEST="
+        tool_args[#tool_args + 1] = "UMTEST="
+    end
+
     if umappl_override then tool_args[#tool_args + 1] = umappl_override end
     for _, a in ipairs(extra_args) do tool_args[#tool_args + 1] = a end
 

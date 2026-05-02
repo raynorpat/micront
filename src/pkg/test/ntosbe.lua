@@ -306,3 +306,23 @@ t.test("ntosbe.build: 'null' target on guest", function()
     t.ok(ok, "build.main didn't raise (got: " .. tostring(rc) .. ")")
     t.eq(rc, 0, "null target exited 0")
 end)
+
+t.test("ntosbe.build: full OS rebuild on guest", function()
+    -- Drive the full self-host: rebuild every C/asm component of
+    -- the running OS (tools + ntoskrnl + drivers + userland) using
+    -- the in-OS toolchain.  Skips cr (mingw cross-compile, host-
+    -- only) and disk (would just rewrite the volume we're booted
+    -- from).  This is the real "are we self-hosting?" probe — every
+    -- piece of source NMAKE can compile on guest, it does.
+    local build = require('ntosbe.build')
+    local ok, rc = pcall(build.main, {
+        script_dir = "/SystemRoot/src",
+        repo_root  = "/SystemRoot",
+        wibo_tools = "/SystemRoot/pkg/msvc20",
+        drive_root = "C:",
+        path_strip = "/SystemRoot",
+        args       = { "tools", "ntoskrnl", "drivers", "userland" },
+    })
+    t.ok(ok, "build.main didn't raise (got: " .. tostring(rc) .. ")")
+    t.eq(rc, 0, "full OS rebuild exited 0")
+end)

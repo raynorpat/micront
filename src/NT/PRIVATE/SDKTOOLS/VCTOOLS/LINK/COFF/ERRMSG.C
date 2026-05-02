@@ -31,6 +31,7 @@ Revision History:
 #include <stdarg.h>
 
 
+
 #define MAX_MSG_LENGTH 256
 
 static char ErrMsgBuf[MAX_MSG_LENGTH];
@@ -50,30 +51,103 @@ static char WarningDisabled[LAST_MSG + 1];
 
 
 #if defined(NT_BUILD)
-int (WINAPI *pfnLoadString)(HINSTANCE, UINT, LPSTR, INT);
-#endif
+
+/*
+ * MicroNT: stock NT_BUILD path called LoadLibrary("USER32") +
+ * GetProcAddress("LoadStringA") at first use, ignored both return
+ * values, and called through the resulting (potentially NULL)
+ * function pointer.  On a system without USER32 (which we don't
+ * ship — too much csrss-coupling) that's a guaranteed AV the moment
+ * LINK reports any error.
+ *
+ * Replace it with a 30-line inline LoadStringA against kernel32's
+ * resource APIs (FindResourceA / LoadResource / LockResource /
+ * SizeofResource).  String resources are stored as 16-string blocks
+ * keyed by ((id >> 4) + 1); each entry is a USHORT length followed
+ * by `length` UTF-16 wchars (no NUL terminator).  We index into
+ * the block at (id & 0xF) and copy the chosen string out as ANSI.
+ *
+ * On any failure (resource missing, conversion fails, block under-
+ * runs) GetErrorFormatString falls back to a generic format that
+ * still includes the error number — better than returning NULL and
+ * crashing the caller's printf.
+ */
+static const char *FallbackErrorFormat(unsigned errInt)
+{
+    static char fallbackBuf[64];
+    sprintf(fallbackBuf, "LNK%u: (error message resource missing)", errInt);
+    return fallbackBuf;
+}
+
+static int MyLoadStringA(UINT id, LPSTR ansiOut, int cchMax)
+{
+    HRSRC    hRes;
+    HGLOBAL  hGlob;
+    LPCWSTR  pBlock;
+    DWORD    cbBlock;
+    UINT     blockId   = (id >> 4) + 1;
+    UINT     subIndex  = id & 0xF;
+    UINT     i;
+    USHORT   cwch;
+
+    if (cchMax <= 0) return 0;
+    ansiOut[0] = 0;
+
+    hRes = FindResourceA(NULL, MAKEINTRESOURCE(blockId), RT_STRING);
+    if (hRes == NULL) return 0;
+    hGlob = LoadResource(NULL, hRes);
+    if (hGlob == NULL) return 0;
+    pBlock = (LPCWSTR)LockResource(hGlob);
+    if (pBlock == NULL) return 0;
+    cbBlock = SizeofResource(NULL, hRes);
+
+    /* Walk the block: 16 entries each `USHORT len + len wchars`. */
+    for (i = 0; i < subIndex; i++) {
+        if ((PUCHAR)(pBlock + 1) > (PUCHAR)pBlock + cbBlock) return 0;
+        cwch    = *pBlock++;
+        pBlock += cwch;
+    }
+    if ((PUCHAR)(pBlock + 1) > (PUCHAR)pBlock + cbBlock) return 0;
+    cwch = *pBlock++;
+    if (cwch == 0) return 0;
+
+    /* UTF-16 → ANSI lossy-cast.  WideCharToMultiByte / CP_ACP are
+     * declared in <winnls.h>, but SHARED.H sets WIN32_LEAN_AND_MEAN
+     * AND `#define NONLS`, and winnls.h's declarations are wrapped
+     * in `#ifndef NONLS` — so the symbols are unreachable from any
+     * source file that includes shared.h.  An `#undef NONLS` +
+     * explicit `#include <winnls.h>` doesn't help either: by the
+     * time we get there, windows.h has already visited winnls.h
+     * with NONLS active and latched its header guard, so the second
+     * include is a no-op.
+     *
+     * LINK's error strings are pure ASCII English, so high-byte
+     * truncation is the correct ANSI conversion here.  Non-ASCII
+     * input (which we don't have) would garble visually but never
+     * crash. */
+    {
+        int copy = (int)cwch < cchMax - 1 ? (int)cwch : cchMax - 1;
+        int j;
+        for (j = 0; j < copy; j++) {
+            ansiOut[j] = (char)pBlock[j];
+        }
+        ansiOut[copy] = 0;
+        return copy;
+    }
+}
+
+#endif // defined(NT_BUILD)
 
 const char *GetErrorFormatString(unsigned errInt)
 {
 #if defined(NT_BUILD)
 
-    if (pfnLoadString == NULL) {
-        HMODULE hMod;
-
-        // Defer loading USER32.DLL until we need it
-
-        hMod = LoadLibrary("USER32");
-
-        *(FARPROC *) &pfnLoadString = GetProcAddress(hMod, "LoadStringA");
+    int n = MyLoadStringA(errInt, ErrMsgBuf, MAX_MSG_LENGTH);
+    if (n <= 0) {
+        return FallbackErrorFormat(errInt);
     }
-
-    // Strings are contained in a resource instead of an external file.
-
-    if ((*pfnLoadString)(NULL, errInt, ErrMsgBuf, MAX_MSG_LENGTH) == 0) {
-        return(NULL);
-    }
-
-    return(ErrMsgBuf);
+    ErrMsgBuf[n < MAX_MSG_LENGTH ? n : MAX_MSG_LENGTH - 1] = 0;
+    return ErrMsgBuf;
 
 #else // defined(NT_BUILD)
 

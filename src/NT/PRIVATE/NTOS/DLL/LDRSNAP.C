@@ -561,9 +561,6 @@ LdrpRunInitializeRoutines(
 #endif
             if ( InitRoutine ) {
 
-                DbgPrint("LDR: calling init %wZ at %lx\n",
-                         &LdrDataTableEntry->BaseDllName, InitRoutine);
-
                 LdrDataTableEntry->Flags |= LDRP_PROCESS_ATTACH_CALLED;
 
                 if ( LdrDataTableEntry->TlsIndex && Context) {
@@ -936,11 +933,6 @@ Return Value:
     //
     // Get section handle of DLL being snapped
     //
-
-    DbgPrint("LDR: LdrpMapDll: Image Name %ws, Search Path %ws\n",
-            DllName,
-            ARGUMENT_PRESENT(DllPath) ? DllPath : L""
-            );
 
     Section = NULL;
     if ( StaticLink && LdrpKnownDllObjectDirectory ) {
@@ -2089,7 +2081,6 @@ LdrpNtNamespaceSearchPath (
                                 FILE_SHARE_READ | FILE_SHARE_DELETE,
                                 FILE_SYNCHRONOUS_IO_NONALERT |
                                     FILE_NON_DIRECTORY_FILE);
-            DbgPrint("LDR: NT-direct %wZ -> %X\n", &NtName, Status);
             if (NT_SUCCESS(Status)) {
                 NtClose(handle);
                 return dllNameLen;
@@ -2150,7 +2141,6 @@ LdrpNtNamespaceSearchPath (
                                     FILE_SHARE_READ | FILE_SHARE_DELETE,
                                     FILE_SYNCHRONOUS_IO_NONALERT |
                                         FILE_NON_DIRECTORY_FILE);
-                DbgPrint("LDR: NT-search %wZ -> %X\n", &NtName, Status);
                 if (NT_SUCCESS(Status)) {
                     NtClose(handle);
                     return candLen;

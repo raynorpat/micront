@@ -29,29 +29,23 @@ require('nt.boot').run()
 -- Suite order doesn't matter — each suite is self-contained — but
 -- grouping shallow modules first makes debug easier when things
 -- explode early.
---
--- Self-host iteration mode: most suites are commented out while we
--- hammer on the build system.  They're known-good and re-enabling them
--- is a one-line uncomment.  The suites that stay live are the ones
--- ntosbe.build directly depends on (fs for I/O, msvc for ps.spawn)
--- plus the new test.ntosbe self-host probe.
 require('test.str')
 require('test.handle')
 require('test.ob')
--- require('test.cm')
+require('test.cm')
 require('test.fs')
--- require('test.mm')
--- require('test.lpc')
--- require('test.sys')
--- require('test.tree')
--- require('test.thread')
--- require('test.sync')
--- require('test.io')
--- require('test.os')
--- require('test.afd')
--- require('test.sysenter')
--- require('test.se')
--- require('test.nls')
+require('test.mm')
+require('test.lpc')
+require('test.sys')
+require('test.tree')
+require('test.thread')
+require('test.sync')
+require('test.io')
+require('test.os')
+require('test.afd')
+require('test.sysenter')
+require('test.se')
+require('test.nls')
 require('test.msvc')
 require('test.ntosbe')
 

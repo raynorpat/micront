@@ -916,7 +916,12 @@ LINKER_DBG_SECTION=-debug:none
 !   ENDIF # NTDEBUGTYPE != coff || TARGETTYPE
 !ENDIF # NTLEANANDMEAN == leanandmean
 
-LIBRARIAN=lib -out:$@ $(LIBRARIAN_FLAGS) $(LINKER_DBG_TYPE) -machine:$(TARGET_DIRECTORY)
+# MicroNT: invoke link.exe in -lib mode directly instead of going
+# through the LIB.EXE wrapper (LINK/STUBS/LIB.C — a 7-line shim
+# that just does _spawnv("link.exe", "-lib", ...)).  LINK.EXE
+# supports -lib natively, so skipping the wrapper means one less
+# binary to build, install, and stage on PATH.
+LIBRARIAN=link -lib -out:$@ $(LIBRARIAN_FLAGS) $(LINKER_DBG_TYPE) -machine:$(TARGET_DIRECTORY)
 LINKER=link $(LINKER_FLAGS) $(LINKER_DBG_SECTION) $(LINKER_DBG_TYPE) -machine:$(TARGET_DIRECTORY)
 
 !IFDEF EXEPROFILEINPUT
@@ -1215,7 +1220,7 @@ $(UMEXEFILES): $(UMLIBS) $(CRTLIBS) $(LINKLIBS)
 !IF "$(TARGET)" != ""
 !IF "$(TARGETTYPE)"=="PROGLIB"
 $(TARGET:.exe=.lib) $(TARGET:.exe=.exp): $(DLLDEF) $(LIBRARY_OBJS)
-    -lib -out:$(@R).lib @<<
+    link -lib -out:$(@R).lib @<<
 -machine:$(TARGET_DIRECTORY)
 -def:$(DLLDEF)
 $(LIBRARY_OBJS)
@@ -1251,7 +1256,7 @@ $**
 !IF "$(DLLLIBOBJECTS)" == ""
 
 $(DYNLINK_LIB) $(DYNLINK_LIB:.lib=.exp): $(DLLDEF) $(LIBRARY_OBJS)
-    -lib -out:$(@R).lib @<<
+    link -lib -out:$(@R).lib @<<
 -machine:$(TARGET_DIRECTORY)
 -def:$(DLLDEF)
 $(LIBRARY_OBJS)
@@ -1260,14 +1265,14 @@ $(LIBRARY_OBJS)
 !ELSE # "$(DLLLIBOBJECTS)" == ""
 
 $(DYNLINK_LIB) $(DYNLINK_LIB:.lib=.exp): $(DLLDEF) $(LIBRARY_OBJS) $(DLLLIBOBJECTS)
-    -lib -out:$(@D)\tmp.lib @<<
+    link -lib -out:$(@D)\tmp.lib @<<
 -machine:$(TARGET_DIRECTORY)
 -def:$(DLLDEF)
 $(LIBRARY_OBJS)
 <<NOKEEP
     -erase $(@R).exp
     ren $(@D)\tmp.exp $(@B).exp
-    -lib -out:$(@R).lib @<<
+    link -lib -out:$(@R).lib @<<
 -machine:$(TARGET_DIRECTORY)
 $(@D)\tmp.lib
 $(DLLLIBOBJECTS)
@@ -1308,7 +1313,7 @@ $**
 
 $(TARGET): $(OBJECTS)
     @-erase $@ >nul 2>nul
-    -$(LIBRARIAN) @<<
+    $(LIBRARIAN) @<<
 $(HEADEROBJNAME)
 $**
 <<NOKEEP
@@ -1347,10 +1352,10 @@ ORDER=-order:@$(@B).prf
 
 !IF "$(MAKEDLL)" == ""
 $(TARGET) $(TARGET:.lib=.exp): $(DLLDEF) $(OBJECTS) $(LINKLIBS)
-    -lib -out:$(@R).lib -machine:$(TARGET_DIRECTORY) -def:$(DLLDEF) $(OBJECTS) $(LINKLIBS)
+    link -lib -out:$(@R).lib -machine:$(TARGET_DIRECTORY) -def:$(DLLDEF) $(OBJECTS) $(LINKLIBS)
 !ELSE
 $(TARGET:.sys=.lib) $(TARGET:.sys=.exp): $(DLLDEF) $(LIBRARY_OBJS)
-    -lib -out:$(@R).lib -machine:$(TARGET_DIRECTORY) -def:$(DLLDEF) $(LIBRARY_OBJS)
+    link -lib -out:$(@R).lib -machine:$(TARGET_DIRECTORY) -def:$(DLLDEF) $(LIBRARY_OBJS)
 $(TARGET): $(TARGETPATH)\$(TARGET_DIRECTORY)\$(TARGETNAME).exp $(OBJECTS) $(CRTLIBS) $(MACHINE_TARGETLIBS) $(LINKLIBS)
     $(LINKER) @<<
 $(ORDER)
@@ -1370,10 +1375,10 @@ $**
 
 !IF "$(MAKEDLL)" == ""
 $(TARGET) $(TARGET:.lib=.exp): $(DLLDEF) obj\$(TARGET_DIRECTORY)\*.obj
-    -lib -out:$(@R).lib -machine:$(TARGET_DIRECTORY) -def:$(DLLDEF) obj\$(TARGET_DIRECTORY)\*.obj
+    link -lib -out:$(@R).lib -machine:$(TARGET_DIRECTORY) -def:$(DLLDEF) obj\$(TARGET_DIRECTORY)\*.obj
 !ELSE
 $(TARGET:.dll=.lib) $(TARGET:.dll=.exp): $(DLLDEF) obj\$(TARGET_DIRECTORY)\*.obj
-    -lib -out:$(@R).lib -machine:$(TARGET_DIRECTORY) -def:$(DLLDEF) obj\$(TARGET_DIRECTORY)\*.obj
+    link -lib -out:$(@R).lib -machine:$(TARGET_DIRECTORY) -def:$(DLLDEF) obj\$(TARGET_DIRECTORY)\*.obj
 
 $(TARGET): $(TARGETPATH)\$(TARGET_DIRECTORY)\$(TARGETNAME).exp $(OBJECTS) $(CRTLIBS) $(MACHINE_TARGETLIBS) $(LINKLIBS)
     $(LINKER) @<<
