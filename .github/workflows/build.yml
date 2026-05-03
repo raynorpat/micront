@@ -115,7 +115,7 @@ jobs:
           make -C src smoke-disk
           fail=0
           machines="q35 pc"
-          disks="nvme ide"
+          disks="nvme ide virtio-blk"
           for machine in $machines; do
             for disk in $disks; do
               log="smoke-$machine-$disk.log"

@@ -52,21 +52,21 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
 
     /* Load what the kernel handoff needs: the kernel itself, HAL, every
      * candidate boot-disk driver (atdisk for legacy IDE, scsiport+
-     * scsidisk+nvme2k for NVMe), the FS driver (fastfat), the registry
-     * hive, and NLS.  We pre-load *all* candidate disk drivers
-     * unconditionally — discovery in each driver's DriverEntry decides
-     * which one binds at runtime.  Same image boots on pc+IDE (atdisk
-     * wins, nvme2k bails on PCI walk) and q35+NVMe (atdisk reads zero
-     * CMOS and bails, nvme2k claims the controller).  All disk drivers
-     * have ErrorControl=Normal so a no-hardware return is logged, not
+     * scsidisk+nvme2k for NVMe, vioblk for virtio-blk), the FS driver
+     * (fastfat), the registry hive, and NLS.  We pre-load *all* candidate
+     * disk drivers unconditionally — discovery in each driver's DriverEntry
+     * decides which one binds at runtime.  Same image boots on pc+IDE
+     * (atdisk wins, nvme2k+vioblk bail on PCI walk), q35+NVMe (nvme2k
+     * claims), and q35+virtio-blk (vioblk claims).  All disk drivers have
+     * ErrorControl=Normal so a no-hardware return is logged, not
      * bugchecked.  User-mode images (ntdll, kernel32) stay on disk —
      * kernel reads them at runtime via the now-mounted boot volume. */
     void *blob_kernel   = 0, *blob_hal      = 0;
     void *blob_atdisk   = 0, *blob_scsiport = 0;
     void *blob_scsidisk = 0, *blob_nvme2k   = 0;
-    void *blob_fastfat  = 0;
+    void *blob_vioblk   = 0, *blob_fastfat  = 0;
     UINTN sz_kernel, sz_hal;
-    UINTN sz_atdisk, sz_scsiport, sz_scsidisk, sz_nvme2k, sz_fastfat;
+    UINTN sz_atdisk, sz_scsiport, sz_scsidisk, sz_nvme2k, sz_vioblk, sz_fastfat;
     {
         void  *buf;
         UINTN  size;
@@ -76,6 +76,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
         fs_read(L"\\System32\\Drivers\\scsiport.sys",    PK_FIRMWARE_TEMP, &blob_scsiport, &sz_scsiport);
         fs_read(L"\\System32\\Drivers\\scsidisk.sys",    PK_FIRMWARE_TEMP, &blob_scsidisk, &sz_scsidisk);
         fs_read(L"\\System32\\Drivers\\nvme2k.sys",      PK_FIRMWARE_TEMP, &blob_nvme2k,   &sz_nvme2k);
+        fs_read(L"\\System32\\Drivers\\vioblk.sys",      PK_FIRMWARE_TEMP, &blob_vioblk,   &sz_vioblk);
         fs_read(L"\\System32\\Drivers\\fastfat.sys",     PK_FIRMWARE_TEMP, &blob_fastfat,  &sz_fastfat);
         fs_read(L"\\System32\\config\\SYSTEM",           PK_REGISTRY,      &buf, &size); (void)size;
         (void)buf;
@@ -135,10 +136,10 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
      * IopInitializeBootDrivers walks LoadOrderList by ServiceGroupOrder
      * and DependOnService dependencies. */
     static pe_image_t kernel, hal;
-    static pe_image_t drivers[5];   /* atdisk, scsiport, scsidisk, nvme2k, fastfat */
+    static pe_image_t drivers[6];   /* atdisk, scsiport, nvme2k, vioblk, scsidisk, fastfat */
     UINTN n_drivers = 0;
     {
-        pe_image_t all[2 + 5];      /* kernel + hal + drivers[] */
+        pe_image_t all[2 + 6];      /* kernel + hal + drivers[] */
         UINTN n = 0;
 
         /* Order matters: the kernel's IopInitializeBootDrivers walks
@@ -147,9 +148,9 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
          * OSLOADER sorted before handoff; we hand-sort instead).
          *
          * Constraints:
-         *   - scsiport.sys before nvme2k.sys (miniport imports the
-         *     framework's ScsiPortInitialize).
-         *   - All SCSI miniports (today: just nvme2k) before scsidisk:
+         *   - scsiport.sys before any miniport (nvme2k / vioblk import
+         *     the framework's ScsiPortInitialize).
+         *   - All SCSI miniports (nvme2k, vioblk) before scsidisk:
          *     scsidisk's DriverEntry eagerly walks \Device\ScsiPort0..N
          *     and returns STATUS_NO_SUCH_DEVICE if the namespace is
          *     empty.  Loading scsidisk before any miniport has
@@ -161,6 +162,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
             { blob_atdisk,   sz_atdisk,   "atdisk.sys"   },
             { blob_scsiport, sz_scsiport, "scsiport.sys" },
             { blob_nvme2k,   sz_nvme2k,   "nvme2k.sys"   },
+            { blob_vioblk,   sz_vioblk,   "vioblk.sys"   },
             { blob_scsidisk, sz_scsidisk, "scsidisk.sys" },
             { blob_fastfat,  sz_fastfat,  "fastfat.sys"  },
         };

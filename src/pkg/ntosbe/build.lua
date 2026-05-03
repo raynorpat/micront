@@ -274,6 +274,8 @@ function M.main(opts)
                  "SCSIDISK - SCSI disk class driver")
     nmake_target("dd_nvme2k",   NTOS .. "/DD/NVME2K",
                  "NVME2K - NVMe storage controller (SCSI miniport)")
+    nmake_target("dd_vioblk",   NTOS .. "/DD/VIOBLK",
+                 "VIOBLK - virtio-blk storage (SCSI miniport via virtio.lib)")
 
     -- ----- NDIS framework -----
     nmake_target("ndis_wrapper", NTOS .. "/NDIS/WRAPPER",
@@ -607,7 +609,7 @@ function M.main(opts)
         "vga_miniport", "bochsvga",
         "ndis_wrapper",
         "virtio",
-        "dd_class", "dd_scsiport", "dd_scsidisk", "dd_nvme2k",
+        "dd_class", "dd_scsiport", "dd_scsidisk", "dd_nvme2k", "dd_vioblk",
         "tdi_wrapper", "tdi_tcpip_ip", "tdi_tcpip_tcp", "afd",
     }
 
@@ -857,7 +859,7 @@ function M.main(opts)
             "basesrv.dll", "basesrv.exp", "basesrv.lib",
             "atdisk.sys", "null.sys", "fastfat.sys",
             "class.lib", "scsiport.lib", "scsiport.exp", "scsiport.sys",
-            "scsidisk.sys", "nvme2k.sys",
+            "scsidisk.sys", "nvme2k.sys", "vioblk.sys",
             "ndis.lib", "ndis.exp", "ndis.sys",
             "tdi.lib", "tdi.exp", "tdi.sys", "tcpip.sys", "vionet.sys",
             "gdisrvl.lib", "efloat.lib", "fscaler.lib", "ttfd.lib",

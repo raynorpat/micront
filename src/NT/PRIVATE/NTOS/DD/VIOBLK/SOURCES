@@ -1,0 +1,53 @@
+!IF 0
+
+Copyright (c) 2026 MicroNT
+SPDX-License-Identifier: BSD-3-Clause   (see LICENSE in this directory)
+
+Module: vioblk.sys -- virtio-blk SCSI miniport.  Lifted-and-adapted
+from Red Hat's KVM Windows guest drivers (viostor); the SCSI
+translation logic comes from there.  PCI/transport/queue management
+go through MicroNT's shared virtio.lib (NTOS/VIRTIO/), the same
+library backing vionet/viorng/vioser/vioinput.
+
+Builds as a SCSI miniport on top of NT 3.5's scsiport.sys; SCSIDISK
+presents the SRB stream as \Device\Harddisk<N>\Partition<P> to the
+rest of the OS, exactly the way nvme2k.sys does for NVMe.
+
+Modern transport only (PCI capabilities + MMIO), single queue, INTx
+interrupts -- no MSI-X, no multi-queue, no DISCARD/WRITE_ZEROES,
+no crash-dump support.  Read/write/flush is the boot-disk surface.
+
+Upstream reference:
+    https://github.com/virtio-win/kvm-guest-drivers-windows/tree/master/viostor
+
+PCI device IDs:
+    0x1AF4 / 0x1042  (modern virtio-blk)
+    0x1AF4 / 0x1001  (transitional virtio-blk -- QEMU's default for
+                      `-device virtio-blk-pci`)
+
+QEMU exposes this with `-device virtio-blk-pci,drive=...`.
+
+!ENDIF
+
+MAJORCOMP=ntos
+MINORCOMP=dd
+
+TARGETNAME=vioblk
+TARGETPATH=$(BASEDIR)\public\sdk\lib
+TARGETTYPE=MINIPORT
+
+INCLUDES=..\..\inc;..\..\virtio\inc
+
+# scsiport for the SCSI miniport API; virtio for our PCI/queue
+# transport.  Plus ntoskrnl + hal for the Mm/Hal/READ_REGISTER calls
+# our virtio.lib makes directly -- MAKEFILE.DEF's MINIPORT TARGETTYPE
+# doesn't auto-include them (DRIVER does, but MINIPORT assumes
+# scsiport wraps everything; our virtio.lib bypasses that).
+TARGETLIBS=$(BASEDIR)\public\sdk\lib\*\scsiport.lib \
+           $(BASEDIR)\public\sdk\lib\*\virtio.lib  \
+           $(BASEDIR)\public\sdk\lib\*\ntoskrnl.lib \
+           $(BASEDIR)\public\sdk\lib\*\hal.lib
+
+SOURCES=vioblk.c    \
+        scsi.c      \
+        vioblk.rc

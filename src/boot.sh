@@ -10,8 +10,8 @@
 #   --disk      Disk controller for the boot volume. nvme (default) =
 #               NVMe via nvme2k.sys; ide = legacy ATA, claimed by
 #               atdisk.sys (q35 + ide bolts on a piix3-ide bridge);
-#               virtio-blk = virtio-blk-pci (no driver yet, will
-#               fail to mount).
+#               virtio-blk = virtio-blk-pci, claimed by vioblk.sys
+#               (canonical for GCP Persistent Disk + generic KVM).
 #   --vga       Open a VGA window (stdvga) in addition to serial.
 #               Default: serial-console-only (-display none).
 #   --gdb       Pause CPU at boot and listen for gdb on :1234.
@@ -34,7 +34,7 @@
 #   pc + nvme      (NVMe on i440fx — exercises nvme2k on legacy chipset)
 #   pc + ide       (classic shape — atdisk wins, kept for debug/legacy)
 #   q35 + ide      (q35 + a piix3-ide bridge — diagnostic only)
-#   * + virtio-blk (no driver yet, will not mount)
+#   * + virtio-blk (vioblk; modern PCIe storage path, GCP/KVM)
 #
 # Keep a per-checkout copy of NVRAM vars so /usr/share stays pristine.
 
@@ -170,7 +170,7 @@ case "$DISK" in
         ;;
     virtio-blk)
         STORAGE_FLAGS="-drive file=$ESP_IMG,format=raw,if=none,id=d0 -device virtio-blk-pci,drive=d0"
-        DISK_DESC="virtio-blk (no driver — will fail to mount)"
+        DISK_DESC="virtio-blk (vioblk; canonical for GCP Persistent Disk + KVM)"
         ;;
     *)
         echo "boot.sh: unknown --disk '$DISK' (try ide, nvme, or virtio-blk)" >&2

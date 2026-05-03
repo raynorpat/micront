@@ -122,6 +122,15 @@ function M.apply(h, init)
         :set_sz("Group", "SCSI miniport")
         :set_multi_sz("DependOnService", { "scsiport" })
 
+    -- vioblk — virtio-blk SCSI miniport.  Same role as nvme2k for
+    -- virtio-blk-pci devices (canonical for GCP Persistent Disk +
+    -- generic KVM hosts).  Empty PCI walk → STATUS_NO_SUCH_DEVICE,
+    -- logged + skipped under ErrorControl=Normal.
+    services:key("vioblk")
+        :set_dword("Type", 1):set_dword("Start", 0):set_dword("ErrorControl", 1)
+        :set_sz("Group", "SCSI miniport")
+        :set_multi_sz("DependOnService", { "scsiport" })
+
     -- SCSI disk class driver — walks miniports' device chains, parses
     -- partition tables, surfaces \Device\Harddisk<N>\Partition<P>.
     services:key("scsidisk")
@@ -302,6 +311,7 @@ function M.disk_files(paths, list_tree)
         { dest = "System32/Drivers/scsiport.sys", src = paths.sdk_lib .. "/scsiport.sys" },
         { dest = "System32/Drivers/scsidisk.sys", src = paths.sdk_lib .. "/scsidisk.sys" },
         { dest = "System32/Drivers/nvme2k.sys",   src = paths.sdk_lib .. "/nvme2k.sys" },
+        { dest = "System32/Drivers/vioblk.sys",   src = paths.sdk_lib .. "/vioblk.sys" },
         { dest = "System32/Drivers/null.sys",     src = paths.sdk_lib .. "/null.sys" },
         { dest = "System32/Drivers/fastfat.sys",  src = paths.sdk_lib .. "/fastfat.sys" },
         { dest = "System32/Drivers/npfs.sys",     src = paths.sdk_lib .. "/npfs.sys" },
