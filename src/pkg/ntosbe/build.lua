@@ -181,6 +181,10 @@ function M.main(opts)
                  { pre = ensure_serlog })
     nmake_target("null",    NTOS .. "/DD/NULL",     "NULL - null device driver")
     nmake_target("fastfat", NTOS .. "/FASTFAT",     "FASTFAT - FAT filesystem driver")
+    -- LFS = Log File Service.  Static lib (lfs.lib) consumed by ntfs.sys
+    -- for the transaction-log machinery; not a standalone driver.
+    nmake_target("lfs",     NTOS .. "/LFS",         "LFS - Log File Service (lfs.lib for NTFS)")
+    nmake_target("ntfs",    NTOS .. "/NTFS",        "NTFS - NTFS filesystem driver")
     nmake_target("npfs",    NTOS .. "/NPFS",        "NPFS - Named Pipe filesystem driver")
     nmake_target("msfs",    NTOS .. "/MAILSLOT",    "MSFS - Mailslot filesystem driver")
     nmake_target("hello",   NTOS .. "/DD/HELLO",    "HELLO - MicroNT visibility driver")
@@ -604,7 +608,7 @@ function M.main(opts)
     }
 
     local DRIVER_TARGETS = {
-        "atdisk", "null", "fastfat", "npfs", "msfs", "serial",
+        "atdisk", "null", "fastfat", "lfs", "ntfs", "npfs", "msfs", "serial",
         "i8042prt", "kbdclass", "mouclass",
         "vga_miniport", "bochsvga",
         "ndis_wrapper",
@@ -857,7 +861,7 @@ function M.main(opts)
             "lsasrv.dll", "lsasrv.exp", "lsasrv.lib",
             "csrsrv.dll", "csrsrv.exp", "csrsrv.lib",
             "basesrv.dll", "basesrv.exp", "basesrv.lib",
-            "atdisk.sys", "null.sys", "fastfat.sys",
+            "atdisk.sys", "null.sys", "fastfat.sys", "ntfs.sys", "lfs.lib",
             "class.lib", "scsiport.lib", "scsiport.exp", "scsiport.sys",
             "scsidisk.sys", "nvme2k.sys", "vioblk.sys",
             "ndis.lib", "ndis.exp", "ndis.sys",

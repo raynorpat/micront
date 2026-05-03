@@ -144,6 +144,14 @@ function M.apply(h, init)
     services:key("fastfat")
         :set_dword("Type", 2):set_dword("Start", 0):set_dword("ErrorControl", 1)
 
+    -- NTFS filesystem driver.  Boot-start (Start=0) so it's eligible
+    -- to claim the boot volume; ErrorControl=1 (Normal) so a no-NTFS-
+    -- volume world (today: every disk is FAT16) gets a logged decline,
+    -- not a bugcheck.  fastfat will still claim FAT16 volumes; ntfs's
+    -- mount probe sees the FAT BPB and returns STATUS_UNRECOGNIZED_VOLUME.
+    services:key("ntfs")
+        :set_dword("Type", 2):set_dword("Start", 0):set_dword("ErrorControl", 1)
+
     services:key("npfs")
         :set_dword("Type", 2):set_dword("Start", 1):set_dword("ErrorControl", 1)
         :set_sz("Group", "File System")
@@ -314,6 +322,7 @@ function M.disk_files(paths, list_tree)
         { dest = "System32/Drivers/vioblk.sys",   src = paths.sdk_lib .. "/vioblk.sys" },
         { dest = "System32/Drivers/null.sys",     src = paths.sdk_lib .. "/null.sys" },
         { dest = "System32/Drivers/fastfat.sys",  src = paths.sdk_lib .. "/fastfat.sys" },
+        { dest = "System32/Drivers/ntfs.sys",     src = paths.sdk_lib .. "/ntfs.sys" },
         { dest = "System32/Drivers/npfs.sys",     src = paths.sdk_lib .. "/npfs.sys" },
         { dest = "System32/Drivers/msfs.sys",     src = paths.sdk_lib .. "/msfs.sys" },
         { dest = "System32/Drivers/serial.sys",   src = paths.sdk_lib .. "/serial.sys" },

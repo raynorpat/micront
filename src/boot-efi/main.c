@@ -52,21 +52,24 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
 
     /* Load what the kernel handoff needs: the kernel itself, HAL, every
      * candidate boot-disk driver (atdisk for legacy IDE, scsiport+
-     * scsidisk+nvme2k for NVMe, vioblk for virtio-blk), the FS driver
-     * (fastfat), the registry hive, and NLS.  We pre-load *all* candidate
-     * disk drivers unconditionally — discovery in each driver's DriverEntry
-     * decides which one binds at runtime.  Same image boots on pc+IDE
-     * (atdisk wins, nvme2k+vioblk bail on PCI walk), q35+NVMe (nvme2k
-     * claims), and q35+virtio-blk (vioblk claims).  All disk drivers have
-     * ErrorControl=Normal so a no-hardware return is logged, not
-     * bugchecked.  User-mode images (ntdll, kernel32) stay on disk —
-     * kernel reads them at runtime via the now-mounted boot volume. */
+     * scsidisk+nvme2k for NVMe, vioblk for virtio-blk), the FS drivers
+     * (fastfat for FAT16, ntfs for NTFS volumes), the registry hive,
+     * and NLS.  We pre-load *all* candidate disk + FS drivers
+     * unconditionally — discovery in each driver's DriverEntry decides
+     * which one binds at runtime.  Same image boots on pc+IDE (atdisk
+     * wins, nvme2k+vioblk bail on PCI walk), q35+NVMe (nvme2k claims),
+     * q35+virtio-blk (vioblk claims).  fastfat claims FAT16 volumes;
+     * ntfs returns STATUS_UNRECOGNIZED_VOLUME on FAT BPBs (no NTFS
+     * volumes today — driver loaded but inactive).  All ErrorControl=
+     * Normal so no-hardware/no-volume returns are logged not
+     * bugchecked.  User-mode images (ntdll, kernel32) stay on disk. */
     void *blob_kernel   = 0, *blob_hal      = 0;
     void *blob_atdisk   = 0, *blob_scsiport = 0;
     void *blob_scsidisk = 0, *blob_nvme2k   = 0;
     void *blob_vioblk   = 0, *blob_fastfat  = 0;
+    void *blob_ntfs     = 0;
     UINTN sz_kernel, sz_hal;
-    UINTN sz_atdisk, sz_scsiport, sz_scsidisk, sz_nvme2k, sz_vioblk, sz_fastfat;
+    UINTN sz_atdisk, sz_scsiport, sz_scsidisk, sz_nvme2k, sz_vioblk, sz_fastfat, sz_ntfs;
     {
         void  *buf;
         UINTN  size;
@@ -78,6 +81,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
         fs_read(L"\\System32\\Drivers\\nvme2k.sys",      PK_FIRMWARE_TEMP, &blob_nvme2k,   &sz_nvme2k);
         fs_read(L"\\System32\\Drivers\\vioblk.sys",      PK_FIRMWARE_TEMP, &blob_vioblk,   &sz_vioblk);
         fs_read(L"\\System32\\Drivers\\fastfat.sys",     PK_FIRMWARE_TEMP, &blob_fastfat,  &sz_fastfat);
+        fs_read(L"\\System32\\Drivers\\ntfs.sys",        PK_FIRMWARE_TEMP, &blob_ntfs,     &sz_ntfs);
         fs_read(L"\\System32\\config\\SYSTEM",           PK_REGISTRY,      &buf, &size); (void)size;
         (void)buf;
     }
@@ -136,10 +140,10 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
      * IopInitializeBootDrivers walks LoadOrderList by ServiceGroupOrder
      * and DependOnService dependencies. */
     static pe_image_t kernel, hal;
-    static pe_image_t drivers[6];   /* atdisk, scsiport, nvme2k, vioblk, scsidisk, fastfat */
+    static pe_image_t drivers[7];   /* atdisk, scsiport, nvme2k, vioblk, scsidisk, fastfat, ntfs */
     UINTN n_drivers = 0;
     {
-        pe_image_t all[2 + 6];      /* kernel + hal + drivers[] */
+        pe_image_t all[2 + 7];      /* kernel + hal + drivers[] */
         UINTN n = 0;
 
         /* Order matters: the kernel's IopInitializeBootDrivers walks
@@ -164,7 +168,12 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
             { blob_nvme2k,   sz_nvme2k,   "nvme2k.sys"   },
             { blob_vioblk,   sz_vioblk,   "vioblk.sys"   },
             { blob_scsidisk, sz_scsidisk, "scsidisk.sys" },
+            /* FS drivers last; they don't touch hardware at DriverEntry,
+             * just register a recognizer with the I/O manager.  fastfat
+             * before ntfs is alphabetic-ish; both probe each volume's
+             * BPB at mount time, the matching one claims it. */
             { blob_fastfat,  sz_fastfat,  "fastfat.sys"  },
+            { blob_ntfs,     sz_ntfs,     "ntfs.sys"     },
         };
         const UINTN N_STAGE = sizeof(stage_list) / sizeof(stage_list[0]);
 
