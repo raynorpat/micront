@@ -1,4 +1,4 @@
--- ntosbe.hive — NT 3.5 registry hive serializer.
+-- nt.fs.hive — NT 3.5 registry hive serializer.
 --
 -- Pure-Lua port of tools/mkhive.py.  Same on-disk format, same
 -- byte-level layout, no behaviour change (verified by parity against
@@ -6,6 +6,10 @@
 -- the SYSTEM hive should contain — lives in pkg/ntosbe/profiles/, not
 -- here.  This module just turns a declarative tree into the binary
 -- hive format the kernel parses during Phase 0/1 init.
+--
+-- Lives under nt.fs/ alongside the volume builders: from the
+-- composer's perspective a hive is just bytes that get added to a
+-- FAT16 / NTFS volume at \System32\config\SYSTEM.
 --
 -- Format notes (from the Python original, see CmpDoOpenHandle):
 --   - Hive version 1.2
@@ -16,7 +20,7 @@
 --     kernel's binary search.
 --
 -- Usage:
---     local hive = require('ntosbe.hive')
+--     local hive = require('nt.fs').hive
 --     local h = hive.new("SYSTEM")
 --     h:key("Select"):set_dword("current", 1):set_dword("default", 1)
 --     h:key("ControlSet001\\Services\\foo"):set_sz("Group", "Base")

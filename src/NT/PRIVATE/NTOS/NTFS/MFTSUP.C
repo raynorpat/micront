@@ -1025,7 +1025,11 @@ Return Value:
 
     if (Index < (ULONG)(Vcb->MftScb->Header.FileSize.QuadPart >>  Vcb->MftShift)) {
 
-        Vcn = Index << Vcb->MftToClusterShift;
+        if (Vcb->FileRecordsPerCluster == 0) {
+            Vcn = Index << Vcb->MftToClusterShift;
+        } else {
+            Vcn = Index >> Vcb->MftToClusterShift;
+        }
 
         //
         //  Now look this up the Mcb for the Mft.  This Vcn had better be
@@ -1059,7 +1063,11 @@ Return Value:
 
             if (ARGUMENT_PRESENT( HoleLength )) {
 
-                *HoleLength = ((ULONG)Clusters) >> Vcb->MftToClusterShift;
+                if (Vcb->FileRecordsPerCluster == 0) {
+                    *HoleLength = ((ULONG)Clusters) >> Vcb->MftToClusterShift;
+                } else {
+                    *HoleLength = ((ULONG)Clusters) << Vcb->MftToClusterShift;
+                }
             }
         }
     }
@@ -1116,8 +1124,13 @@ Return Value:
     //  and cluster count for the hole we want to create.
     //
 
-    IndexVcn = Index << Vcb->MftToClusterShift;
-    StartOfHole = (Index & Vcb->MftHoleInverseMask) << Vcb->MftToClusterShift;
+    if (Vcb->FileRecordsPerCluster == 0) {
+        IndexVcn = Index << Vcb->MftToClusterShift;
+        StartOfHole = (Index & Vcb->MftHoleInverseMask) << Vcb->MftToClusterShift;
+    } else {
+        IndexVcn = Index >> Vcb->MftToClusterShift;
+        StartOfHole = (Index & Vcb->MftHoleInverseMask) >> Vcb->MftToClusterShift;
+    }
 
     HoleClusters = Vcb->MftClustersPerHole;
 
@@ -1152,7 +1165,11 @@ Return Value:
         //  we will halt defragging and mark the volume dirty.
         //
 
-        if (((ULONG)StartOfHole) & (Vcb->ClustersPerFileRecordSegment - 1)) {
+        // For FRS<cluster, every cluster boundary IS FRS-aligned, so skip
+        // the alignment check entirely.  For FRS>=cluster the existing
+        // mask correctly tests "is StartOfHole on an FRS boundary?".
+        if (Vcb->FileRecordsPerCluster == 0 &&
+            (((ULONG)StartOfHole) & (Vcb->ClustersPerFileRecordSegment - 1))) {
 
             NtfsAcquireCheckpoint( IrpContext, Vcb );
             ClearFlag( Vcb->MftDefragState, VCB_MFT_DEFRAG_PERMITTED );
@@ -1185,7 +1202,10 @@ Return Value:
     //  we will halt defragging and mark the volume dirty.
     //
 
-    if (((ULONG)HoleClusters) & (Vcb->ClustersPerFileRecordSegment - 1)) {
+    // Same FRS<cluster rationale: skip the alignment check; clusters are
+    // always FRS-multiples when FRS<cluster.
+    if (Vcb->FileRecordsPerCluster == 0 &&
+        (((ULONG)HoleClusters) & (Vcb->ClustersPerFileRecordSegment - 1))) {
 
         NtfsAcquireCheckpoint( IrpContext, Vcb );
         ClearFlag( Vcb->MftDefragState, VCB_MFT_DEFRAG_PERMITTED );
@@ -1208,8 +1228,13 @@ Return Value:
     //  We now want to record the change in the number of holes.
     //
 
-    HoleSize = ((ULONG)HoleClusters) >> Vcb->MftToClusterShift;
-    Index = ((ULONG)StartOfHole) >> Vcb->MftToClusterShift;
+    if (Vcb->FileRecordsPerCluster == 0) {
+        HoleSize = ((ULONG)HoleClusters) >> Vcb->MftToClusterShift;
+        Index = ((ULONG)StartOfHole) >> Vcb->MftToClusterShift;
+    } else {
+        HoleSize = ((ULONG)HoleClusters) << Vcb->MftToClusterShift;
+        Index = ((ULONG)StartOfHole) << Vcb->MftToClusterShift;
+    }
 
     //
     //  Initialize and deallocate each file record.
@@ -1478,8 +1503,13 @@ Return Value:
     //  Convert the available Mft records to clusters.
     //
 
-    RecordsToClusters =
-        ((LONGLONG)(Vcb->MftFreeRecords - Vcb->MftHoleRecords)) << Vcb->MftToClusterShift;
+    if (Vcb->FileRecordsPerCluster == 0) {
+        RecordsToClusters =
+            ((LONGLONG)(Vcb->MftFreeRecords - Vcb->MftHoleRecords)) << Vcb->MftToClusterShift;
+    } else {
+        RecordsToClusters =
+            ((LONGLONG)(Vcb->MftFreeRecords - Vcb->MftHoleRecords)) >> Vcb->MftToClusterShift;
+    }
 
     //
     //  If we have already triggered the defrag then check if we are below
@@ -1761,7 +1791,11 @@ Return Value:
 
             ULONG HoleChange;
 
-            HoleChange = ((ULONG)ClusterCount) >> Vcb->MftToClusterShift;
+            if (Vcb->FileRecordsPerCluster == 0) {
+                HoleChange = ((ULONG)ClusterCount) >> Vcb->MftToClusterShift;
+            } else {
+                HoleChange = ((ULONG)ClusterCount) << Vcb->MftToClusterShift;
+            }
 
             Vcb->MftHoleRecords -= HoleChange;
             Vcb->MftScb->ScbType.Mft.HoleRecordChange -= HoleChange;

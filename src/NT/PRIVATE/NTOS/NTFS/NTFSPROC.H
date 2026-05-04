@@ -31,6 +31,25 @@ Revision History:
 //#include <FsRtl.h>
 #include <ntifs.h>
 #include <lfs.h>
+
+//
+// MicroNT: poppack.h is broken in this NT 3.5 toolchain — it sets
+// `#pragma pack(2)` rather than popping the previous pack value, so
+// each pshpackN/poppack pair leaks pack=2 across the rest of the
+// translation unit.  ntifs.h's last poppack leaves us at pack(2),
+// which makes ntdddisk.h define PARTITION_INFORMATION packed (28
+// bytes) while scsidisk.sys (whose include chain ends with
+// scsi.h's `#pragma pack()`) sees the natural-aligned 32-byte
+// version.  IOCTL_DISK_GET_PARTITION_INFO then fails with
+// STATUS_INFO_LENGTH_MISMATCH at mount time and the kernel
+// bugchecks 0x7B INACCESSIBLE_BOOT_DEVICE.
+//
+// Reset to natural alignment before pulling in ntdddisk.h so
+// PARTITION_INFORMATION's size matches what the disk class driver
+// expects.  NTFS's own structures get their explicit pack(4) from
+// Ntfs.h further down — unaffected.
+//
+#pragma pack()
 #include <ntdddisk.h>
 
 #include "nodetype.h"
@@ -1442,14 +1461,14 @@ NtfsFastDecodeUserFileOpen (
 VOID
 NtfsCreateIndex (
     IN PIRP_CONTEXT IrpContext,
-    IN OUT PFCB Fcb,
+    IN OUT PFCB Fcb,
     IN ATTRIBUTE_TYPE_CODE IndexedAttributeType,
     IN COLLATION_RULE CollationRule,
-    IN UCHAR ClustersPerIndexBuffer,
+    IN UCHAR ClustersPerIndexBuffer,
     IN PATTRIBUTE_ENUMERATION_CONTEXT Context OPTIONAL,
     IN USHORT AttributeFlags,
     IN BOOLEAN NewIndex,
-    IN BOOLEAN LogIt
+    IN BOOLEAN LogIt
     );
 
 BOOLEAN

@@ -23,6 +23,17 @@ Revision History:
 #define _LFSPROCS_
 
 #include <ntifs.h>
+//
+//  ntifs.h's poppack.h is broken in NT 3.5: it issues #pragma pack(2) at the
+//  end instead of restoring the previous pack value. Reset to default before
+//  including LFS struct headers so LFCB / LFS_DATA / LFS_RESTART_AREA /
+//  LfsClientRecord / KEVENT-bearing dispatcher fields all use natural
+//  alignment matching ntoskrnl's view of the same kernel objects. Without
+//  this reset, KeWaitForSingleObject(&LfsData.Event, ...) hands a pointer
+//  derived from pack(2) offsets to a kernel that reads at default-pack
+//  offsets, and the misaligned dispatcher header faults in LfsAcquireLfsData.
+//
+#pragma pack()
 //#include <string.h>
 //#include <ntos.h>
 //#include <zwapi.h>

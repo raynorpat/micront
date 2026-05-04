@@ -573,10 +573,16 @@ function M.main(opts)
     -- Disk target: hive + ESP image, both built via pkg/ntosbe (Lua port
     -- of the historical tools/mkhive.py + tools/mkdisk.py pair).  Zero
     -- Python dependency on this path; everything in-tree.
+    --
+    -- Layout selection via LAYOUT= env (default 'split-fat'):
+    --   single     — one FAT16 partition (ESP = system)
+    --   split-fat  — ESP FAT16 + system FAT16 (canonical)
+    --   split-ntfs — ESP FAT16 + system NTFS
     targets.disk = function()
         local out_dir = REPO_ROOT .. "/build/disk"
         local efi_bin = SCRIPT_DIR .. "/boot-efi/BOOTX64.EFI"
-        banner("boot disk image")
+        local layout  = os.getenv("LAYOUT") or "split-fat"
+        banner("boot disk image (layout=" .. layout .. ")")
 
         if not file_exists(efi_bin) then
             if targets.efi() ~= 0 then return 1 end
@@ -588,6 +594,7 @@ function M.main(opts)
             efi_binary = efi_bin,
             output_dir = out_dir,
             src_root   = SCRIPT_DIR,
+            layout     = layout,
         }
     end
 

@@ -150,7 +150,9 @@ Return Value:
         FileRecord = FsRtlAllocatePool( NonPagedPoolCacheAligned,
                                         ROUND_TO_PAGES( Vcb->BytesPerFileRecordSegment ));
 
-        Lcn = Vcb->MftStartLcn + (VOLUME_DASD_NUMBER * Vcb->ClustersPerFileRecordSegment);
+        // FRS<cluster: ClustersPerFRS == 0 sentinel; same identity via BytesPerFRS.
+        Lcn = Vcb->MftStartLcn + LlClustersFromBytes( Vcb,
+                                    VOLUME_DASD_NUMBER * Vcb->BytesPerFileRecordSegment );
 
         NtfsPerformVerifyDiskRead( IrpContext, Vcb, FileRecord, Lcn, Vcb->BytesPerFileRecordSegment );
 

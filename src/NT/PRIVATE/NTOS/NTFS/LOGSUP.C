@@ -2151,6 +2151,27 @@ Return Value:
     LogFileScb->Header.FileSize = LogFileScb->Header.AllocationSize;
     LogFileScb->Header.ValidDataLength = LogFileScb->Header.AllocationSize;
 
+    //
+    //  MicroNT harden: LFS internally requires MINIMUM_LFS_PAGES (0x30)
+    //  log pages plus 2 restart pages — 50 × PAGE_SIZE = 200 KB total.
+    //  If the on-disk $LogFile is smaller, LfsNormalizeBasicLogFile
+    //  raises STATUS_INSUFFICIENT_RESOURCES via LFS code, and SEH
+    //  unwind through it is fragile.  Pre-validate here (NTFS-side SEH
+    //  is verified-working) so an undersized log fails-mount cleanly
+    //  with STATUS_DISK_CORRUPT_ERROR instead of producing an opaque
+    //  BSOD in LFS.
+    //
+
+    {
+        ULONG LfsMinBytes = (0x30 + 2) * PAGE_SIZE;   /* MINIMUM_LFS_PAGES + 2 restart */
+
+        if (LogFileScb->Header.AllocationSize.HighPart != 0
+         || LogFileScb->Header.AllocationSize.LowPart < LfsMinBytes) {
+
+            NtfsRaiseStatus( IrpContext, STATUS_DISK_CORRUPT_ERROR, NULL, NULL );
+        }
+    }
+
     LfsOpenLogFile( LogFileScb->FileObject,
                     UnicodeName,
                     1,

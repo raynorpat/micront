@@ -28,12 +28,18 @@ Implemented:
 - [x] Native-NT Lua userland (LuaJIT 2.1, FFI to `ntdll`)
 - [x] kernel32 + lifted NT 3.5 cmd.exe (no csrss, no user32) — runs
   unmodified Microsoft NT 3.5 toolchain binaries
+- [x] **NTFS** boot volume — NT 3.5 NTFS / LFS lifted with NT 4.0's
+  FRS&lt;cluster shifts back-ported, so we mount the canonical 4 KB
+  cluster + 1 KB MFT-record layout.  Disk image built host-side by
+  a pure-Lua composer (`pkg/nt/fs/{mbr,fat16,ntfs}/`) — no
+  Microsoft FORMAT.EXE involvement.  Both `LAYOUT=split-fat` and
+  `LAYOUT=split-ntfs` boot to `SMOKE OK`.
 
 Coming next:
 
 - [ ] LAPIC + IOAPIC + HPET HAL (replace i8259 + i8254)
 - [ ] SMP
-- [ ] GPT partitions (currently MBR via `mkdisk.py`)
+- [ ] GPT partitions (currently MBR; partition format is FAT16 or NTFS)
 - [ ] Modern display path (Bochs VBE miniport works; need GOP-handoff loader path)
 
 ## Self-host

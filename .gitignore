@@ -60,6 +60,10 @@ src/NT/PUBLIC/SDK/LIB/I386/smdll.lib
 # device drivers (viorng/vioser/etc). Pure build output, no bootstrap
 # chicken-egg, gitignored like the other built-from-source .libs above.
 src/NT/PUBLIC/SDK/LIB/I386/virtio.lib
+# lfs.lib (NTOS/LFS) — Log File Service static lib, statically linked
+# into ntfs.sys.  Pure build output, no bootstrap dependency, same
+# treatment as virtio.lib.
+src/NT/PUBLIC/SDK/LIB/I386/lfs.lib
 # Storage stack EXPORT_DRIVER + class lib outputs (DD/CLASS, DD/SCSIPORT).
 # The .sys ships via mkdisk.py; the .lib/.exp are link-time stubs only.
 src/NT/PUBLIC/SDK/LIB/I386/class.lib
@@ -332,6 +336,14 @@ README-UEFI.md
 # QEMU/test artifacts
 *.log
 *.gdb
+
+# User-side backup tarballs taken before invasive rewrites — large
+# (multi-MB), redundant with git history, would bloat the repo.
+# Also: a literal `.gitignore` next to them violates 8.3 in disk
+# staging, so the rules live here in the repo root instead.
+*.tgz
+*.tar.gz
+*.bak
 
 # wibo PE runner (downloaded binary + source checkout + auto-provisioned tools)
 /wibo/

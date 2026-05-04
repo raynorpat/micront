@@ -53,10 +53,19 @@ cr:
 # stick (so plain `make boot` runs main.lua).
 INIT_ARGS_FLAG ?=
 
+# LAYOUT picks the disk shape: 'single' / 'split-fat' / 'split-ntfs'.
+# Default = profile default (split-fat).  Same set of files; the
+# orchestrator routes them between ESP and system partition by the
+# `where` tag in the profile.
+LAYOUT_FLAG :=
+ifdef LAYOUT
+LAYOUT_FLAG += --layout=$(LAYOUT)
+endif
+
 disk: cr
 	mkdir -p $(BUILD)
 	$(SRC)/bootstrap.sh
-	$(HOST_LUAJIT) -e 'package.path="$(SRC)/pkg/?.lua;$(SRC)/pkg/?/init.lua;"..package.path; os.exit(require("ntosbe").main(arg))' -- ntosbe --src-root=$(SRC) --output-dir=$(BUILD) --efi-binary=$(BOOT_EFI)/BOOTX64.EFI $(INIT_ARGS_FLAG)
+	$(HOST_LUAJIT) -e 'package.path="$(SRC)/pkg/?.lua;$(SRC)/pkg/?/init.lua;"..package.path; os.exit(require("ntosbe").main(arg))' -- ntosbe --src-root=$(SRC) --output-dir=$(BUILD) --efi-binary=$(BOOT_EFI)/BOOTX64.EFI $(INIT_ARGS_FLAG) $(LAYOUT_FLAG)
 
 # ---------------- boot / run targets --------------------------------
 #

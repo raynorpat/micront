@@ -50,6 +50,7 @@ DISPLAY_FLAGS="-display none"
 GDB_FLAGS=""
 TRACE_FLAGS=""
 NETDUMP_FLAGS=""
+EXTRA_DRIVE_FLAGS=""
 MEM=128
 # Canonical modern shape: q35 + NVMe, true PCIe topology, no legacy
 # IDE bus.  pc + ide is still supported (and exercised in the CI
@@ -105,6 +106,19 @@ while [ $# -gt 0 ]; do
         --disk)
             shift
             DISK="$1"
+            shift
+            ;;
+        --extra-disk)
+            # Attach an additional virtio-blk drive at PCI position
+            # after the primary.  Used for testing FS drivers (e.g.
+            # NTFS) without disrupting the primary FAT16 boot disk:
+            # the kernel surfaces this as a second \Device\Harddisk*
+            # which whichever FS driver claims it on mount probe.
+            shift
+            EXTRA_DRIVE_FLAGS="$EXTRA_DRIVE_FLAGS \
+                -drive file=$1,format=raw,if=none,id=extra$$ \
+                -device virtio-blk-pci,drive=extra$$"
+            echo "[boot.sh] extra disk: $1 (virtio-blk)"
             shift
             ;;
         -h|--help)
@@ -255,4 +269,5 @@ exec qemu-system-x86_64 $MACHINE_FLAGS -m "$MEM" \
     -netdev user,id=n0 \
     -device virtio-net-pci,netdev=n0 \
     -no-reboot \
+    $EXTRA_DRIVE_FLAGS \
     $DISPLAY_FLAGS $GDB_FLAGS $TRACE_FLAGS $NETDUMP_FLAGS

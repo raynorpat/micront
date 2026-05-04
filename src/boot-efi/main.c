@@ -206,13 +206,27 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
         for (UINTN i = 0; i < n; i++) pe_resolve_imports(&all[i], all, n);
     }
 
-    /* Query boot disk geometry + MBR signature/checksum while UEFI is
-     * still up. Geometry feeds atdisk's INT13 table (hwtree); MBR
-     * sig/checksum feeds the kernel's IopCreateArcNames matching (lpb). */
+    /* Query boot disk geometry + MBR signature/checksum + partition
+     * layout while UEFI is still up.  Geometry feeds atdisk's INT13
+     * table (hwtree); MBR sig/checksum + partition numbers feed the
+     * kernel's IopCreateArcNames matching + ArcBootDeviceName /
+     * ArcHalDeviceName (lpb).
+     *
+     * Partition selection (single rule for all layouts):
+     *   - Walk the 4 MBR partition entries in slot order.
+     *   - If exactly one slot has type != 0 → that's both boot + HAL
+     *     (single-partition layout).
+     *   - Otherwise → HAL = first slot with type 0xEF (the UEFI ESP);
+     *                 boot = first non-empty slot that isn't HAL.
+     *     Fallback when there's no 0xEF slot (some firmware boots
+     *     plain FAT type 0x06): HAL = first non-empty slot, boot =
+     *     next non-empty slot. */
     UINT64 total_blocks = 0;
     UINT32 block_size   = 0;
     UINT32 mbr_sig      = 0;
     UINT32 mbr_neg_sum  = 0;
+    UINT8  boot_part    = 1;
+    UINT8  hal_part     = 1;
     if (fs_boot_disk_size(&total_blocks, &block_size) == EFI_SUCCESS) {
         /* Read MBR (sector 0). FAT/MBR sectors are 512 B; pad for safety. */
         static UINT8 mbr[4096] __attribute__((aligned(4)));
@@ -224,10 +238,50 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
             /* Disk signature lives at MBR offset 0x1B8 (4 bytes, LE). */
             mbr_sig = *(UINT32 *)(mbr + 0x1B8);
             BXLOG(L"MBR signature=0x%x sum=0x%x negsum=0x%x", mbr_sig, sum, mbr_neg_sum);
+
+            /* Walk 4 partition entries at offset 0x1BE; type byte is
+             * at entry[+4].  Slot index in MBR maps 1:1 onto NT's
+             * partition(N) numbering. */
+            UINT8 esp_slot      = 0;
+            UINT8 first_used    = 0;
+            UINT8 second_used   = 0;
+            UINT8 first_non_esp = 0;
+            int   n_used        = 0;
+            for (int i = 0; i < 4; i++) {
+                UINT8 *e = mbr + 0x1BE + i * 16;
+                UINT8 type = e[4];
+                if (type == 0) continue;
+                UINT8 slot = (UINT8)(i + 1);
+                n_used++;
+                if (!first_used) first_used = slot;
+                else if (!second_used) second_used = slot;
+                if (type == 0xEF && !esp_slot) esp_slot = slot;
+                if (type != 0xEF && !first_non_esp) first_non_esp = slot;
+            }
+            if (n_used == 0) {
+                BXLOG(L"MBR has no usable partitions — boot will fail");
+            } else if (n_used == 1) {
+                boot_part = hal_part = first_used;
+            } else if (esp_slot && first_non_esp) {
+                hal_part  = esp_slot;
+                boot_part = first_non_esp;
+            } else if (esp_slot) {
+                /* All non-empty slots are 0xEF — degenerate, treat
+                 * the first as both. */
+                boot_part = hal_part = esp_slot;
+            } else {
+                /* No 0xEF slot: assume firmware booted from slot 1
+                 * (typical for raw-FAT bootable layouts), system on
+                 * slot 2. */
+                hal_part  = first_used;
+                boot_part = second_used ? second_used : first_used;
+            }
+            BXLOG(L"layout: %d partitions, ArcBoot=partition(%d) ArcHal=partition(%d)",
+                  n_used, boot_part, hal_part);
         } else {
             BXLOG(L"MBR read failed — ARC name match will fail");
         }
-        lpb_set_boot_disk(mbr_sig, mbr_neg_sum);
+        lpb_set_boot_disk(mbr_sig, mbr_neg_sum, boot_part, hal_part);
     } else {
         BXLOG(L"boot disk size query failed — atdisk may not mount");
     }

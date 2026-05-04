@@ -15,22 +15,21 @@
 --
 --   platform.lua    host-vs-OS abstraction: file I/O, directory
 --                   listing, timestamps, logging.
---   hive.lua        NT 3.5 registry hive serializer (port of the
---                   library half of tools/mkhive.py).
---   disk.lua        MBR + FAT16 raw image builder (port of the
---                   library half of tools/mkdisk.py).  GPT + NTFS will
---                   land as peer encoders later.
 --   profiles/       one .lua per platform target.  Declarative
 --                   description of {boot driver, services list,
 --                   drivers to stage, network config, init exe}.
 --                   Today's mkhive build_system_hive + mkdisk
 --                   _CORE_FILES live in profiles/ide.lua.
+--
+-- Filesystem and disk-image format libraries (hive, mbr, fat16,
+-- ntfs, drive) live under pkg/nt/fs/ — this orchestrator pulls
+-- them through M.fs (= require('nt.fs')) and stays focused on
+-- the build-driver job.
 
 local M = {}
 
 M.platform = require('ntosbe.platform')
-M.hive     = require('ntosbe.hive')
-M.disk     = require('ntosbe.disk')
+M.fs       = require('nt.fs')
 
 -- ----------------------------------------------------------------
 -- build_image — builds SYSTEM hive + ESP boot disk for a given profile.
@@ -65,16 +64,20 @@ function M.build_image(opts)
                    end,
     }
 
+    local fs = M.fs
+
     -- ---- Build hive ----
-    local h = M.hive.new("SYSTEM")
+    local h = fs.hive.new("SYSTEM")
     profile.apply(h, opts.init)
     local hive_bytes = h:build(now)
 
     -- ---- Resolve disk file list + check sources exist ----
     local files = profile.disk_files(paths, platform.list_tree)
-    -- EFI binary at the front so the partition gets it for OVMF.
+    -- BOOTX64.EFI lives on the ESP for UEFI to find it.  Tag
+    -- where='esp' so the partitioning loop below routes it.
     table.insert(files, 1,
-                 { dest = "EFI/BOOT/BOOTX64.EFI", src = opts.efi_binary })
+                 { dest = "EFI/BOOT/BOOTX64.EFI", where = 'esp',
+                   src = opts.efi_binary })
 
     local missing = {}
     for _, f in ipairs(files) do
@@ -89,33 +92,131 @@ function M.build_image(opts)
         return 1
     end
 
+    -- Emit a manifest so the verify harness can check every file
+    -- read back from the built disk against its source bytes.  Format:
+    -- one tab-separated line per file: `<where>\t<dest>\t<src_path>`.
+    -- The verify script (tools/verify_disk.sh) computes sha256 of
+    -- both sides and reports any mismatch.
+
     -- ---- Build disk image ----
-    -- Default 512 MiB — enough for OS + toolchain + the staged NT
-    -- source tree (~144 MB used today) with comfortable headroom.
-    -- Larger sizes are honoured but materialise a bigger Lua string
-    -- through ffi.string + write_file, which dominates `make disk`
-    -- time on host.  FAT16 max is 2 GB at 32 KB clusters; bump
-    -- size_mb if a heavier source tree shows up.
-    local img = M.disk.new {
-        size_mb      = opts.size_mb or 512,
-        signature    = 0x4E544653,
-        volume_label = "NT",
-        now          = now,
-    }
-    for _, f in ipairs(files) do
-        local sz = platform.file_size(f.src) or 0
-        local basename = f.src:match("([^/]+)$") or f.src
-        platform.log(string.format("  %-40s %8d  (%s)",
-                                   f.dest, sz, basename))
-        img:add_file(f.dest, f.src, platform)
+    -- Layout selection:
+    --   'single'     — one FAT16 partition, type 0xEF, hosts everything.
+    --                  ESP and \SystemRoot share the same volume; the
+    --                  per-file `where` tag is ignored.
+    --   'split-fat'  — partition 1: FAT16 ESP (type 0xEF, ~64 MB);
+    --                  partition 2: FAT16 system (type 0x06, rest).
+    --                  CANONICAL — most common layout.  Files routed
+    --                  by `where`: 'esp' → ESP only, 'root' → system,
+    --                  'both' → both partitions.
+    --   'split-ntfs' — partition 1: FAT16 ESP (type 0xEF, ~64 MB);
+    --                  partition 2: NTFS system (type 0x07, rest).
+    --                  Same routing rules as split-fat; system volume
+    --                  is NTFS so ntfs.sys mounts it.
+    --
+    -- Default 512 MiB total — enough for OS + toolchain + the staged
+    -- NT source tree (~144 MB used today) with comfortable headroom.
+    local layout = opts.layout or 'split-fat'
+    if layout ~= 'single' and layout ~= 'split-fat'
+       and layout ~= 'split-ntfs' then
+        platform.die("Unknown layout '" .. tostring(layout)
+                     .. "' (want 'single' | 'split-fat' | 'split-ntfs')")
     end
-    -- Empty writable directories.  TEMP / TMP environment values point
-    -- at C:\tmp; CL.EXE writes per-compile intermediate files there
-    -- (e.g. C:\tmp\<NNNNNN>sy).  No file content to seed — just an
-    -- empty directory entry on the FAT16 image.
-    img:mkdir("tmp")
-    -- Embed the SYSTEM hive at the path the kernel reads.
-    img:add_bytes("System32/config/SYSTEM", hive_bytes)
+    local total_mb = opts.size_mb or 512
+    local PRE_PARTITION_GAP_MB = 1
+    local ESP_SIZE_MB          = 64
+
+    local esp_path = opts.output_dir .. "/esp.img"
+    local d = fs.drive.new {
+        table     = 'mbr',
+        signature = 0x4E544653,
+    }
+
+    if layout == 'single' then
+        local vol = fs.fat16.new {
+            size_mb      = total_mb - PRE_PARTITION_GAP_MB,
+            volume_label = "NT",
+            now          = now,
+        }
+        for _, f in ipairs(files) do
+            local sz = platform.file_size(f.src) or 0
+            local basename = f.src:match("([^/]+)$") or f.src
+            platform.log(string.format("  all  %-40s %8d  (%s)",
+                                       f.dest, sz, basename))
+            vol:add_file(f.dest, f.src, platform)
+        end
+        vol:mkdir("tmp")
+        vol:add_bytes("System32/config/SYSTEM", hive_bytes)
+        d:add(vol, { active = true, type_code = 0xEF })
+    else
+        -- split-fat / split-ntfs: ESP + system, routed by `where`.
+        local sys_size_mb = total_mb - PRE_PARTITION_GAP_MB - ESP_SIZE_MB
+        local sys_min     = (layout == 'split-ntfs') and 8 or 4
+        if sys_size_mb < sys_min then
+            platform.die(string.format(
+                "size_mb=%d too small for ESP=%d + system partition "
+                .. "(need ≥%d for layout=%s)",
+                total_mb, ESP_SIZE_MB,
+                ESP_SIZE_MB + PRE_PARTITION_GAP_MB + sys_min, layout))
+        end
+
+        local esp_vol = fs.fat16.new {
+            size_mb      = ESP_SIZE_MB,
+            volume_label = "ESP",
+            now          = now,
+        }
+        local sys_vol
+        if layout == 'split-fat' then
+            sys_vol = fs.fat16.new {
+                size_mb      = sys_size_mb,
+                volume_label = "NT",
+                now          = now,
+            }
+        else  -- split-ntfs
+            local bit = require('bit')
+            sys_vol = fs.ntfs.new {
+                size_mb       = sys_size_mb,
+                volume_label  = "NT",
+                volume_serial = bit.band(now or 0, 0xFFFFFFFF),
+                now           = now,
+            }
+        end
+
+        -- Route each entry by f.where:
+        --   'esp'  → ESP only
+        --   'root' → system only (default if .where omitted)
+        --   'both' → both partitions
+        for _, f in ipairs(files) do
+            local sz = platform.file_size(f.src) or 0
+            local basename = f.src:match("([^/]+)$") or f.src
+            local where = f.where or 'root'
+            if where ~= 'esp' and where ~= 'root' and where ~= 'both' then
+                platform.die(string.format(
+                    "disk file %s: invalid where=%q (want 'esp'|'root'|'both')",
+                    f.dest, tostring(where)))
+            end
+            local tag
+            if     where == 'esp'  then tag = "esp "
+            elseif where == 'root' then tag = "sys "
+            else                        tag = "both"
+            end
+            platform.log(string.format("  %s %-40s %8d  (%s)",
+                                       tag, f.dest, sz, basename))
+            if where == 'esp' or where == 'both' then
+                esp_vol:add_file(f.dest, f.src, platform)
+            end
+            if where == 'root' or where == 'both' then
+                sys_vol:add_file(f.dest, f.src, platform)
+            end
+        end
+        sys_vol:mkdir("tmp")
+        -- SYSTEM hive lives on the ESP for boot-efi pre-handoff.
+        -- Runtime hive flushes target \SystemRoot\System32\config\SYSTEM
+        -- (system partition); they fail silently today.
+        esp_vol:add_bytes("System32/config/SYSTEM", hive_bytes)
+
+        d:add(esp_vol, { active = true, type_code = 0xEF })
+        d:add(sys_vol, {})  -- type from volume:build() (0x06 fat / 0x07 ntfs)
+    end
 
     -- ---- Write outputs ----
     platform.mkdir_p(opts.output_dir)
@@ -123,20 +224,46 @@ function M.build_image(opts)
     platform.log("SYSTEM hive: " .. #hive_bytes .. " bytes -> "
                  .. opts.output_dir .. "/SYSTEM")
 
-    local esp_path = opts.output_dir .. "/esp.img"
-    local stats    = img:write(platform.write_file, esp_path, platform)
+    -- Emit the manifest after we know files were all routed.
+    do
+        local lines = {}
+        for _, f in ipairs(files) do
+            lines[#lines + 1] = string.format("%s\t%s\t%s",
+                f.where or 'root', f.dest, f.src)
+        end
+        platform.write_file(opts.output_dir .. "/manifest.tsv",
+                             table.concat(lines, "\n") .. "\n")
+    end
+
+    local stats = d:build(platform, esp_path)
 
     platform.log(string.format(
-        "  Disk: %d MB  Signature: 0x%08X",
-        stats.size_mb, stats.signature))
-    platform.log(string.format(
-        "  Partition: LBA %d..%d  (%d MB FAT16)",
-        stats.partition_lba,
-        stats.partition_lba + stats.partition_size - 1,
-        math.floor(stats.partition_size * 512 / (1024 * 1024))))
-    platform.log(string.format(
-        "  Clusters: %d used / %d total  (%d KB free)",
-        stats.used_clusters, stats.total_clusters, stats.free_kb))
+        "  Disk: %d MB  Signature: 0x%08X  Layout: %s",
+        stats.size_mb, stats.signature, layout))
+    for i, p in ipairs(stats.partitions) do
+        local fs_kind
+        if     p.type_code == 0xEF then fs_kind = "FAT16/ESP"
+        elseif p.type_code == 0x06 then fs_kind = "FAT16/system"
+        elseif p.type_code == 0x07 then fs_kind = "NTFS/system"
+        else                            fs_kind = string.format("type-0x%02X",
+                                                                p.type_code)
+        end
+        platform.log(string.format(
+            "  Partition %d (%s): LBA %d..%d  type 0x%02X  (%d MB %s)",
+            i, p.label, p.lba, p.lba + p.sectors - 1, p.type_code,
+            math.floor(p.sectors * 512 / (1024 * 1024)), fs_kind))
+        if p.stats.used_clusters then
+            platform.log(string.format(
+                "             clusters: %d used / %d total  (%d KB free)",
+                p.stats.used_clusters, p.stats.total_clusters,
+                p.stats.free_kb))
+        elseif p.stats.clusters_used then
+            platform.log(string.format(
+                "             clusters: %d used / %d total  (cluster=%d B)",
+                p.stats.clusters_used, p.stats.total_clusters,
+                p.stats.cluster_size))
+        end
+    end
     platform.log(string.format(
         "  MBR checksum for ARC_DISK_SIGNATURE.CheckSum: 0x%08X",
         stats.mbr_checksum))
@@ -191,6 +318,7 @@ function M.main(argv)
         output_dir = opts.output_dir,
         src_root   = opts.src_root,
         size_mb    = tonumber(opts.size_mb) or 2000,
+        layout     = opts.layout,
     }
 end
 

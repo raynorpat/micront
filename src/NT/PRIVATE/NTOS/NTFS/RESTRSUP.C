@@ -660,7 +660,8 @@ Return Value:
 
                             ((Scb->Fcb->FileReference.HighPart != 0) ||
                              (Scb->Fcb->FileReference.LowPart > MASTER_FILE_TABLE2_NUMBER) ||
-                             (Vcn >= ((VOLUME_DASD_NUMBER + 1) * Vcb->ClustersPerFileRecordSegment)) ||
+                             (Vcn >= LlClustersFromBytes( Vcb,
+                                        (VOLUME_DASD_NUMBER + 1) * Vcb->BytesPerFileRecordSegment )) ||
                              (Scb->AttributeTypeCode != $DATA))) {
 
                             //
@@ -3867,8 +3868,17 @@ Return Value:
     //
     //  Calculate the file number part of the segment reference.
     //
+    //  MicroNT FRS<cluster: same fix as ATTRSUP.C — original
+    //  `TargetVcn >> (MftShift - ClusterShift)` produces bogus shift-count
+    //  when MftShift < ClusterShift.  Use MftToClusterShift magnitude and
+    //  branch on FileRecordsPerCluster.
+    //
 
-    SegmentReference = LogRecord->TargetVcn >> (Vcb->MftShift - Vcb->ClusterShift);
+    if (Vcb->FileRecordsPerCluster == 0) {
+        SegmentReference = LogRecord->TargetVcn >> Vcb->MftToClusterShift;
+    } else {
+        SegmentReference = LogRecord->TargetVcn << Vcb->MftToClusterShift;
+    }
 
     //
     //  Pin the Mft record.
@@ -4410,7 +4420,8 @@ Return Value:
 
                     ((OpenEntry->FileReference.HighPart != 0) ||
                      (OpenEntry->FileReference.LowPart > MASTER_FILE_TABLE2_NUMBER) ||
-                     (Vcn >= ((VOLUME_DASD_NUMBER + 1) * Vcb->ClustersPerFileRecordSegment)) ||
+                     (Vcn >= LlClustersFromBytes( Vcb,
+                                (VOLUME_DASD_NUMBER + 1) * Vcb->BytesPerFileRecordSegment )) ||
                      (OpenEntry->AttributeTypeCode != $DATA))) {
 
 

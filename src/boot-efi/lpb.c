@@ -82,13 +82,20 @@ void lpb_set_nls(EFI_PHYSICAL_ADDRESS base_phys,
     g_nls_uni_off   = uni_off;
 }
 
-/* Boot-disk MBR identity (ArcDiskInformation). */
-static UINT32 g_boot_disk_mbr_sig = 0;
-static UINT32 g_boot_disk_mbr_sum = 0;
+/* Boot-disk MBR identity (ArcDiskInformation) + the partition numbers
+ * the kernel resolves \SystemRoot and HAL against.  Layout-probe in
+ * main.c picks the partition numbers from the actual MBR. */
+static UINT32 g_boot_disk_mbr_sig  = 0;
+static UINT32 g_boot_disk_mbr_sum  = 0;
+static UINT8  g_boot_part          = 1;
+static UINT8  g_hal_part           = 1;
 
-void lpb_set_boot_disk(UINT32 mbr_signature, UINT32 mbr_checksum) {
+void lpb_set_boot_disk(UINT32 mbr_signature, UINT32 mbr_checksum,
+                       UINT8 boot_part, UINT8 hal_part) {
     g_boot_disk_mbr_sig = mbr_signature;
     g_boot_disk_mbr_sum = mbr_checksum;
+    g_boot_part         = boot_part;
+    g_hal_part          = hal_part;
 }
 
 static UINT32 g_config_root = 0;
@@ -161,11 +168,40 @@ EFI_STATUS lpb_build(void) {
         lpb->ArcDiskInformation = kseg0_of(adi);
     }
 
-    /* --- Paths + options. Our FAT has System32/ at partition root (no
-     * \WINNT\ wrapper), so \SystemRoot = partition-root and
-     * NtBootPathName = "\". smss, ntdll etc. are found at \System32\*. */
-    lpb->ArcBootDeviceName = kseg0_of(arena_dup_ascii("multi(0)disk(0)rdisk(0)partition(1)"));
-    lpb->ArcHalDeviceName  = kseg0_of(arena_dup_ascii("multi(0)disk(0)rdisk(0)partition(1)"));
+    /* --- Paths + options.  Partition numbers come from the layout
+     * probe in main.c; we don't bake any partition number into the
+     * loader at build time.
+     *
+     * Layouts handled today:
+     *   1 partition  (FAT16):                       boot=hal=partition(1)
+     *   ESP + FAT16 system:                         hal=ESP, boot=system
+     *   ESP + NTFS system:                          hal=ESP, boot=system
+     *
+     * ArcBootDeviceName is what the kernel resolves \SystemRoot
+     * against; ArcHalDeviceName tracks where HAL was loaded from
+     * (the ESP for two-partition layouts; same as boot for single).
+     * NtBootPathName = "\" puts \SystemRoot at the system-partition
+     * root (no \WINNT\ wrapper). */
+    {
+        static const char prefix[] = "multi(0)disk(0)rdisk(0)partition(";
+        const UINTN prefix_len = sizeof(prefix) - 1;
+        /* "multi(0)disk(0)rdisk(0)partition(" + "N" + ")" + NUL = +3. */
+        char *boot_arc = arena_alloc(prefix_len + 3, 1);
+        char *hal_arc  = arena_alloc(prefix_len + 3, 1);
+        if (!boot_arc || !hal_arc) return EFI_OUT_OF_RESOURCES;
+        for (UINTN i = 0; i < prefix_len; i++) {
+            boot_arc[i] = prefix[i];
+            hal_arc[i]  = prefix[i];
+        }
+        boot_arc[prefix_len + 0] = '0' + (g_boot_part % 10);
+        boot_arc[prefix_len + 1] = ')';
+        boot_arc[prefix_len + 2] = 0;
+        hal_arc [prefix_len + 0] = '0' + (g_hal_part  % 10);
+        hal_arc [prefix_len + 1] = ')';
+        hal_arc [prefix_len + 2] = 0;
+        lpb->ArcBootDeviceName = kseg0_of(boot_arc);
+        lpb->ArcHalDeviceName  = kseg0_of(hal_arc);
+    }
     lpb->NtBootPathName    = kseg0_of(arena_dup_ascii("\\"));
     lpb->NtHalPathName     = kseg0_of(arena_dup_ascii("\\"));
     lpb->LoadOptions       = kseg0_of(arena_dup_ascii(""));

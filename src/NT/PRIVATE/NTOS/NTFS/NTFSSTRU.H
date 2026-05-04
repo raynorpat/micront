@@ -658,7 +658,17 @@ typedef struct _VCB {
     LONGLONG NumberSectors;
     LCN MftStartLcn;
     LCN Mft2StartLcn;
+    //
+    //  Zero ClustersPerFileRecordSegment indicates that clusters are larger
+    //  than file records (e.g. 4 KB cluster + 1 KB FRS).  Zero
+    //  FileRecordsPerCluster indicates that file records are larger than (or
+    //  equal to) clusters — the original NT 3.5 model.  Backported from
+    //  NT 4.0 NTFS (cntfs/ntfsstru.h) to support FRS<cluster volumes; see
+    //  NtfsMountVolume's BPB-unpack block for how each shift site picks
+    //  its direction.
+    //
     ULONG ClustersPerFileRecordSegment;
+    ULONG FileRecordsPerCluster;
     ULONG DefaultClustersPerIndexAllocationBuffer;
 
     //
@@ -706,8 +716,11 @@ typedef struct _VCB {
     ULONG ClusterMask;              // BytesPerCluster - 1
     ULONG InverseClusterMask;       // ~ClusterMask
     ULONG ClusterShift;             // 2**ClusterShift == BytesPerCluster
-    ULONG MftShift;                 //
-    ULONG MftToClusterShift;
+    ULONG MftShift;                 // 2**MftShift == BytesPerFileRecordSegment
+    ULONG MftToClusterShift;        // 2**MftToClusterShift == ClustersPerFileRecordSegment
+                                    //   (FileRecordsPerCluster == 0)
+                                    // 2**MftToClusterShift == FileRecordsPerCluster
+                                    //   (FileRecordsPerCluster != 0; shift right not left)
     ULONG ClustersPerPage;
     ULONG MftReserved;
     ULONG MftCushion;

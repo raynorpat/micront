@@ -2905,7 +2905,19 @@ Return Value:
         VCN Vcn;
 
         Vcn = NtfsMftVcn(Context, Vcb);
-        *(PLONGLONG)&SegmentReference = Vcn >> (Vcb->MftShift - Vcb->ClusterShift);
+        //
+        //  MicroNT FRS<cluster: original `Vcn >> (MftShift - ClusterShift)`
+        //  produces a bogus shift-count (0xFFFFFFFE → masked to 30 by x86)
+        //  when MftShift < ClusterShift.  Use MftToClusterShift (magnitude)
+        //  and branch on FileRecordsPerCluster for the correct direction:
+        //  cluster→record conversion is right-shift in NT 3.5 (FRS>=cluster)
+        //  but left-shift in the FRS<cluster case.
+        //
+        if (Vcb->FileRecordsPerCluster == 0) {
+            *(PLONGLONG)&SegmentReference = Vcn >> Vcb->MftToClusterShift;
+        } else {
+            *(PLONGLONG)&SegmentReference = Vcn << Vcb->MftToClusterShift;
+        }
         SegmentReference.SequenceNumber = FileRecord->SequenceNumber;
 
         NtfsAddToAttributeList( IrpContext, Fcb, SegmentReference, Context );
@@ -5438,7 +5450,19 @@ Return Value:
         VCN Vcn;
 
         Vcn = NtfsMftVcn(Context, Vcb);
-        *(PLONGLONG)&SegmentReference = Vcn >> (Vcb->MftShift - Vcb->ClusterShift);
+        //
+        //  MicroNT FRS<cluster: original `Vcn >> (MftShift - ClusterShift)`
+        //  produces a bogus shift-count (0xFFFFFFFE → masked to 30 by x86)
+        //  when MftShift < ClusterShift.  Use MftToClusterShift (magnitude)
+        //  and branch on FileRecordsPerCluster for the correct direction:
+        //  cluster→record conversion is right-shift in NT 3.5 (FRS>=cluster)
+        //  but left-shift in the FRS<cluster case.
+        //
+        if (Vcb->FileRecordsPerCluster == 0) {
+            *(PLONGLONG)&SegmentReference = Vcn >> Vcb->MftToClusterShift;
+        } else {
+            *(PLONGLONG)&SegmentReference = Vcn << Vcb->MftToClusterShift;
+        }
         SegmentReference.SequenceNumber = FileRecord->SequenceNumber;
 
         NtfsAddToAttributeList( IrpContext, Fcb, SegmentReference, Context );
@@ -9298,7 +9322,12 @@ Return Value:
                 //  have to be in the current mapping.
                 //
 
-                MinimumVcn = (NextIndex + 1) << Vcb->MftToClusterShift;
+                if (Vcb->FileRecordsPerCluster == 0) {
+                    MinimumVcn = (NextIndex + 1) << Vcb->MftToClusterShift;
+                } else {
+                    MinimumVcn = (NextIndex + Vcb->FileRecordsPerCluster - 1)
+                                 << Vcb->MftToClusterShift;
+                }
 
                 ReplaceFileRecord = TRUE;
 
@@ -9325,7 +9354,13 @@ Return Value:
                     NextVcn = Attribute->Form.Nonresident.HighestVcn;
                 }
 
-                NextIndex = (ULONG)((NextVcn + 1) >> Vcb->MftToClusterShift);
+                if (Vcb->FileRecordsPerCluster == 0) {
+                    NextIndex = (ULONG)Int64ShraMod32((NextVcn + 1),
+                                                      Vcb->MftToClusterShift);
+                } else {
+                    NextIndex = (ULONG)Int64ShllMod32((NextVcn + 1),
+                                                      Vcb->MftToClusterShift);
+                }
 
                 if (ReservedIndex < NextIndex) {
 
@@ -9418,7 +9453,12 @@ Return Value:
                 //  to be in the current mapping.
                 //
 
-                MinimumVcn = NextIndex << Vcb->MftToClusterShift;
+                if (Vcb->FileRecordsPerCluster == 0) {
+                    MinimumVcn = NextIndex << Vcb->MftToClusterShift;
+                } else {
+                    MinimumVcn = (NextIndex + Vcb->FileRecordsPerCluster - 1)
+                                 << Vcb->MftToClusterShift;
+                }
             }
 
             //
@@ -11665,7 +11705,14 @@ Return Value:
 
             ASSERT(Found);
 
-            LastVcn = FIRST_USER_FILE_NUMBER * Vcb->ClustersPerFileRecordSegment - 1;
+            //
+            // FRS<cluster: ClustersPerFRS == 0 sentinel; use BytesPerFRS
+            // for the multiplication.  LlClustersFromBytes round-divides
+            // bytes→clusters; same identity as old `* CPRS` for FRS>=cluster.
+            //
+            LastVcn = LlClustersFromBytes( Vcb,
+                                           FIRST_USER_FILE_NUMBER *
+                                           Vcb->BytesPerFileRecordSegment ) - 1;
             OriginalLastVcn = Attribute->Form.Nonresident.HighestVcn;
 
             //
@@ -12179,7 +12226,10 @@ Return Value:
 
         Vcn2 = *(PVCN)&Reference2;
         ((PMFT_SEGMENT_REFERENCE)&Vcn2)->SequenceNumber = 0;
-        Vcn2 = Vcn2 * Fcb->Vcb->ClustersPerFileRecordSegment;
+        // FRS<cluster: same identity as `* CPRS`, but expressed via
+        // BytesPerFRS so the multiply works when CPRS == 0.
+        Vcn2 = LlClustersFromBytes( Fcb->Vcb,
+                                    Vcn2 * Fcb->Vcb->BytesPerFileRecordSegment );
 
         Attribute2 = Add2Ptr( FileRecord2, FileRecord2->FirstAttributeOffset );
         RtlCopyMemory( Attribute2, Attribute1, SizeToMove );

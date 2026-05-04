@@ -1744,7 +1744,11 @@ Return Value:
             //  Compute the base index for this page.
             //
 
-            BaseIndex = ((ULONG)Vcn) >> Vcb->MftToClusterShift;
+            if (Vcb->FileRecordsPerCluster == 0) {
+                BaseIndex = ((ULONG)Vcn) >> Vcb->MftToClusterShift;
+            } else {
+                BaseIndex = ((ULONG)Vcn) << Vcb->MftToClusterShift;
+            }
 
             if (StuffAdded) { NtfsFreePagedPool( Bitmap.Buffer ); StuffAdded = FALSE; }
 
@@ -1860,7 +1864,11 @@ Return Value:
                 //  Convert the hole count to a cluster count.
                 //
 
-                HoleClusterCount = HoleRecordCount << Vcb->MftToClusterShift;
+                if (Vcb->FileRecordsPerCluster == 0) {
+                    HoleClusterCount = HoleRecordCount << Vcb->MftToClusterShift;
+                } else {
+                    HoleClusterCount = HoleRecordCount >> Vcb->MftToClusterShift;
+                }
 
                 //
                 //  Loop by finding the run at the given Vcn and walk through
@@ -1879,7 +1887,11 @@ Return Value:
                     //  the cluster count for the current hole.
                     //
 
-                    MftVcn = (StartIndex + BaseIndex) << Vcb->MftToClusterShift;
+                    if (Vcb->FileRecordsPerCluster == 0) {
+                        MftVcn = (StartIndex + BaseIndex) << Vcb->MftToClusterShift;
+                    } else {
+                        MftVcn = (StartIndex + BaseIndex) >> Vcb->MftToClusterShift;
+                    }
                     ThisVcn = MftVcn;
 
                     MftClusterCount = 0;
@@ -1945,8 +1957,13 @@ Return Value:
                                 //  Find the index after the current Mft run.
                                 //
 
-                                StartIndex = (ULONG)((ThisVcn + ThisClusterCount) >>
-                                                Vcb->MftToClusterShift);
+                                if (Vcb->FileRecordsPerCluster == 0) {
+                                    StartIndex = (ULONG)((ThisVcn + ThisClusterCount) >>
+                                                    Vcb->MftToClusterShift);
+                                } else {
+                                    StartIndex = (ULONG)((ThisVcn + ThisClusterCount) <<
+                                                    Vcb->MftToClusterShift);
+                                }
 
                                 //
                                 //  If this isn't on a hole boundary then
@@ -1969,7 +1986,11 @@ Return Value:
                                     //  Now subtract this from the HoleClusterCount.
                                     //
 
-                                    ((ULONG)HoleClusterCount) -= (IndexAdjust << Vcb->MftToClusterShift);
+                                    if (Vcb->FileRecordsPerCluster == 0) {
+                                        ((ULONG)HoleClusterCount) -= (IndexAdjust << Vcb->MftToClusterShift);
+                                    } else {
+                                        ((ULONG)HoleClusterCount) -= (IndexAdjust >> Vcb->MftToClusterShift);
+                                    }
 
                                     StartIndex += IndexAdjust;
                                 }
@@ -2048,7 +2069,11 @@ Return Value:
                 //
 
                 (ULONG)MftClusterCount &= ~(Vcb->MftClustersPerHole - 1);
-                HoleRecordCount = ((ULONG)MftClusterCount) >> Vcb->MftToClusterShift;
+                if (Vcb->FileRecordsPerCluster == 0) {
+                    HoleRecordCount = ((ULONG)MftClusterCount) >> Vcb->MftToClusterShift;
+                } else {
+                    HoleRecordCount = ((ULONG)MftClusterCount) << Vcb->MftToClusterShift;
+                }
 
                 //
                 //  Remove the clusters from the Mcb for the Mft.
@@ -6281,7 +6306,11 @@ Return Value:
             FileRecordCount &= ~(Vcb->MftBitmapAllocationContext.ExtendGranularity - 1);
 
             StartingVcn = LlClustersFromBytes( Vcb, DataScb->Header.AllocationSize.QuadPart );
-            NextUnallocatedVcn = FileRecordCount << Vcb->MftToClusterShift;
+            if (Vcb->FileRecordsPerCluster == 0) {
+                NextUnallocatedVcn = FileRecordCount << Vcb->MftToClusterShift;
+            } else {
+                NextUnallocatedVcn = FileRecordCount >> Vcb->MftToClusterShift;
+            }
 
             ClusterCount = NextUnallocatedVcn - StartingVcn;
 
@@ -7105,7 +7134,11 @@ Return Value:
 
                 if (Lcn == UNUSED_LCN) {
 
-                    Vcb->MftHoleRecords += (((ULONG)Clusters) >> Vcb->MftToClusterShift);
+                    if (Vcb->FileRecordsPerCluster == 0) {
+                        Vcb->MftHoleRecords += (((ULONG)Clusters) >> Vcb->MftToClusterShift);
+                    } else {
+                        Vcb->MftHoleRecords += (((ULONG)Clusters) << Vcb->MftToClusterShift);
+                    }
                 }
 
                 Index += 1;

@@ -829,7 +829,6 @@ Return Value:
             Vcb->NumberSectors = BootSector->NumberSectors;
             Vcb->MftStartLcn = BootSector->MftStartLcn;
             Vcb->Mft2StartLcn = BootSector->Mft2StartLcn;
-            Vcb->ClustersPerFileRecordSegment = BootSector->ClustersPerFileRecordSegment;
             Vcb->DefaultClustersPerIndexAllocationBuffer = BootSector->DefaultClustersPerIndexAllocationBuffer;
 
             Vcb->ClusterMask = Vcb->BytesPerCluster - 1;
@@ -838,13 +837,57 @@ Return Value:
                 Vcb->ClusterShift += 1;
             }
             Vcb->ClustersPerPage = PAGE_SIZE >> Vcb->ClusterShift;
-            Vcb->BytesPerFileRecordSegment =
-              BootSector->ClustersPerFileRecordSegment << Vcb->ClusterShift;
+
+            //
+            // MicroNT (NT 4.0 backport): the boot-sector ClustersPerFileRecordSegment
+            // byte is SIGNED.  Positive = literal cluster count per FRS (NT 3.5
+            // semantic).  Negative = -log2(BytesPerFRS), the NT 3.51+ encoding for
+            // FRS<cluster volumes (e.g. 4 KB cluster + 1 KB FRS).
+            //
+            // The Vcb's discriminator is FileRecordsPerCluster:
+            //   == 0  → FRS >= cluster (every shift site uses the original direction)
+            //   != 0  → FRS  < cluster (every shift site flips its direction)
+            //
+            // ClustersPerFileRecordSegment is left at 0 in the FRS<cluster case so
+            // the existing `& (CPRS - 1)` alignment masks evaluate to 0 (always
+            // pass), which is the correct semantic when every cluster boundary is
+            // a multi-FRS boundary.
+            //
+            {
+                CHAR signed_cprc = (CHAR)BootSector->ClustersPerFileRecordSegment;
+                if (signed_cprc < 0) {
+                    Vcb->BytesPerFileRecordSegment = 1UL << (-signed_cprc);
+                    if (Vcb->BytesPerFileRecordSegment < Vcb->BytesPerCluster) {
+                        Vcb->FileRecordsPerCluster =
+                            Vcb->BytesPerCluster / Vcb->BytesPerFileRecordSegment;
+                        Vcb->ClustersPerFileRecordSegment = 0;
+                    } else {
+                        Vcb->FileRecordsPerCluster = 0;
+                        Vcb->ClustersPerFileRecordSegment =
+                            Vcb->BytesPerFileRecordSegment / Vcb->BytesPerCluster;
+                    }
+                } else {
+                    Vcb->ClustersPerFileRecordSegment = signed_cprc;
+                    Vcb->BytesPerFileRecordSegment = signed_cprc << Vcb->ClusterShift;
+                    Vcb->FileRecordsPerCluster = 0;
+                }
+            }
+
             for (Vcb->MftShift = 0, i = Vcb->BytesPerFileRecordSegment; i > 1; i = i / 2) {
                 Vcb->MftShift += 1;
             }
 
-            Vcb->MftToClusterShift = Vcb->MftShift - Vcb->ClusterShift;
+            //
+            //  MftToClusterShift magnitude depends on which side is bigger.  For
+            //  FRS>=cluster (FileRecordsPerCluster == 0) it's MftShift - ClusterShift
+            //  and used as a left-shift (record→cluster).  For FRS<cluster it's
+            //  ClusterShift - MftShift and used as a right-shift (the inverse).
+            //
+            if (Vcb->FileRecordsPerCluster != 0) {
+                Vcb->MftToClusterShift = Vcb->ClusterShift - Vcb->MftShift;
+            } else {
+                Vcb->MftToClusterShift = Vcb->MftShift - Vcb->ClusterShift;
+            }
 
             //
             //  Now compute our volume specific constants that are stored in
@@ -900,7 +943,17 @@ Return Value:
         //  Create the Mft Scb and describe it up to the log file.
         //
 
-        FirstNonMirroredCluster = 4 * Vcb->ClustersPerFileRecordSegment;
+        //
+        // MicroNT (NT 4.0 backport): for FRS<cluster (FileRecordsPerCluster
+        // != 0), 4 * ClustersPerFRS = 0 since ClustersPerFRS is the
+        // sentinel 0 in that case.  Express via BytesPerFRS instead so the
+        // formula works in both directions.  Mirrors `ClustersFromBytes`
+        // semantics: round up to one cluster minimum so MFT2 always covers
+        // at least the first cluster of MFT.
+        //
+        FirstNonMirroredCluster =
+            (4 * Vcb->BytesPerFileRecordSegment + Vcb->BytesPerCluster - 1)
+            / Vcb->BytesPerCluster;
 
         NtfsOpenSystemFile( IrpContext,
                             &Vcb->MftScb,
@@ -999,7 +1052,6 @@ Return Value:
                            &Bcbs[i*2 + 1],
                            &Mft2Buffer );
         }
-
         //
         //  The last file record was the Volume Dasd, so check the version number.
         //
@@ -1250,12 +1302,31 @@ Return Value:
         //  Now load up the real allocation from just the first file record.
         //
 
-        NtfsLookupAllocation( IrpContext,
-                              Vcb->MftScb,
-                              (FIRST_USER_FILE_NUMBER - 1) << (Vcb->MftShift - Vcb->ClusterShift),
-                              &DontCareLcn,
-                              &DontCareCount,
-                              NULL );
+        {
+            //
+            //  MicroNT FRS<cluster: original code computes the cluster offset
+            //  of the first user file record as `(15) << (MftShift - ClusterShift)`,
+            //  which assumes FRS >= cluster (positive shift).  When FRS < cluster
+            //  (e.g. 1 KB FRS, 4 KB cluster), MftShift - ClusterShift is negative
+            //  as a signed quantity but evaluates to 0xFFFFFFFE as ULONG; the x86
+            //  shift instruction masks to 5 bits → shifts by 30, producing a
+            //  bogus enormous VCN that corrupts NtfsLookupAllocation's run walk.
+            //  Use MftToClusterShift (magnitude) and branch on FileRecordsPerCluster
+            //  for the correct direction.
+            //
+            LONGLONG _firstUserVcn;
+            if (Vcb->FileRecordsPerCluster == 0) {
+                _firstUserVcn = (LONGLONG)(FIRST_USER_FILE_NUMBER - 1) << Vcb->MftToClusterShift;
+            } else {
+                _firstUserVcn = (LONGLONG)(FIRST_USER_FILE_NUMBER - 1) >> Vcb->MftToClusterShift;
+            }
+            NtfsLookupAllocation( IrpContext,
+                                  Vcb->MftScb,
+                                  _firstUserVcn,
+                                  &DontCareLcn,
+                                  &DontCareCount,
+                                  NULL );
+        }
 
         NtfsLookupAllocation( IrpContext,
                               Vcb->Mft2Scb,
@@ -1668,7 +1739,11 @@ Return Value:
         //
 
         Vcb->MftHoleGranularity = MFT_HOLE_GRANULARITY;
-        Vcb->MftClustersPerHole = Vcb->MftHoleGranularity << Vcb->MftToClusterShift;
+        if (Vcb->FileRecordsPerCluster == 0) {
+            Vcb->MftClustersPerHole = Vcb->MftHoleGranularity << Vcb->MftToClusterShift;
+        } else {
+            Vcb->MftClustersPerHole = Vcb->MftHoleGranularity >> Vcb->MftToClusterShift;
+        }
         Vcb->MftHoleMask = Vcb->MftHoleGranularity - 1;
         Vcb->MftHoleInverseMask = ~(Vcb->MftHoleGranularity - 1);
         Vcb->MftDefragUpperThreshold = MFT_DEFRAG_UPPER_THRESHOLD;
@@ -3154,11 +3229,16 @@ Return Value:
 
         //
         //  Clusters per file record segment and default clusters for Index
-        //  Allocation Buffers must be a power of 2.
+        //  Allocation Buffers must be a power of 2.  Per NT 4.0 (cntfs/
+        //  fsctrl.c), negative values -9..-31 are also legal: they encode
+        //  -log2(BytesPerFRS) so the field can express FRS<cluster volumes
+        //  in a 1-byte field.  -10 = 1 KB FRS, -12 = 4 KB FRS, etc.
         //
 
         NextTest
-        ((BootSector->ClustersPerFileRecordSegment == 0x1) ||
+        ((((CHAR)BootSector->ClustersPerFileRecordSegment >= -31) &&
+          ((CHAR)BootSector->ClustersPerFileRecordSegment <= -9)) ||
+         (BootSector->ClustersPerFileRecordSegment == 0x1) ||
          (BootSector->ClustersPerFileRecordSegment == 0x2) ||
          (BootSector->ClustersPerFileRecordSegment == 0x4) ||
          (BootSector->ClustersPerFileRecordSegment == 0x8) ||
@@ -3170,7 +3250,9 @@ Return Value:
             &&
 
         NextTest
-        ((BootSector->DefaultClustersPerIndexAllocationBuffer == 0x1) ||
+        ((((CHAR)BootSector->DefaultClustersPerIndexAllocationBuffer >= -31) &&
+          ((CHAR)BootSector->DefaultClustersPerIndexAllocationBuffer <= -9)) ||
+         (BootSector->DefaultClustersPerIndexAllocationBuffer == 0x1) ||
          (BootSector->DefaultClustersPerIndexAllocationBuffer == 0x2) ||
          (BootSector->DefaultClustersPerIndexAllocationBuffer == 0x4) ||
          (BootSector->DefaultClustersPerIndexAllocationBuffer == 0x8) ||

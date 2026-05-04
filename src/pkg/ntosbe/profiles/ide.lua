@@ -297,14 +297,29 @@ end
 
 function M.disk_files(paths, list_tree)
     local nls = paths.nt .. "/PRIVATE/WINDOWS/WINNLS/DATA"
+    -- Per-entry `where` tag controls which partition(s) host the
+    -- file.  Default (omitted) = 'root'.
+    --
+    --   'esp'   only on the ESP (read by boot-efi pre-handoff,
+    --           never re-opened from disk at runtime).  Examples:
+    --           kernel, HAL, the seven boot-start drivers.
+    --   'root'  only on the system partition under \SystemRoot.
+    --   'both'  on both — for files boot-efi stages AND user-mode
+    --           re-opens via \SystemRoot.  The three NLS code-pages
+    --           are like this: boot-efi pulls them for kernel-side
+    --           NLS_DATA_BLOCK, then nt.nls.publish() opens them
+    --           again to seed the named-section namespace.
     local files = {
-        { dest = "System32/ntoskrnl.exe",
+        { dest = "System32/ntoskrnl.exe", where = 'esp',
           src  = paths.obj("NTOS/INIT/UP") .. "/ntoskrnl.exe" },
-        { dest = "System32/hal.dll",
+        { dest = "System32/hal.dll", where = 'esp',
           src  = paths.obj("NTOS/NTHALS/HAL") .. "/hal.dll" },
-        { dest = "System32/c_1252.nls",   src = nls .. "/C_1252.NLS"   },
-        { dest = "System32/c_437.nls",    src = nls .. "/C_437.NLS"    },
-        { dest = "System32/l_intl.nls",   src = nls .. "/L_INTL.NLS"   },
+        { dest = "System32/c_1252.nls", where = 'both',
+                                          src = nls .. "/C_1252.NLS"   },
+        { dest = "System32/c_437.nls",  where = 'both',
+                                          src = nls .. "/C_437.NLS"    },
+        { dest = "System32/l_intl.nls", where = 'both',
+                                          src = nls .. "/L_INTL.NLS"   },
         { dest = "System32/unicode.nls",  src = nls .. "/UNICODE.NLS"  },
         { dest = "System32/locale.nls",   src = nls .. "/LOCALE.NLS"   },
         { dest = "System32/ctype.nls",    src = nls .. "/CTYPE.NLS"    },
@@ -313,16 +328,27 @@ function M.disk_files(paths, list_tree)
         { dest = "System32/ntdll.dll",   src = paths.sdk_lib .. "/ntdll.dll"    },
         { dest = "System32/kernel32.dll", src = paths.sdk_lib .. "/kernel32.dll" },
 
-        -- Storage / FS / COM.
-        { dest = "System32/Drivers/atdisk.sys",   src = paths.sdk_lib .. "/atdisk.sys" },
-        -- SCSI port + class + nvme miniport.
-        { dest = "System32/Drivers/scsiport.sys", src = paths.sdk_lib .. "/scsiport.sys" },
-        { dest = "System32/Drivers/scsidisk.sys", src = paths.sdk_lib .. "/scsidisk.sys" },
-        { dest = "System32/Drivers/nvme2k.sys",   src = paths.sdk_lib .. "/nvme2k.sys" },
-        { dest = "System32/Drivers/vioblk.sys",   src = paths.sdk_lib .. "/vioblk.sys" },
+        -- Storage / FS / COM.  Boot-start drivers (atdisk, scsi*, nvme2k,
+        -- vioblk, fastfat, ntfs) are read by boot-efi pre-handoff and
+        -- so live on the ESP only.  Type-1 drivers (input, video,
+        -- network, npfs/msfs/serial/null) are loaded post-boot by
+        -- IoLoadDriver via \SystemRoot\System32\Drivers and stay on
+        -- root.
+        { dest = "System32/Drivers/atdisk.sys",   where = 'esp',
+                                  src = paths.sdk_lib .. "/atdisk.sys" },
+        { dest = "System32/Drivers/scsiport.sys", where = 'esp',
+                                  src = paths.sdk_lib .. "/scsiport.sys" },
+        { dest = "System32/Drivers/scsidisk.sys", where = 'esp',
+                                  src = paths.sdk_lib .. "/scsidisk.sys" },
+        { dest = "System32/Drivers/nvme2k.sys",   where = 'esp',
+                                  src = paths.sdk_lib .. "/nvme2k.sys" },
+        { dest = "System32/Drivers/vioblk.sys",   where = 'esp',
+                                  src = paths.sdk_lib .. "/vioblk.sys" },
+        { dest = "System32/Drivers/fastfat.sys",  where = 'esp',
+                                  src = paths.sdk_lib .. "/fastfat.sys" },
+        { dest = "System32/Drivers/ntfs.sys",     where = 'esp',
+                                  src = paths.sdk_lib .. "/ntfs.sys" },
         { dest = "System32/Drivers/null.sys",     src = paths.sdk_lib .. "/null.sys" },
-        { dest = "System32/Drivers/fastfat.sys",  src = paths.sdk_lib .. "/fastfat.sys" },
-        { dest = "System32/Drivers/ntfs.sys",     src = paths.sdk_lib .. "/ntfs.sys" },
         { dest = "System32/Drivers/npfs.sys",     src = paths.sdk_lib .. "/npfs.sys" },
         { dest = "System32/Drivers/msfs.sys",     src = paths.sdk_lib .. "/msfs.sys" },
         { dest = "System32/Drivers/serial.sys",   src = paths.sdk_lib .. "/serial.sys" },
@@ -467,10 +493,18 @@ function M.disk_files(paths, list_tree)
 
     -- Pre-walk to drop files inside any obj/ subdir.  list_tree
     -- doesn't expose intermediate dir names, so we test path segments.
+    -- Also drops source tarballs (.tgz / .tar.gz / .zip / .bak) that
+    -- the user might have stashed in the tree as backups — they
+    -- violate 8.3 and aren't OS sources anyway.
     local function nt_path_excluded(rel)
         for seg in rel:gmatch("[^/]+") do
             if nt_skip_dirs[seg] then return true end
         end
+        local lower = rel:lower()
+        if lower:match("%.tgz$")    then return true end
+        if lower:match("%.tar%.gz$") then return true end
+        if lower:match("%.zip$")    then return true end
+        if lower:match("%.bak$")    then return true end
         return false
     end
 
