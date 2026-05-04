@@ -98,6 +98,12 @@ void lpb_set_boot_disk(UINT32 mbr_signature, UINT32 mbr_checksum,
     g_hal_part          = hal_part;
 }
 
+/* Wall-clock seed (UEFI gRT->GetTime() result).  Year==0 = unset;
+ * lpb_build skips the arena emit in that case and Spare1 stays 0. */
+static EFI_TIME g_boot_time;
+
+void lpb_set_boot_time(const EFI_TIME *t) { g_boot_time = *t; }
+
 static UINT32 g_config_root = 0;
 
 void lpb_set_configuration_root(UINT32 root_kseg0) {
@@ -205,6 +211,18 @@ EFI_STATUS lpb_build(void) {
     lpb->NtBootPathName    = kseg0_of(arena_dup_ascii("\\"));
     lpb->NtHalPathName     = kseg0_of(arena_dup_ascii("\\"));
     lpb->LoadOptions       = kseg0_of(arena_dup_ascii(""));
+
+    /* --- UEFI wall-clock seed (optional).  Stash the EFI_TIME
+     * latched by lpb_set_boot_time into the arena, point Spare1 at
+     * its KSEG0 VA.  HAL declares a parallel struct (it doesn't
+     * include efi.h) and converts at HAL init. */
+    if (g_boot_time.Year != 0) {
+        EFI_TIME *t = arena_alloc(sizeof(EFI_TIME), 4);
+        if (t) {
+            *t = g_boot_time;
+            lpb->Spare1 = kseg0_of(t);
+        }
+    }
 
     /* --- Hardware inventory root (built by hwtree; caller set it). */
     lpb->ConfigurationRoot = g_config_root;

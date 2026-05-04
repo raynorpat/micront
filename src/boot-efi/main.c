@@ -286,6 +286,27 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
         BXLOG(L"boot disk size query failed — atdisk may not mount");
     }
 
+    /* Wall-clock seed.  RT->GetTime() is a UEFI Runtime Service — it
+     * doesn't allocate and Runtime Services survive ExitBootServices,
+     * so timing is flexible.  HAL converts EFI_TIME → 100-ns since
+     * 1601 at HAL init and anchors KeBootTime against the boot-time
+     * TSC.  Year==0 sentinel = no seed (RT->GetTime failed); HAL falls
+     * back to the old "1601" zero-time behaviour gracefully
+     * (HalQueryRealTimeClock returns FALSE).  qemu / EC2 / GCE / Azure
+     * all return UTC. */
+    {
+        EFI_TIME t = { 0 };
+        EFI_STATUS s = uefi_call_wrapper(RT->GetTime, 2, &t, NULL);
+        if (!EFI_ERROR(s)) {
+            lpb_set_boot_time(&t);
+            BXLOG(L"UEFI time: %u-%02u-%02u %02u:%02u:%02u tz=%d",
+                  t.Year, t.Month, t.Day,
+                  t.Hour, t.Minute, t.Second, t.TimeZone);
+        } else {
+            BXLOG(L"RT->GetTime failed: 0x%lx", (UINT64)s);
+        }
+    }
+
     /* Pre-exit: reserve the machine-state pages (PD, PCR, TSS, stacks). */
     mmu_alloc_reserved();
 

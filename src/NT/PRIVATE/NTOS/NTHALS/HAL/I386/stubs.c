@@ -87,6 +87,238 @@ HalpCalibrateTscViaPIT(VOID)
     HalpTscFrequency = (delta * pit_hz) / pit_count;
 }
 
+/*
+ * CPUID wrapper.  CL 8.50 doesn't recognise the cpuid mnemonic, so
+ * hand-emit 0x0F 0xA2 like RDTSC above.  __stdcall preserves EBX
+ * across calls, but CPUID clobbers it — push/pop locally to be
+ * defensive against compiler scheduling assumptions.  Pass NULL for
+ * any output you don't care about.
+ */
+static VOID
+HalpCpuid(
+    IN  ULONG  Leaf,
+    IN  ULONG  Subleaf,
+    OUT PULONG OutEax,
+    OUT PULONG OutEbx,
+    OUT PULONG OutEcx,
+    OUT PULONG OutEdx
+    )
+{
+    ULONG a, b, c, d;
+    _asm {
+        push ebx
+        mov  eax, Leaf
+        mov  ecx, Subleaf
+        _emit 0x0F
+        _emit 0xA2
+        mov  a, eax
+        mov  b, ebx
+        mov  c, ecx
+        mov  d, edx
+        pop  ebx
+    }
+    if (OutEax) *OutEax = a;
+    if (OutEbx) *OutEbx = b;
+    if (OutEcx) *OutEcx = c;
+    if (OutEdx) *OutEdx = d;
+}
+
+/*
+ * Wall-clock plumbing.
+ *
+ * boot-efi reads gRT->GetTime() pre-handoff and stashes the result in
+ * an arena-allocated EFI_TIME-shaped struct, with LoaderBlock->Spare1
+ * pointing at it (KSEG0 VA).  HAL doesn't include efi.h; we declare
+ * our own struct with the exact UEFI-spec layout (section 8.3) and
+ * cast the pointer.
+ *
+ * At HAL init we convert the EFI_TIME → 100-ns since 1601 (NT zero
+ * point) and latch HalpBootSystemTime alongside HalpBootTsc.  Live
+ * wall-clock then derives as
+ *     boot_system + (rdtsc - boot_tsc) * 10^7 / tsc_freq.
+ *
+ * Spare1 == 0 means RT->GetTime() failed in boot-efi; HAL leaves
+ * HalpBootSystemTime.QuadPart at zero and HalQueryRealTimeClock
+ * returns FALSE — graceful degradation to today's "1601" wall clock.
+ */
+
+typedef struct _HAL_EFI_TIME {
+    USHORT Year;        /* 1900..9999 */
+    UCHAR  Month;       /* 1..12 */
+    UCHAR  Day;         /* 1..31 */
+    UCHAR  Hour;        /* 0..23 */
+    UCHAR  Minute;      /* 0..59 */
+    UCHAR  Second;      /* 0..59 */
+    UCHAR  Pad1;
+    ULONG  Nanosecond;  /* 0..999_999_999 */
+    SHORT  TimeZone;    /* minutes east of UTC; 0x07FF = unspecified */
+    UCHAR  Daylight;
+    UCHAR  Pad2;
+} HAL_EFI_TIME, *PHAL_EFI_TIME;
+
+#define HAL_EFI_UNSPECIFIED_TIMEZONE  ((SHORT)0x07FF)
+
+static LARGE_INTEGER HalpBootSystemTime;     /* 100-ns since 1601 */
+static ULONGLONG     HalpBootTsc;            /* TSC at HAL init */
+ULONGLONG            HalpLastTickTsc;        /* updated by clock ISR */
+
+/*
+ * Convert one HAL_EFI_TIME into NT system time (100-ns since 1601).
+ * Returns FALSE when the seed is unset/invalid; caller treats that
+ * as "no UEFI seed".
+ */
+static BOOLEAN
+HalpEfiTimeToSystemTime(
+    IN  PHAL_EFI_TIME EfiTime,
+    OUT PLARGE_INTEGER SystemTime
+    )
+{
+    TIME_FIELDS    tf;
+    LARGE_INTEGER  local;
+    LONG           tz_min;
+
+    if (EfiTime == NULL || EfiTime->Year == 0) {
+        return FALSE;
+    }
+
+    tf.Year         = (CSHORT)EfiTime->Year;
+    tf.Month        = (CSHORT)EfiTime->Month;
+    tf.Day          = (CSHORT)EfiTime->Day;
+    tf.Hour         = (CSHORT)EfiTime->Hour;
+    tf.Minute       = (CSHORT)EfiTime->Minute;
+    tf.Second       = (CSHORT)EfiTime->Second;
+    tf.Milliseconds = (CSHORT)(EfiTime->Nanosecond / 1000000);
+    tf.Weekday      = 0;                   /* RtlTimeFieldsToTime ignores this */
+
+    if (!RtlTimeFieldsToTime(&tf, &local)) {
+        return FALSE;
+    }
+
+    /* EFI_TIME.TimeZone: minutes east of UTC.  EFI_UNSPECIFIED_TIMEZONE
+     * (0x07FF) → treat as UTC; qemu / EC2 / GCE / Azure all return
+     * UTC explicitly so this branch is the common case.  Otherwise
+     * convert local→UTC by subtracting tz_min*60 seconds. */
+    {
+        LONGLONG tz_100ns;
+        tz_min   = (EfiTime->TimeZone == HAL_EFI_UNSPECIFIED_TIMEZONE)
+                   ? 0 : (LONG)EfiTime->TimeZone;
+        tz_100ns = (LONGLONG)tz_min * 60;
+        tz_100ns = tz_100ns * 10000000;
+        SystemTime->QuadPart = local.QuadPart - tz_100ns;
+    }
+    return TRUE;
+}
+
+/*
+ * Log the hypervisor identity to the serial banner.  Bare metal logs
+ * "bare metal".  When CPUID 01h:ECX bit 31 (HypervisorPresent) is
+ * set, we read the 12-byte ASCII vendor signature from CPUID
+ * 40000000h:EBX/ECX/EDX — this matches what every hypervisor publishes:
+ *   KVMKVMKVM\0\0\0   KVM (qemu, EC2 Nitro, GCE, Linode, etc.)
+ *   Microsoft Hv      Hyper-V (Azure, on-prem Hyper-V)
+ *   TCGTCGTCGTCG      QEMU TCG (no KVM)
+ *   VMwareVMware      VMware ESXi / Workstation
+ *   XenVMMXenVMM      Xen
+ *   bhyve bhyve       FreeBSD bhyve
+ * Diagnostic only — informs which PV-clock path we'd take if/when
+ * we add one (kvmclock under KVMKVMKVM, Reference TSC page under
+ * Microsoft Hv, etc.).
+ */
+static VOID
+HalpLogHypervisorSignature(VOID)
+{
+    ULONG ecx_hv = 0, eax_max = 0, ebx = 0, ecx = 0, edx = 0;
+    CHAR  msg[64];
+    ULONG i, k;
+
+    HalpCpuid(0x00000001, 0, NULL, NULL, &ecx_hv, NULL);
+    if (!(ecx_hv & 0x80000000)) {
+        HalpSerialPrint("HAL: hypervisor: bare metal\r\n");
+        return;
+    }
+
+    HalpCpuid(0x40000000, 0, &eax_max, &ebx, &ecx, &edx);
+
+    i = 0;
+    msg[i++] = 'H'; msg[i++] = 'A'; msg[i++] = 'L'; msg[i++] = ':';
+    msg[i++] = ' '; msg[i++] = 'h'; msg[i++] = 'y'; msg[i++] = 'p';
+    msg[i++] = 'e'; msg[i++] = 'r'; msg[i++] = 'v'; msg[i++] = 'i';
+    msg[i++] = 's'; msg[i++] = 'o'; msg[i++] = 'r'; msg[i++] = ':';
+    msg[i++] = ' ';
+    msg[i++] = (CHAR)(ebx & 0xFF);
+    msg[i++] = (CHAR)((ebx >>  8) & 0xFF);
+    msg[i++] = (CHAR)((ebx >> 16) & 0xFF);
+    msg[i++] = (CHAR)((ebx >> 24) & 0xFF);
+    msg[i++] = (CHAR)(ecx & 0xFF);
+    msg[i++] = (CHAR)((ecx >>  8) & 0xFF);
+    msg[i++] = (CHAR)((ecx >> 16) & 0xFF);
+    msg[i++] = (CHAR)((ecx >> 24) & 0xFF);
+    msg[i++] = (CHAR)(edx & 0xFF);
+    msg[i++] = (CHAR)((edx >>  8) & 0xFF);
+    msg[i++] = (CHAR)((edx >> 16) & 0xFF);
+    msg[i++] = (CHAR)((edx >> 24) & 0xFF);
+
+    /* Signatures like "KVMKVMKVM\0\0\0" end in NUL bytes — replace
+     * with spaces so the serial line stays a printable run. */
+    for (k = 17; k < i; k++) {
+        if (msg[k] == 0) msg[k] = ' ';
+    }
+
+    msg[i++] = '\r';
+    msg[i++] = '\n';
+    msg[i]   = 0;
+    HalpSerialPrint(msg);
+}
+
+/*
+ * One-shot clock setup called from HalInitSystem(Phase 1).  Logs the
+ * hypervisor identity, probes invariant TSC (advisory; we trust TSC
+ * regardless because the bit is masked by qemu64 even on hosts that
+ * support it), eagerly calibrates frequency against the PIT so the
+ * clock ISR doesn't recalibrate from inside an interrupt, latches
+ * the boot-time TSC + last-tick anchor, and converts the UEFI
+ * wall-clock seed into HalpBootSystemTime.
+ */
+VOID
+HalpInitTscClock(
+    IN PLOADER_PARAMETER_BLOCK LoaderBlock
+    )
+{
+    ULONG cpuid_edx = 0;
+
+    HalpLogHypervisorSignature();
+
+    /* Probe invariant-TSC bit for diagnostics only.  We don't bug-check
+     * on absence: the default qemu64 model (under both TCG and KVM,
+     * unless `-cpu host` is passed) doesn't advertise the bit even
+     * though its emulated TSC is rate-stable in practice, and a lot
+     * of low-end VPS providers run our image under a similar setup.
+     * The HAL's TSC consumers just trust the calibrated frequency
+     * regardless. */
+    HalpCpuid(0x80000007, 0, NULL, NULL, NULL, &cpuid_edx);
+    if (cpuid_edx & (1 << 8)) {
+        HalpSerialPrint("HAL: invariant TSC advertised\r\n");
+    } else {
+        HalpSerialPrint("HAL: invariant TSC bit absent — trusting TSC anyway\r\n");
+    }
+
+    HalpCalibrateTscViaPIT();
+    HalpBootTsc     = HalpReadTsc();
+    HalpLastTickTsc = HalpBootTsc;
+
+    HalpBootSystemTime.QuadPart = 0;
+    if (LoaderBlock->Spare1 != 0) {
+        PHAL_EFI_TIME efi = (PHAL_EFI_TIME)LoaderBlock->Spare1;
+        if (HalpEfiTimeToSystemTime(efi, &HalpBootSystemTime)) {
+            HalpSerialPrint("HAL: UEFI wall-clock seed: ok\r\n");
+        } else {
+            HalpSerialPrint("HAL: UEFI wall-clock seed: invalid\r\n");
+        }
+    } else {
+        HalpSerialPrint("HAL: no UEFI wall-clock seed\r\n");
+    }
+}
+
 LARGE_INTEGER
 KeQueryPerformanceCounter(
     OUT PLARGE_INTEGER PerformanceFrequency OPTIONAL
@@ -157,13 +389,40 @@ HalSetProfileInterval(
 
 /* ===== RTC ===== */
 
+/*
+ * Live wall-clock query.  Returns boot system time plus the elapsed
+ * 100-ns interval derived from the TSC (which is invariant on every
+ * platform we target, see HalpInitTscClock).  Returns FALSE only
+ * when there's no UEFI seed at all — graceful fallback to today's
+ * 1601 zero-time behaviour.
+ *
+ * 64-bit arithmetic note: `dt_tsc * 10^7` overflows ULONGLONG after
+ * ~1844 seconds at a 1 GHz TSC.  Split the multiply across the
+ * divide to keep the intermediate in ULONGLONG range:
+ *     q = dt / freq;  r = dt % freq;
+ *     dt_100ns = q * 1e7 + (r * 1e7) / freq.
+ */
 BOOLEAN
 HalQueryRealTimeClock(
     OUT PTIME_FIELDS TimeFields
     )
 {
-    HalpSerialPrint("HAL: QueryRealTimeClock\r\n");
-    return FALSE;
+    ULONGLONG     dt_tsc, q, r, dt_100ns;
+    LARGE_INTEGER live;
+
+    if (HalpBootSystemTime.QuadPart == 0 || HalpTscFrequency == 0) {
+        return FALSE;
+    }
+
+    dt_tsc   = HalpReadTsc() - HalpBootTsc;
+    q        = dt_tsc / HalpTscFrequency;
+    r        = dt_tsc % HalpTscFrequency;
+    dt_100ns = q * (ULONGLONG)10000000
+             + (r * (ULONGLONG)10000000) / HalpTscFrequency;
+
+    live.QuadPart = HalpBootSystemTime.QuadPart + (LONGLONG)dt_100ns;
+    RtlTimeToTimeFields(&live, TimeFields);
+    return TRUE;
 }
 
 BOOLEAN
@@ -171,7 +430,51 @@ HalSetRealTimeClock(
     IN PTIME_FIELDS TimeFields
     )
 {
+    /* Read-only on virtual platforms.  UEFI runtime services are gone
+     * post-handoff and we explicitly don't poke CMOS. */
     return FALSE;
+}
+
+/*
+ * Called from HalpClockInterrupt (clock.asm) on every IRQ0 tick to
+ * compute the per-tick increment passed to KeUpdateSystemTime.
+ *
+ * Returns the elapsed 100-ns interval since the previous tick, derived
+ * from the TSC delta.  Replaces the original fixed 100000 (10 ms ×
+ * 1e4) so KeSystemTime tracks invariant TSC accuracy (~1 ppm under
+ * a hypervisor) rather than PIT crystal drift (~50 ppm).
+ *
+ * Capped at 0xFFFFFFFF on the (extremely unlikely) chance of a TSC
+ * glitch — a hostile host could otherwise pass garbage into
+ * KeUpdateSystemTime and skew SystemTime arbitrarily.
+ *
+ * Runs at CLOCK2_LEVEL (we're inside the ISR), so no spinlock needed
+ * even on SMP — though we're UP-only today.
+ */
+ULONG
+HalpClockTickIncrement(VOID)
+{
+    ULONGLONG now, dt_tsc, q, r, dt_100ns;
+
+    /* Fall back to the original fixed increment until calibration is
+     * complete (HalpInitTscClock runs in Phase 1 before we unmask
+     * IRQ0, so this branch shouldn't fire in practice — defensive). */
+    if (HalpTscFrequency == 0) {
+        return 100000;
+    }
+
+    now              = HalpReadTsc();
+    dt_tsc           = now - HalpLastTickTsc;
+    HalpLastTickTsc  = now;
+    q                = dt_tsc / HalpTscFrequency;
+    r                = dt_tsc % HalpTscFrequency;
+    dt_100ns = q * (ULONGLONG)10000000
+             + (r * (ULONGLONG)10000000) / HalpTscFrequency;
+
+    if (dt_100ns > (ULONGLONG)0xFFFFFFFF) {
+        return 0xFFFFFFFF;
+    }
+    return (ULONG)dt_100ns;
 }
 
 /* ===== Bus / Resources ===== */

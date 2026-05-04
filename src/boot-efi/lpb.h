@@ -59,6 +59,13 @@ void lpb_set_nls(EFI_PHYSICAL_ADDRESS base_phys,
 void lpb_set_boot_disk(UINT32 mbr_signature, UINT32 mbr_checksum,
                        UINT8 boot_part, UINT8 hal_part);
 
+/* Optional.  Latches a UEFI gRT->GetTime() result for HAL to consume
+ * as a wall-clock seed.  If never called (or if the EFI_TIME's Year
+ * is zero), lpb_build won't allocate a seed struct and Spare1 stays
+ * 0 — HAL detects that and reports "no UEFI time seed", leaving
+ * KeBootTime at the 1601 zero point. */
+void lpb_set_boot_time(const EFI_TIME *t);
+
 /* Store the ConfigurationRoot KSEG0 VA. Call with the return value of
  * hwtree_build() before `lpb_build`. */
 void lpb_set_configuration_root(UINT32 root_kseg0);

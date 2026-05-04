@@ -249,7 +249,10 @@ typedef struct _LOADER_PARAMETER_BLOCK {
     UINT32  ArcDiskInformation;      /* wire: KSEG0 VA of ARC_DISK_INFORMATION* */
     UINT32  OemFontFile;             /* wire: KSEG0 VA */
     UINT32  SetupLoaderBlock;        /* wire: KSEG0 VA */
-    UINT32  Spare1;
+    UINT32  Spare1;                  /* MicroNT: KSEG0 VA of EFI_TIME
+                                      * (UEFI GetTime seed for HAL),
+                                      * or 0 if no seed.  HAL casts to
+                                      * its own EFI_TIME-shaped struct. */
     I386_LOADER_BLOCK I386;
 } LOADER_PARAMETER_BLOCK;
 

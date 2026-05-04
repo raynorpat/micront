@@ -151,6 +151,16 @@ HalInitSystem(
             idt[CLOCK_VECTOR].ExtendedOffset = (USHORT)(addr >> 16);
         }
 
+        /* Probe invariant TSC, calibrate frequency, latch boot-time
+         * TSC + UEFI wall-clock seed.  Must run BEFORE we unmask IRQ0
+         * below — the ISR derives KeUpdateSystemTime increments from
+         * (current_tsc - HalpLastTickTsc) / HalpTscFrequency, both of
+         * which HalpInitTscClock populates. */
+        {
+            extern VOID HalpInitTscClock(IN PLOADER_PARAMETER_BLOCK);
+            HalpInitTscClock(LoaderBlock);
+        }
+
         /* Unmask IRQ 0 (timer) and IRQ 2 (cascade) on master PIC */
         HalpWritePort(PIC1_DATA, 0xFA);  /* mask = 11111010 = all masked except IRQ0 + IRQ2 */
 
