@@ -505,6 +505,11 @@ Revision History:
 //
 
 #include "ntddk.h"                  // various NT definitions
+/* poppack.h leaks pack(2) at end of ntddk.h's chain; reset to default
+ * so PARTITION_INFORMATION below matches HAL's IoReadPartitionTable
+ * view (32 bytes, not 28). Mismatch shows as garbage StartingOffset on
+ * partition[1+] when reading split-partition layouts. */
+#pragma pack()
 #include "ntdddisk.h"               // disk device driver I/O control codes
 #include "ntddscsi.h"
 #include <atd_plat.h>               // this driver's platform dependent stuff

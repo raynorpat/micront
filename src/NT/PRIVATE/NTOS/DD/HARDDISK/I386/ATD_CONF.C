@@ -33,6 +33,9 @@ Revision History:
 --*/
 
 #include "ntddk.h"                  // various NT definitions
+/* See ATDISK.C: poppack.h leaks pack(2); reset before ntdddisk.h so
+ * PARTITION_INFORMATION layout matches HAL's. */
+#pragma pack()
 #include "ntdddisk.h"               // disk device driver I/O control codes
 #include <atd_plat.h>               // this driver's platform dependent stuff
 #include <atd_data.h>               // this driver's data declarations
