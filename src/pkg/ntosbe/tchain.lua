@@ -214,18 +214,18 @@ end
 -- we wipe obj/ before running nmake; on success the new mode is
 -- written back.
 local function _read_stamp(path)
-    local f = io.open(path, "r")
-    if not f then return nil end
-    local s = f:read("*l")
-    f:close()
-    return s
+    -- Route through platform.read_file rather than raw io.open: the
+    -- guest LuaJIT (under cr/run.exe) deliberately doesn't load Lua's
+    -- stdlib io / os modules into the global namespace, so any direct
+    -- `io.open` / `os.time` access raises "attempt to index a nil
+    -- value" when self-hosting.
+    local s = platform.read_file(path)
+    if not s then return nil end
+    return s:match("[^\r\n]*")
 end
 
 local function _write_stamp(path, val)
-    local f = io.open(path, "w")
-    if not f then return end
-    f:write(val)
-    f:close()
+    platform.write_file(path, val)
 end
 
 function M.run_nmake(linux_dir, desc, extra_args, opts)
@@ -271,7 +271,8 @@ function M.run_nmake(linux_dir, desc, extra_args, opts)
     local makedir_win  = nt_root_win .. rel_path:gsub("/", "\\")
 
     -- UMAPPL override.  KEEP_UMAPPL=1 in env preserves the SOURCES
-    -- file's UMAPPL= directive (cowtest etc. need this).
+    -- file's UMAPPL= directive (used by IMAGEHLP's multi-tool build,
+    -- where one SOURCES drives ~12 separate .exe outputs via UMAPPL).
     local umappl_override = "UMAPPL="
     if opts.keep_umappl or platform.getenv("KEEP_UMAPPL") == "1" then
         umappl_override = nil

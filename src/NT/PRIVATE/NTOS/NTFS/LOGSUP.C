@@ -107,10 +107,10 @@ NtfsWriteLog (
     IN NTFS_LOG_OPERATION UndoOperation,
     IN PVOID UndoBuffer OPTIONAL,
     IN ULONG UndoLength,
-    IN VCN Vcn,
+    IN LONGLONG StreamOffset,
     IN ULONG RecordOffset,
     IN ULONG AttributeOffset,
-    IN ULONG ClusterCount
+    IN ULONG StructureSize
     )
 
 /*++
@@ -169,15 +169,18 @@ Arguments:
 
                  For a compensation log record, this argument must be 0.
 
-    Vcn - Vcn for start of structure being modified (Mft or Index), or
-          simply Vcn at start of update.
+    StreamOffset - Byte offset within the stream for the start of the
+                   structure being modified (Mft or Index), or simply the
+                   stream offset for the start of the update.  NT 4.0
+                   backport: byte form replaces the cluster Vcn used in NT 3.5
+                   so sub-cluster FRS can be addressed unambiguously.
 
-    RecordOffset - Byte offset from start of Vcn above to update reference
+    RecordOffset - Byte offset from StreamOffset to update reference
 
     AttributeOffset - Offset within a value to which an update applies, if relevant.
 
-    ClusterCount - Number of clusters which must be mapped to read the entire
-                   structure being logged.
+    StructureSize - Size in bytes of the entire structure being logged.
+                    NtfsWriteLog converts to a cluster count internally.
 
 Return Value:
 
@@ -218,6 +221,14 @@ Return Value:
     BOOLEAN AttributeTableAcquired = FALSE;
     BOOLEAN TransactionTableAcquired = FALSE;
 
+    //
+    //  NT 4.0 backport: derive cluster count and Vcn from byte-form
+    //  arguments.  StructureSize rounds up; StreamOffset truncates so
+    //  the Vcn names the cluster containing the start of the structure.
+    //
+    ULONG LogClusterCount = ClustersFromBytes( Scb->Vcb, StructureSize );
+    VCN LogVcn = LlClustersFromBytesTruncate( Scb->Vcb, StreamOffset );
+
     PAGED_CODE();
 
     Vcb = Scb->Vcb;
@@ -240,10 +251,12 @@ Return Value:
     DebugTrace( 0, Dbg, "UndoOperation = %08lx\n", UndoOperation );
     DebugTrace( 0, Dbg, "UndoBuffer = %08lx\n", UndoBuffer );
     DebugTrace( 0, Dbg, "UndoLength = %08lx\n", UndoLength );
-    DebugTrace2(0, Dbg, "Vcn = %08lx, %08lx\n", Vcn.LowPart, Vcn.HighPart );
+    DebugTrace2(0, Dbg, "StreamOffset = %08lx %08lx\n",
+                ((PLARGE_INTEGER)&StreamOffset)->LowPart,
+                ((PLARGE_INTEGER)&StreamOffset)->HighPart );
     DebugTrace( 0, Dbg, "RecordOffset = %08lx\n", RecordOffset );
     DebugTrace( 0, Dbg, "AttributeOffset = %08lx\n", AttributeOffset );
-    DebugTrace( 0, Dbg, "ClusterCount = %08lx\n", ClusterCount );
+    DebugTrace( 0, Dbg, "StructureSize = %08lx\n", StructureSize );
 
     //
     //  Check Redo and Undo lengths
@@ -296,11 +309,11 @@ Return Value:
     try {
 
         //
-        //  If ClusterCount is nonzero, then create an open attribute table
-        //  entry.
+        //  If StructureSize is nonzero, then create an open attribute
+        //  table entry.
         //
 
-        if (ClusterCount != 0) {
+        if (StructureSize != 0) {
 
             //
             //  Allocate an entry in the open attribute table and initialize it,
@@ -440,20 +453,18 @@ Return Value:
         //  At least for now, assume update is contained in one physical page.
         //
 
-        //ASSERT( (ClusterCount == 0) ||
-        //          (ROUND_TO_PAGES( BytesFromClusters(Vcb, Vcn.LowPart) + 1) ==
-        //          ROUND_TO_PAGES( BytesFromClusters(Vcb, Vcn.LowPart + ClusterCount ))));
+        //ASSERT( (StructureSize == 0) || (StructureSize <= PAGE_SIZE));
 
         //
         //  If there isn't enough room for this structure on the stack, we
         //  need to allocate an auxilary buffer.
         //
 
-        if (ClusterCount > (PAGE_SIZE / 512)) {
+        if (LogClusterCount > (PAGE_SIZE / 512)) {
 
             MyHeader = (PNTFS_LOG_RECORD_HEADER)
                        NtfsAllocatePagedPool( sizeof( NTFS_LOG_RECORD_HEADER )
-                                              + (ClusterCount - 1) * sizeof( LCN ));
+                                              + (LogClusterCount - 1) * sizeof( LCN ));
 
         }
 
@@ -469,11 +480,11 @@ Return Value:
         //  Lookup the Runs for this log record
         //
 
-        MyHeader->LcnsToFollow = (USHORT)ClusterCount;
+        MyHeader->LcnsToFollow = (USHORT)LogClusterCount;
 
-        if (ClusterCount != 0) {
-            LookupLcns( IrpContext, Scb, Vcn, ClusterCount, TRUE, &MyHeader->LcnsForPage[0] );
-            WriteEntries[0].ByteLength += (ClusterCount - 1) * sizeof(LCN);
+        if (LogClusterCount != 0) {
+            LookupLcns( IrpContext, Scb, LogVcn, LogClusterCount, TRUE, &MyHeader->LcnsForPage[0] );
+            WriteEntries[0].ByteLength += (LogClusterCount - 1) * sizeof(LCN);
         }
 
         //
@@ -518,9 +529,11 @@ Return Value:
         MyHeader->UndoLength = (USHORT)UndoLength;
         MyHeader->TargetAttribute = (USHORT)Scb->NonpagedScb->OpenAttributeTableIndex;
         MyHeader->RecordOffset = (USHORT)RecordOffset;
-        MyHeader->TargetVcn = Vcn;
+        MyHeader->TargetVcn = LogVcn;
         MyHeader->AttributeOffset = (USHORT)AttributeOffset;
-        MyHeader->Reserved[0] = MyHeader->Reserved[1] = 0;
+        MyHeader->ClusterBlockOffset = (USHORT)
+            LogBlocksFromBytesTruncate( ClusterOffset( Vcb, StreamOffset ));
+        MyHeader->Reserved = 0;
 
         //
         //  Finally, get our current transaction entry and call Lfs.  We acquire

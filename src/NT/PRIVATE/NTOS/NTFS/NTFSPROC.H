@@ -30,7 +30,6 @@ Revision History:
 //#include <zwapi.h>
 //#include <FsRtl.h>
 #include <ntifs.h>
-#include <lfs.h>
 
 //
 // MicroNT: poppack.h is broken in this NT 3.5 toolchain — it sets
@@ -44,12 +43,23 @@ Revision History:
 // STATUS_INFO_LENGTH_MISMATCH at mount time and the kernel
 // bugchecks 0x7B INACCESSIBLE_BOOT_DEVICE.
 //
-// Reset to natural alignment before pulling in ntdddisk.h so
-// PARTITION_INFORMATION's size matches what the disk class driver
-// expects.  NTFS's own structures get their explicit pack(4) from
-// Ntfs.h further down — unaffected.
+// The same leak makes lfs.h define every LFS structure (LFCB,
+// LFS_DATA, LFS_RESTART_AREA, LfsClientRecord, ...) at pack(2)
+// when included from NTFS, while LFS.LIB itself resets pack()
+// before #include <lfs.h> in LfsProcs.h and so sees the same
+// structs at natural alignment.  When NTFS hands LFS a stack-
+// resident structure pointer (e.g. NtfsWriteLog), LFS writes
+// past the NTFS-side end of the struct - long enough to clobber
+// adjacent stack including saved EH3 frames - manifesting as
+// SEH-chain corruption in NtfsUpdateFileNameInIndex.
+//
+// Reset to natural alignment before pulling in lfs.h or
+// ntdddisk.h so both sides agree on layout.  NTFS's own
+// structures get their explicit pack(4) from Ntfs.h further
+// down - unaffected.
 //
 #pragma pack()
+#include <lfs.h>
 #include <ntdddisk.h>
 
 #include "nodetype.h"
@@ -428,10 +438,9 @@ NtfsCleanupAttributeContext(
 //          IN PATTRIBUTE_ENUMERATION_CONTEXT AttributeContext
 //          );
 //
-//      VCN
-//      NtfsMftVcn (
-//          IN PATTRIBUTE_ENUMERATION_CONTEXT AttributeContext,
-//          IN PVCB Vcb
+//      LONGLONG
+//      NtfsMftOffset (
+//          IN PATTRIBUTE_ENUMERATION_CONTEXT AttributeContext
 //          );
 //
 
@@ -459,8 +468,16 @@ NtfsCleanupAttributeContext(
     (CTX)->FoundAttribute.FileRecord    \
 )
 
-#define NtfsMftVcn(CTX,V) (                    \
-    ((CTX)->FoundAttribute.MftFileOffset >> (V)->ClusterShift)            \
+//
+//  NT 4.0 backport: callers pass byte file offsets to NtfsWriteLog
+//  (was cluster Vcn in NT 3.5).  The cluster-based form can't address
+//  a sub-cluster FRS — with 4 KB cluster + 1 KB FRS, four FRS share
+//  one cluster Vcn — so the redo-log target is ambiguous.  Byte form
+//  encodes it cleanly; NtfsWriteLog truncates to a Vcn internally.
+//
+
+#define NtfsMftOffset(CTX) (                \
+    (CTX)->FoundAttribute.MftFileOffset     \
 )
 
 //
@@ -1672,10 +1689,10 @@ NtfsWriteLog (
     IN NTFS_LOG_OPERATION UndoOperation,
     IN PVOID UndoBuffer OPTIONAL,
     IN ULONG UndoLength,
-    IN VCN Vcn,
+    IN LONGLONG StreamOffset,
     IN ULONG RecordOffset,
     IN ULONG AttributeOffset,
-    IN ULONG ClusterCount
+    IN ULONG StructureSize
     );
 
 VOID
@@ -3771,8 +3788,26 @@ NtfsPostRequest (
     (((L) + (LONGLONG) (V)->ClusterMask) >> (CCHAR)(V)->ClusterShift) \
 )
 
+#define LlClustersFromBytesTruncate(V,L) (        \
+    ((L) >> (CCHAR)(V)->ClusterShift)             \
+)
+
 #define LlBytesFromClusters(V,C) (    \
     ((C) << (CCHAR)(V)->ClusterShift) \
+)
+
+//
+//  Conversions between bytes and log blocks (512-byte sectors).
+//  ClusterBlockOffset in the log header is sector-granular (NT 4.0
+//  backport, for sub-cluster FRS log records).
+//
+
+#ifndef DEFAULT_INDEX_BLOCK_BYTE_SHIFT
+#define DEFAULT_INDEX_BLOCK_BYTE_SHIFT  (9)
+#endif
+
+#define LogBlocksFromBytesTruncate(B) (             \
+    ((ULONG) (B)) >> DEFAULT_INDEX_BLOCK_BYTE_SHIFT \
 )
 
 #define Add2Ptr(P,I) ((PVOID)((PUCHAR)(P) + (I)))

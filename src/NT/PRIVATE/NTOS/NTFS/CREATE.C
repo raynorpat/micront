@@ -5201,10 +5201,10 @@ Return Value:
                                             Noop,
                                             NULL,
                                             0,
-                                            Cluster,
+                                            FileRecordOffset,
                                             0,
                                             0,
-                                            Vcb->ClustersPerFileRecordSegment );
+                                            Vcb->BytesPerFileRecordSegment );
 
             //
             //  Now add the eas for the file.  We need to add them now because

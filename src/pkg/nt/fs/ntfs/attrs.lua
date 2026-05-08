@@ -568,47 +568,92 @@ function M.identity_upcase()
 end
 
 -- ----------------------------------------------------------------
--- Build a minimal valid self-relative SECURITY_DESCRIPTOR that grants
--- everyone full access.  NT 3.5's NtfsLoadSecurityDescriptor raises
--- STATUS_FILE_CORRUPT_ERROR if a file's MFT record lacks a
+-- Build a self-relative SECURITY_DESCRIPTOR with an *inheritable*
+-- allow-all-to-Everyone DACL.  NT 3.5's NtfsLoadSecurityDescriptor
+-- raises STATUS_FILE_CORRUPT_ERROR if a file's MFT record lacks a
 -- $SECURITY_DESCRIPTOR attribute, so every file we author needs one.
 --
--- Layout (44 bytes total):
+-- Why not a NULL DACL (SE_DACL_PRESENT + Dacl=0)?  A NULL DACL itself
+-- grants all access on direct check, but has no ACEs to inherit.  When
+-- NtCreateFile cuts a new file, NtfsAssignSecurity → SeAssignSecurity
+-- calls SepInheritAcl(parent->Dacl) — on a NULL parent DACL that
+-- returns STATUS_NO_INHERITANCE, falling to the token's default DACL.
+-- Our boot SYSTEM token's default DACL doesn't include World, so
+-- newly-created files end up with a DACL that denies our SID.  Result:
+-- write succeeds, subsequent open fails with STATUS_ACCESS_DENIED.
+-- An explicit ACE with OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
+-- propagates via SepInheritAcl to every child file and directory.
+--
+-- Layout (72 bytes total):
 --   SECURITY_DESCRIPTOR_RELATIVE (20 B):
---     0x00 Revision  (1)        = 1
---     0x01 Sbz1      (1)        = 0
---     0x02 Control   (2)        = SE_DACL_PRESENT | SE_SELF_RELATIVE
---                                 = 0x0004 | 0x8000 = 0x8004
---     0x04 Owner     (4)        = offset 0x14 (header end)
---     0x08 Group     (4)        = offset 0x14 + 12 (after owner SID)
---     0x0C Sacl      (4)        = 0
---     0x10 Dacl      (4)        = 0  (SE_DACL_PRESENT + Dacl=0 = NULL DACL,
---                                     which means "everyone has all access")
---   World SID (12 B): S-1-1-0
---     0x14 Revision  (1)        = 1
---     0x15 SubCount  (1)        = 1
---     0x16 IdAuth    (6)        = {0,0,0,0,0,1}  (SECURITY_WORLD_SID_AUTHORITY)
---     0x1C SubAuth0  (4)        = 0
---   Group SID (12 B): same World SID at 0x20..0x2B
+--     0x00 Revision  (1) = 1
+--     0x01 Sbz1      (1) = 0
+--     0x02 Control   (2) = SE_DACL_PRESENT | SE_SELF_RELATIVE = 0x8004
+--     0x04 Owner     (4) = 0x14 (Owner SID right after header)
+--     0x08 Group     (4) = 0x20 (Group SID after Owner)
+--     0x0C Sacl      (4) = 0
+--     0x10 Dacl      (4) = 0x2C (DACL after Group)
+--   Owner SID  0x14..0x1F : S-1-1-0 (World, 12 B)
+--   Group SID  0x20..0x2B : S-1-1-0 (World, 12 B)
+--   ACL header 0x2C..0x33 (8 B):
+--     0x2C AclRevision (1) = ACL_REVISION (2)
+--     0x2D Sbz1        (1) = 0
+--     0x2E AclSize     (2) = 28 (header + one 20-byte ACE)
+--     0x30 AceCount    (2) = 1
+--     0x32 Sbz2        (2) = 0
+--   ACCESS_ALLOWED_ACE 0x34..0x47 (20 B):
+--     0x34 AceType  (1) = 0 (ACCESS_ALLOWED_ACE_TYPE)
+--     0x35 AceFlags (1) = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE = 0x03
+--     0x36 AceSize  (2) = 20
+--     0x38 Mask     (4) = FILE_ALL_ACCESS = 0x1F01FF
+--                         (STANDARD_RIGHTS_ALL | SYNCHRONIZE | every
+--                          FILE_* specific right.  We use the post-
+--                          mapped specific mask rather than
+--                          GENERIC_ALL — SeAccessCheck compares the
+--                          desired access in specific bits against the
+--                          ACE in specific bits, and the generic-mask
+--                          translation only happens reliably for
+--                          freshly-assigned DACLs, not for ones loaded
+--                          off disk.)
+--     0x3C World SID    : revision=1, subcount=1, IdAuth=World, SubAuth0=0
 -- ----------------------------------------------------------------
 function M.world_security_descriptor()
-    local buf = ffi.new('uint8_t[?]', 44)
+    local SIZE = 72
+    local buf  = ffi.new('uint8_t[?]', SIZE)
+    -- Header.
     buf[0x00] = 1
     buf[0x01] = 0
-    ffi.cast('uint16_t*', buf + 0x02)[0] = 0x8004
-    ffi.cast('uint32_t*', buf + 0x04)[0] = 0x14
-    ffi.cast('uint32_t*', buf + 0x08)[0] = 0x20
-    ffi.cast('uint32_t*', buf + 0x0C)[0] = 0
-    ffi.cast('uint32_t*', buf + 0x10)[0] = 0
+    ffi.cast('uint16_t*', buf + 0x02)[0] = 0x8004    -- DACL_PRESENT|SELF_RELATIVE
+    ffi.cast('uint32_t*', buf + 0x04)[0] = 0x14      -- Owner offset
+    ffi.cast('uint32_t*', buf + 0x08)[0] = 0x20      -- Group offset
+    ffi.cast('uint32_t*', buf + 0x0C)[0] = 0         -- Sacl offset
+    ffi.cast('uint32_t*', buf + 0x10)[0] = 0x2C      -- Dacl offset
+    -- Owner SID (World, S-1-1-0).
     buf[0x14] = 1; buf[0x15] = 1
     buf[0x16] = 0; buf[0x17] = 0; buf[0x18] = 0
     buf[0x19] = 0; buf[0x1A] = 0; buf[0x1B] = 1
     ffi.cast('uint32_t*', buf + 0x1C)[0] = 0
+    -- Group SID (same).
     buf[0x20] = 1; buf[0x21] = 1
     buf[0x22] = 0; buf[0x23] = 0; buf[0x24] = 0
     buf[0x25] = 0; buf[0x26] = 0; buf[0x27] = 1
     ffi.cast('uint32_t*', buf + 0x28)[0] = 0
-    return ffi.string(buf, 44)
+    -- ACL header.
+    buf[0x2C] = 2                                    -- AclRevision = ACL_REVISION
+    buf[0x2D] = 0
+    ffi.cast('uint16_t*', buf + 0x2E)[0] = 28        -- AclSize (8 + 20)
+    ffi.cast('uint16_t*', buf + 0x30)[0] = 1         -- AceCount
+    ffi.cast('uint16_t*', buf + 0x32)[0] = 0         -- Sbz2
+    -- ACCESS_ALLOWED_ACE: GENERIC_ALL to World, inherited by files+dirs.
+    buf[0x34] = 0                                    -- AceType
+    buf[0x35] = 0x03                                 -- OBJECT|CONTAINER inherit
+    ffi.cast('uint16_t*', buf + 0x36)[0] = 20        -- AceSize
+    ffi.cast('uint32_t*', buf + 0x38)[0] = 0x001F01FF -- FILE_ALL_ACCESS
+    buf[0x3C] = 1; buf[0x3D] = 1                     -- World SID revision/subcount
+    buf[0x3E] = 0; buf[0x3F] = 0; buf[0x40] = 0
+    buf[0x41] = 0; buf[0x42] = 0; buf[0x43] = 1
+    ffi.cast('uint32_t*', buf + 0x44)[0] = 0         -- SubAuth0
+    return ffi.string(buf, SIZE)
 end
 
 return M

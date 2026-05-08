@@ -63,7 +63,9 @@ SOURCES=..\apcobj.c   \
 
 NTTEST=
 UMTYPE=console
-UMLIBS=$(BASEDIR)\public\sdk\lib\*\user32.lib
+# MicroNT: dropped user32.lib from upstream UMLIBS — UMTEST is empty,
+# no UM test exe is actually produced from this SOURCES, so the lib
+# was unreachable.
 UMTEST=
 
 NTTARGETFILES=

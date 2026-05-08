@@ -784,6 +784,122 @@ Return Value:
     return;
 }
 
+//
+// KiValidateExceptionChain - structural sanity check on the kernel-mode SEH
+// chain at the moment of an exception.  Catches latent stack corruption that
+// would otherwise present as a #UD inside RtlpExecuteHandlerForException
+// doing `call ecx` against pool data.  On any structural failure we
+// BugCheck so the bad frame's address is preserved in the bugcheck args
+// rather than being lost when the dispatcher walks off into garbage.
+//
+// Bugcheck shape: 0xCAFE5E1F (Frame, why, badFieldValue, exceptionCode)
+//   why = 1: chain too deep (> KI_SEH_MAX_DEPTH = 64)
+//   why = 2: frame off-stack (Frame outside thread stack range)
+//   why = 3: Handler not in any loaded module
+//   why = 4: Handler points into pool (>= 0xFB000000)
+//
+// If you see this fire with why=2/3/4, the most likely cause is a known
+// SEH-runtime leak around try/except in NTFS — see the manual fs:[0]
+// save/restore in NtfsCommonCleanup (CLEANUP.C) and the project memory
+// note project_seh_global_unwind2_bug.  The same pattern may need to
+// be replicated in any NTFS function whose try/except wraps an SEH-
+// heavy callee.
+//
+
+#define KI_SEH_MAX_DEPTH      64
+#define KI_SEH_GUARD_BUGCHECK 0xCAFE5E1F
+
+extern LIST_ENTRY PsLoadedModuleList;
+
+static BOOLEAN
+KipAddressInModule (
+    IN PVOID Address
+    )
+{
+    PLIST_ENTRY Entry;
+    PLDR_DATA_TABLE_ENTRY Module;
+
+    if (PsLoadedModuleList.Flink == NULL) {
+        // Very early boot - module list not built yet.  Coarse fallback:
+        // must be in kernel address space.
+        return ((ULONG)Address >= 0x80000000);
+    }
+
+    for (Entry = PsLoadedModuleList.Flink;
+         Entry != &PsLoadedModuleList;
+         Entry = Entry->Flink) {
+
+        Module = CONTAINING_RECORD(Entry,
+                                   LDR_DATA_TABLE_ENTRY,
+                                   InLoadOrderLinks);
+
+        if ((Address >= Module->DllBase) &&
+            ((PUCHAR)Address <
+             (PUCHAR)Module->DllBase + Module->SizeOfImage)) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static VOID
+KiValidateExceptionChain (
+    IN PEXCEPTION_RECORD ExceptionRecord
+    )
+{
+    PEXCEPTION_REGISTRATION_RECORD Frame;
+    PEXCEPTION_REGISTRATION_RECORD PrevFrame;
+    PKTHREAD Thread;
+    ULONG StackTop, StackBottom;
+    ULONG Depth = 0;
+
+    Thread      = KeGetCurrentThread();
+    StackTop    = (ULONG)Thread->InitialStack;
+    StackBottom = StackTop - KERNEL_STACK_SIZE;
+
+    PrevFrame = (PEXCEPTION_REGISTRATION_RECORD)0xDEADBEEF;
+    Frame     = KeGetPcr()->NtTib.ExceptionList;
+
+    while (Frame != EXCEPTION_CHAIN_END) {
+
+        if (++Depth > KI_SEH_MAX_DEPTH) {
+            KeBugCheckEx(KI_SEH_GUARD_BUGCHECK,
+                         (ULONG)PrevFrame, 1,            // chain too deep
+                         (ULONG)Frame,
+                         ExceptionRecord->ExceptionCode);
+        }
+
+        if ((ULONG)Frame < StackBottom || (ULONG)Frame >= StackTop) {
+            //
+            //  Bad frame: PrevFrame->Next pointed off-stack.  The corrupting
+            //  function is the one that owns PrevFrame on the kernel stack.
+            //  arg1 = PrevFrame, arg2 = 2, arg3 = bad Frame, arg4 = orig exc.
+            //
+            KeBugCheckEx(KI_SEH_GUARD_BUGCHECK,
+                         (ULONG)PrevFrame, 2,            // frame off-stack
+                         (ULONG)Frame,
+                         ExceptionRecord->ExceptionCode);
+        }
+
+        if ((ULONG)Frame->Handler >= 0xFB000000) {
+            KeBugCheckEx(KI_SEH_GUARD_BUGCHECK,
+                         (ULONG)Frame, 4,                // Handler in pool
+                         (ULONG)Frame->Handler,
+                         ExceptionRecord->ExceptionCode);
+        }
+
+        if (!KipAddressInModule((PVOID)Frame->Handler)) {
+            KeBugCheckEx(KI_SEH_GUARD_BUGCHECK,
+                         (ULONG)Frame, 3,                // bogus Handler
+                         (ULONG)Frame->Handler,
+                         ExceptionRecord->ExceptionCode);
+        }
+
+        PrevFrame = Frame;
+        Frame     = Frame->Next;
+    }
+}
+
 VOID
 KiDispatchException (
     IN PEXCEPTION_RECORD ExceptionRecord,
@@ -923,6 +1039,7 @@ Return Value:
 
             // Kernel debugger didn't handle exception.
 
+            KiValidateExceptionChain(ExceptionRecord);
             if (RtlDispatchException(ExceptionRecord, &ContextFrame) == TRUE) {
                 goto Handled1;
             }

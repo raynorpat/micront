@@ -32,8 +32,12 @@ UMAPPL=bind*binplace*checkfix*dbgdump*imagechk*rebase*smashlck*splitsym*undname*
 
 UMTYPE=console
 UMRES=$(@R).res
-UMLIBS=$(BASEDIR)\public\sdk\lib\*\setargv.obj \
-       $(BASEDIR)\public\sdk\lib\*\imagehlp.lib \
+# MicroNT: dropped setargv.obj from upstream UMLIBS.  It hooks the CRT
+# argv setup to do shell-glob expansion (so `splitsym *.exe` expands
+# client-side), but we only ever invoke these tools with fully-resolved
+# per-file paths from build.lua, so it's dead weight here and a
+# bootstrap dep we'd otherwise have to track.
+UMLIBS=$(BASEDIR)\public\sdk\lib\*\imagehlp.lib \
        $(BASEDIR)\public\sdk\lib\*\libc.lib \
        $(BASEDIR)\public\sdk\lib\*\kernel32.lib \
        $(BASEDIR)\public\sdk\lib\*\ntdll.lib

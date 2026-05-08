@@ -586,7 +586,10 @@ function M.read_file(path)
         noa.oa,
         _bit.bor(FS_FILE_SHARE_READ, FS_FILE_SHARE_WRITE),
         FS_FILE_SYNCHRONOUS_IO_NONALERT)
-    if not ok then return nil end           -- missing / unreadable
+    -- Stock-Lua-shaped: nil + errmsg on any open failure (matches
+    -- io.open).  Bare `return nil` would have hidden the NTSTATUS,
+    -- making "got nil" failures undebuggable.
+    if not ok then return nil, tostring(h) end
 
     local ok2, ret = pcall(function()
         local std = _fs.query_standard(h)
@@ -643,7 +646,7 @@ function M.file_size(path)
         noa.oa,
         _bit.bor(FS_FILE_SHARE_READ, FS_FILE_SHARE_WRITE),
         FS_FILE_SYNCHRONOUS_IO_NONALERT)
-    if not ok then return nil end
+    if not ok then return nil, tostring(h) end
     local std = _fs.query_standard(h)
     h:close()
     return tonumber(std.EndOfFile.QuadPart)
@@ -734,10 +737,11 @@ function M.unlink(path)
         _bit.bor(FS_FILE_SHARE_READ, FS_FILE_SHARE_WRITE,
                  0x00000004 --[[FILE_SHARE_DELETE]]),
         FS_FILE_SYNCHRONOUS_IO_NONALERT)
-    if not ok then return false end
-    local ok2 = pcall(_fs.set_disposition, h, true)
+    if not ok then return false, tostring(h) end
+    local ok2, why = pcall(_fs.set_disposition, h, true)
     h:close()
-    return ok2
+    if not ok2 then return false, tostring(why) end
+    return true
 end
 
 function M.rmdir(path)

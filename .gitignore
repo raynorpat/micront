@@ -42,11 +42,12 @@ src/NT/PUBLIC/SDK/LIB/I386/hal.exp
 src/NT/PUBLIC/SDK/LIB/I386/tmp.lib
 src/NT/PUBLIC/SDK/LIB/I386/tmp.exp
 # ntdll, kernel32, advapi32 DLLs + .exp are generated each build.
-# The .LIB import stubs (kernel32.lib, ADVAPI32.LIB, HAL.LIB, NTDLL.LIB)
-# are SEED files — early-bootstrap tools (cmd-stub, wibo-tools setup)
-# link against them before windows_base_client has produced its own
-# kernel32.lib.  They're tracked, not ignored.  Build overwrites them;
-# clean.sh restores.
+# The .LIB import stubs (kernel32.lib, ntdll.lib) are SEED files —
+# early-bootstrap tools (cmd-stub, wibo-tools setup) link against them
+# before windows_base_client has produced its own kernel32.lib.
+# They're tracked, not ignored.  Build overwrites them; clean.sh
+# restores.  ADVAPI32.LIB / HAL.LIB are NOT in this set — advapi32 was
+# untracked (no consumer in our build); HAL is generated.
 src/NT/PUBLIC/SDK/LIB/I386/ntdll.dll
 src/NT/PUBLIC/SDK/LIB/I386/ntdll.exp
 src/NT/PUBLIC/SDK/LIB/I386/kernel32.dll
@@ -321,17 +322,22 @@ src/NT/PUBLIC/OAK/BIN/I386/MC.EXE
 src/NT/PUBLIC/OAK/BIN/I386/listmung.exe
 # Debug-pipeline tools rebuilt from in-tree source by build.sh — keep
 # the import libraries (IMAGEHLP.LIB) tracked, but the executables and
-# runtime DLL are regenerated each build.  cvpack.err is the message
-# data file CVPACK.EXE reads at runtime, also build-emitted.
+# runtime DLL are regenerated each build.
+#
+# CVPACK.EXE + cvpack.err stay TRACKED — they're load-bearing for
+# bootstrap.  The original NT 3.5 LINK.EXE auto-invokes CVPACK on
+# every CV-debug link (which is every link once --syms is on, even
+# when building MKMSG / CVPACK itself), so a clean checkout has to
+# already have CVPACK to bootstrap the toolchain phase.  Same
+# treatment as the other "load-bearing for bootstrap" binaries
+# (CL.EXE, NMAKE.EXE, the import .LIB files).
 src/NT/PUBLIC/OAK/BIN/I386/BINPLACE.EXE
 src/NT/PUBLIC/OAK/BIN/I386/CVDUMP.EXE
-src/NT/PUBLIC/OAK/BIN/I386/CVPACK.EXE
 src/NT/PUBLIC/OAK/BIN/I386/DBG2DWF.EXE
 src/NT/PUBLIC/OAK/BIN/I386/MKMSG.EXE
 src/NT/PUBLIC/OAK/BIN/I386/PDBDUMP.EXE
 src/NT/PUBLIC/OAK/BIN/I386/SPLITSYM.EXE
 src/NT/PUBLIC/OAK/BIN/I386/IMAGEHLP.DLL
-src/NT/PUBLIC/OAK/BIN/I386/cvpack.err
 
 # imagehlp runtime + setargv stub — the .lib import stub stays tracked
 # (IMAGEHLP.LIB above), the rest is build output.

@@ -136,7 +136,10 @@ typedef struct _NTFS_LOG_RECORD_HEADER {
     //
     //  If the update is to some other (nonresident) attribute, then
     //  TargetVcn and RecordOffset may be used to calculate the reference
-    //  point for the update.
+    //  point for the update.  ClusterBlockOffset (NT 4.0 backport) is
+    //  the number of 512-byte sectors from the start of the logged Vcn
+    //  to the start of the structure being modified — needed to
+    //  disambiguate which FRS within a cluster on FRS<cluster volumes.
     //
     //  As a bottom line, the exact use of these fields is up to the
     //  writer of this particular log operation, and the associated
@@ -145,7 +148,8 @@ typedef struct _NTFS_LOG_RECORD_HEADER {
 
     USHORT RecordOffset;
     USHORT AttributeOffset;
-    USHORT Reserved[2];
+    USHORT ClusterBlockOffset;
+    USHORT Reserved;
     VCN TargetVcn;
 
     //

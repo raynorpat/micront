@@ -107,6 +107,14 @@ boot: disk
 	$(SRC)/boot.sh $(BOOT_FLAGS) $(BOOT_REDIRECT)
 
 selftest: INIT_ARGS_FLAG = --init-args '\SystemRoot\lua\selftest.lua'
+# Selftest exercises the in-OS rebuild path which drives NMAKE.  NMAKE's
+# mtime comparison is `>=` and FAT16 has 2-second granularity, so a
+# fresh disk image where SOURCES and ntosbe-generated _objects.mac land
+# in the same FAT timestamp slot triggers the legacy `build.exe -O`
+# rebuild rule (which we don't ship).  NTFS has 100ns mtime resolution,
+# so the collision can't happen.  Default selftest layout is split-ntfs
+# unless the operator overrides via `make selftest LAYOUT=split-fat`.
+selftest: LAYOUT_FLAG := --layout=$(or $(LAYOUT),split-ntfs)
 selftest: boot
 
 # Smoke test — minimal "did the system boot on this hardware shape?"

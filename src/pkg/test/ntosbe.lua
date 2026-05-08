@@ -236,8 +236,8 @@ t.test("platform.write_file + read_file round-trip", function()
     local path = "/SystemRoot/ntosbe_test_rt.txt"
     local payload = "hello world\n12345\n"
     platform.write_file(path, payload)
-    local got = platform.read_file(path)
-    t.eq(got, payload, "round-trip preserves bytes")
+    local got, why = platform.read_file(path)
+    t.eq(got, payload, "round-trip preserves bytes: " .. tostring(why))
     platform.unlink(path)
     t.ok(not platform.file_exists(path), "unlink removes file")
 end)

@@ -126,10 +126,11 @@ C_DEFINES = $(C_DEFINES) -DNDEBUG
 # UnDecorateSymbolName, and CPP.C / HUNDNAME.CXX now always pull
 # in the in-tree unDName demangler (BUGBUG/UNDNAME.CXX) instead.
 # Removes LINK.EXE's IMAGEHLP.dll import → no DLL to stage on guest.
+# user32.lib also dropped — upstream included it for a single
+# wsprintf-style format helper that LINK never actually calls.
 UMLIBS= ..\cvtomf\obj\*\cvtomf.lib                  \
         ..\disasm\obj\*\disasm.lib                  \
-        ..\disasm68\obj\*\disasm68.lib              \
-        $(BASEDIR)\public\sdk\lib\*\user32.lib
+        ..\disasm68\obj\*\disasm68.lib
 
 # MicroNT: stock NT shipped LINK.EXE carries a 22KB .rsrc section that
 # holds the LINK<n>:: error/warning/message string tables from errmsg.i

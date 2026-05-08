@@ -244,22 +244,31 @@ NTLIBCPATH=$(LIBRARY_PATH)
 
 LIBC_LIB = $(NTLIBCPATH)\$(LIBC_LIB)
 
-GUI32_LIBS=$(LIBRARY_PATH)\gdi32.lib \
-           $(LIBRARY_PATH)\user32.lib
+# MicroNT: GUI32_LIBS macro removed.  Upstream defined it as
+# gdi32.lib + user32.lib, appended automatically to every
+# UMTYPE=windows target.  Both .libs were dropped (no consumer
+# in our build calls user32 / gdi32 functions), and no MicroNT
+# component sets UMTYPE=windows in the first place.  If a future
+# Win32 GUI component appears, it'll need to reintroduce both.
+GUI32_LIBS=
 
 NT_LIBS=$(LIBRARY_PATH)\ntdll.lib
 
 !IFDEF CAIRO_PRODUCT
 NT_LIBS=$(NT_LIBS:lib\*\ntdll.lib=lib\cairo\*\ntdll.lib)
-GUI32_LIBS=$(GUI32_LIBS:lib\*\user32.lib=lib\cairo\*\user32.lib)
 !ENDIF
 
 CRT_LIBS=
 
 NT_CRT=$(LIBRARY_PATH)\nt.lib
 !IFNDEF WIN32_LIBS
+# MicroNT: dropped advapi32.lib from the default WIN32_LIBS macro.
+# Upstream pulled it into every UMTYPE=console / =windows target,
+# but no in-tree component actually calls Reg* / Crypt* / Logon* /
+# IsTextUnicode etc. (CMD already overrode WIN32_LIBS for the same
+# reason; see WINDOWS/CMD/SOURCES).  If a future component needs
+# advapi32 it can re-introduce the .lib + override WIN32_LIBS.
 WIN32_LIBS=$(LIBC_LIB) \
-           $(LIBRARY_PATH)\advapi32.lib \
            $(LIBRARY_PATH)\kernel32.lib
 !ENDIF
 

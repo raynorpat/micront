@@ -2002,10 +2002,10 @@ Return Value:
                                                 SetNewAttributeSizes,
                                                 &OldAttributeSizes,
                                                 sizeof( NEW_ATTRIBUTE_SIZES ),
-                                                NtfsMftVcn( &AttrContext, Scb->Vcb ),
+                                                NtfsMftOffset( &AttrContext ),
                                                 PtrOffset( FileRecord, AttributeHeader ),
                                                 0,
-                                                Scb->Vcb->ClustersPerFileRecordSegment );
+                                                Scb->Vcb->BytesPerFileRecordSegment );
 
             } else {
 
@@ -2882,10 +2882,10 @@ Return Value:
                           DeleteAttribute,
                           NULL,
                           0,
-                          NtfsMftVcn(Context, Vcb),
+                          NtfsMftOffset(Context),
                           RecordOffset,
                           0,
-                          Vcb->ClustersPerFileRecordSegment );
+                          Vcb->BytesPerFileRecordSegment );
 
         } except(NtfsExceptionFilter( IrpContext, GetExceptionInformation() )) {
 
@@ -2904,7 +2904,7 @@ Return Value:
         MFT_SEGMENT_REFERENCE SegmentReference;
         VCN Vcn;
 
-        Vcn = NtfsMftVcn(Context, Vcb);
+        Vcn = LlClustersFromBytesTruncate(Vcb, NtfsMftOffset(Context));
         //
         //  MicroNT FRS<cluster: original `Vcn >> (MftShift - ClusterShift)`
         //  produces a bogus shift-count (0xFFFFFFFE → masked to 30 by x86)
@@ -3175,10 +3175,10 @@ Return Value:
                                       Noop,
                                       NULL,
                                       0,
-                                      LlClustersFromBytes( Vcb, CurrentFileOffset),
+                                      CurrentFileOffset,
                                       0,
                                       0,
-                                      ClustersFromBytes(Vcb, BytesThisPage) );
+                                      BytesThisPage );
 
 
                     } else {
@@ -3847,10 +3847,10 @@ Return Value:
                           UpdateResidentValue,
                           NULL,
                           0,
-                          NtfsMftVcn(Context, Vcb),
+                          NtfsMftOffset(Context),
                           RecordOffset,
                           AttributeOffset,
-                          Vcb->ClustersPerFileRecordSegment );
+                          Vcb->BytesPerFileRecordSegment );
 
             //
             //  Now zero this data by calling the same routine as restart.
@@ -3943,10 +3943,10 @@ Return Value:
                           UpdateResidentValue,
                           UndoBuffer,
                           UndoLength,
-                          NtfsMftVcn(Context, Vcb),
+                          NtfsMftOffset(Context),
                           RecordOffset,
                           AttributeOffset,
-                          Vcb->ClustersPerFileRecordSegment );
+                          Vcb->BytesPerFileRecordSegment );
 
             //
             //  Now update this data by calling the same routine as restart.
@@ -4248,10 +4248,10 @@ Return Value:
                                   Noop,
                                   NULL,
                                   0,
-                                  LlClustersFromBytes( Vcb, CurrentPage ),
+                                  CurrentPage,
                                   PageOffset,
                                   0,
-                                  ClustersFromBytes( Vcb, ZeroBytesThisPage + PageOffset ));
+                                  ZeroBytesThisPage + PageOffset );
 
                     //
                     //  Zero any data necessary.
@@ -4408,10 +4408,10 @@ Return Value:
                                       UpdateNonresidentValue,
                                       Buffer,
                                       UndoBytesThisPage,
-                                      LlClustersFromBytes( Vcb, CurrentPage ),
+                                      CurrentPage,
                                       PageOffset,
                                       0,
-                                      ClustersFromBytes( Vcb, BytesThisPage ) );
+                                      BytesThisPage );
 
                         //
                         //  Move the data into place if we have new data.
@@ -4487,10 +4487,10 @@ Return Value:
                                   Noop,
                                   NULL,
                                   0,
-                                  LlClustersFromBytes( Vcb, CurrentPage ),
+                                  CurrentPage,
                                   PageOffset,
                                   0,
-                                  ClustersFromBytes( Vcb, PageOffset + RedoBytesThisPage ));
+                                  PageOffset + RedoBytesThisPage );
 
                     //
                     //  Move the data into place.
@@ -4845,10 +4845,10 @@ Return Value:
                       CreateAttribute,
                       Attribute,
                       Attribute->RecordLength,
-                      NtfsMftVcn(Context, Vcb),
+                      NtfsMftOffset(Context),
                       (PCHAR)Attribute - (PCHAR)FileRecord,
                       0,
-                      Vcb->ClustersPerFileRecordSegment );
+                      Vcb->BytesPerFileRecordSegment );
     }
 
     NtfsRestartRemoveAttribute( IrpContext,
@@ -5413,10 +5413,10 @@ Return Value:
                           DeleteAttribute,
                           NULL,
                           0,
-                          NtfsMftVcn(Context, Vcb),
+                          NtfsMftOffset(Context),
                           RecordOffset,
                           0,
-                          Vcb->ClustersPerFileRecordSegment );
+                          Vcb->BytesPerFileRecordSegment );
 
         } except(NtfsExceptionFilter( IrpContext, GetExceptionInformation() )) {
 
@@ -5449,7 +5449,7 @@ Return Value:
         MFT_SEGMENT_REFERENCE SegmentReference;
         VCN Vcn;
 
-        Vcn = NtfsMftVcn(Context, Vcb);
+        Vcn = LlClustersFromBytesTruncate(Vcb, NtfsMftOffset(Context));
         //
         //  MicroNT FRS<cluster: original `Vcn >> (MftShift - ClusterShift)`
         //  produces a bogus shift-count (0xFFFFFFFE → masked to 30 by x86)
@@ -6120,6 +6120,7 @@ Return Value:
                 //
 
                 {
+                    LONGLONG LogOffset;
                     VCN LogVcn;
 
                     if (NewBcb != NULL) {
@@ -6130,10 +6131,11 @@ Return Value:
                         //
 
                         NtfsVcnFromBcb( Vcb, *(PLARGE_INTEGER)&LogVcn, FileRecord, NewBcb );
+                        LogOffset = LlBytesFromClusters( Vcb, LogVcn );
 
                     } else {
 
-                        LogVcn = NtfsMftVcn( Context, Vcb );
+                        LogOffset = NtfsMftOffset( Context );
                     }
 
                     FileRecord->Lsn =
@@ -6146,10 +6148,10 @@ Return Value:
                                   UpdateMappingPairs,
                                   Add2Ptr(Attribute, AttributeOffset),
                                   Attribute->RecordLength - AttributeOffset,
-                                  LogVcn,
+                                  LogOffset,
                                   RecordOffset,
                                   AttributeOffset,
-                                  Vcb->ClustersPerFileRecordSegment );
+                                  Vcb->BytesPerFileRecordSegment );
                 }
 
                 //
@@ -6322,10 +6324,10 @@ Return Value:
                           Noop,
                           NULL,
                           0,
-                          Vcn,
+                          LlBytesFromClusters( Vcb, Vcn ),
                           0,
                           0,
-                          Vcb->ClustersPerFileRecordSegment );
+                          Vcb->BytesPerFileRecordSegment );
 
             //
             //  Finally, we have to add the entry to the attribute list.
@@ -6526,10 +6528,10 @@ Return Value:
                           UpdateMappingPairs,
                           Add2Ptr(Attribute, AttributeOffset),
                           Attribute->RecordLength - AttributeOffset,
-                          NtfsMftVcn(Context, Vcb),
+                          NtfsMftOffset(Context),
                           RecordOffset,
                           AttributeOffset,
-                          Vcb->ClustersPerFileRecordSegment );
+                          Vcb->BytesPerFileRecordSegment );
         }
 
         //
@@ -7367,6 +7369,7 @@ Return Value:
         }
 
     try_exit:  NOTHING;
+
     } finally {
 
         DebugUnwind( NtfsUpdateDuplicateInfo );
@@ -9325,8 +9328,16 @@ Return Value:
                 if (Vcb->FileRecordsPerCluster == 0) {
                     MinimumVcn = (NextIndex + 1) << Vcb->MftToClusterShift;
                 } else {
+                    //
+                    //  MicroNT FRS<cluster: Index->Vcn is divide-by-FRPC
+                    //  (right shift), not multiply.  NT 4's signed-shift
+                    //  convention had MftToClusterShift = -log2(FRPC) and
+                    //  used `<<` both directions; our backport carries
+                    //  the magnitude in MftToClusterShift so we must flip
+                    //  to `>>` here.  The (+ FRPC - 1) is ceiling rounding.
+                    //
                     MinimumVcn = (NextIndex + Vcb->FileRecordsPerCluster - 1)
-                                 << Vcb->MftToClusterShift;
+                                 >> Vcb->MftToClusterShift;
                 }
 
                 ReplaceFileRecord = TRUE;
@@ -9456,8 +9467,12 @@ Return Value:
                 if (Vcb->FileRecordsPerCluster == 0) {
                     MinimumVcn = NextIndex << Vcb->MftToClusterShift;
                 } else {
+                    //
+                    //  MicroNT FRS<cluster: same Index->Vcn flip as the
+                    //  earlier site at line 9361 (was: `<<`, must be `>>`).
+                    //
                     MinimumVcn = (NextIndex + Vcb->FileRecordsPerCluster - 1)
-                                 << Vcb->MftToClusterShift;
+                                 >> Vcb->MftToClusterShift;
                 }
             }
 
@@ -11812,10 +11827,10 @@ Return Value:
                           CreateAttribute,
                           Attribute,
                           Attribute->RecordLength,
-                          NtfsMftVcn(Context, Vcb),
+                          NtfsMftOffset(Context),
                           (PCHAR)Attribute - (PCHAR)FileRecord1,
                           0,
-                          Vcb->ClustersPerFileRecordSegment );
+                          Vcb->BytesPerFileRecordSegment );
 
             //
             //  Remember the old position for the CreateAttributeList
@@ -11838,10 +11853,10 @@ Return Value:
                       Noop,
                       NULL,
                       0,
-                      Vcn2,
+                      LlBytesFromClusters( Vcb, Vcn2 ),
                       0,
                       0,
-                      Vcb->ClustersPerFileRecordSegment );
+                      Vcb->BytesPerFileRecordSegment );
 
         //
         //  Finally, create the attribute list attribute if needed.
@@ -12274,10 +12289,10 @@ Return Value:
                                          Noop,
                                          NULL,
                                          0,
-                                         Vcn2,
+                                         LlBytesFromClusters( Vcb, Vcn2 ),
                                          0,
                                          0,
-                                         Vcb->ClustersPerFileRecordSegment );
+                                         Vcb->BytesPerFileRecordSegment );
 
         FileRecord1->Lsn = NtfsWriteLog( IrpContext,
                                          Vcb->MftScb,
@@ -12288,10 +12303,10 @@ Return Value:
                                          WriteEndOfFileRecordSegment,
                                          Attribute1,
                                          SizeToMove,
-                                         NtfsMftVcn(Context, Vcb),
+                                         NtfsMftOffset(Context),
                                          CurrentOffset,
                                          0,
-                                         Vcb->ClustersPerFileRecordSegment );
+                                         Vcb->BytesPerFileRecordSegment );
 
         NtfsRestartWriteEndOfFileRecord( IrpContext,
                                          FileRecord1,

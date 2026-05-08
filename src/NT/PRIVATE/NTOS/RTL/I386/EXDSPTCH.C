@@ -138,6 +138,24 @@ Return Value:
             return FALSE;
         } else {
 
+#if NTOS_KERNEL_RUNTIME
+            //
+            // SEH chain integrity guard (kernel build only).  Handler
+            // must point into kernel code (or HAL/driver code).  Anything
+            // at or above 0xFB000000 is heap data masquerading as code -
+            // catch it here rather than letting
+            // RtlpExecuteHandlerForException do `call ecx` against pool
+            // and #UD into KiSystemFatalException.
+            //
+
+            if ((ULONG)RegistrationPointer->Handler >= 0xFB000000) {
+                KeBugCheckEx(0xCAFE5E1F,
+                             (ULONG)RegistrationPointer, 5,
+                             (ULONG)RegistrationPointer->Handler,
+                             ExceptionRecord->ExceptionCode);
+            }
+#endif
+
             //
             // The handler must be executed by calling another routine
             // that is written in assembler. This is required because

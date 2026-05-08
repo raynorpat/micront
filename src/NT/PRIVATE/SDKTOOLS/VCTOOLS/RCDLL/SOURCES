@@ -4,8 +4,10 @@ MINORCOMP=resources
 TARGETNAME=rcdll
 TARGETPATH=obj
 TARGETTYPE=DYNLINK
-TARGETLIBS=$(BASEDIR)\public\sdk\lib\*\advapi32.lib    \
-            $(BASEDIR)\public\sdk\lib\*\kernel32.lib
+# MicroNT: dropped advapi32.lib from upstream TARGETLIBS — RCDLL has
+# no advapi32 call sites (verified: no Reg*, Crypt*, IsTextUnicode,
+# etc.).  The lib was a stale upstream dependency.
+TARGETLIBS=$(BASEDIR)\public\sdk\lib\*\kernel32.lib
 
 DLLBASE=0x40000000
 DLLENTRY=LibMain

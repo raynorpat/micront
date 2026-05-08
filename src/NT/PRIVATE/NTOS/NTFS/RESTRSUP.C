@@ -729,10 +729,10 @@ Return Value:
                                   CompensationLogRecord,
                                   (PVOID)&UndoNextLsn,
                                   0,
-                                  LogRecord->TargetVcn,
+                                  LlBytesFromClusters( Vcb, LogRecord->TargetVcn ) + ((LONGLONG)LogRecord->ClusterBlockOffset << DEFAULT_INDEX_BLOCK_BYTE_SHIFT),
                                   LogRecord->RecordOffset,
                                   LogRecord->AttributeOffset,
-                                  LogRecord->LcnsToFollow );
+                                  BytesFromClusters( Vcb, LogRecord->LcnsToFollow ));
 
                     if (PageLsn != NULL) {
                         *PageLsn = UndoRecordLsn;

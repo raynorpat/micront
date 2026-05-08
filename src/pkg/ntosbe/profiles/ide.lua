@@ -415,6 +415,12 @@ function M.disk_files(paths, list_tree)
         { dest = "pkg/msvc20/RCPP.ERR",     src = msvc .. "/RCPP.ERR"     },
         { dest = "pkg/msvc20/LINK.EXE",     src = msvc .. "/LINK.EXE"     },
         { dest = "pkg/msvc20/LINK.ERR",     src = msvc .. "/LINK.ERR"     },
+        -- CVPACK is auto-invoked by LINK on every CV-debug link (every
+        -- link once --syms drives /Z7 + /debug:cv); without it on PATH
+        -- the in-OS LINK fails with "LNK4027: CVPACK error" exit 0xff.
+        -- Stage alongside LINK with its message-table data file.
+        { dest = "pkg/msvc20/CVPACK.EXE",   src = msvc .. "/CVPACK.EXE"   },
+        { dest = "pkg/msvc20/cvpack.err",   src = msvc .. "/cvpack.err"   },
         { dest = "pkg/msvc20/CL.EXE",       src = msvc .. "/CL.EXE"       },
         { dest = "pkg/msvc20/CL386.EXE",    src = msvc .. "/CL386.EXE"    },
         { dest = "pkg/msvc20/CL.ERR",       src = msvc .. "/CL.ERR"       },

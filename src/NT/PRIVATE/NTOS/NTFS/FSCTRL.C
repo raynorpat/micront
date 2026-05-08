@@ -4247,10 +4247,10 @@ Return Value:
                             UpdateResidentValue,
                             Attribute,
                             AttributeSizeChange,
-                            NtfsMftVcn(&AttrContext, Vcb),
+                            NtfsMftOffset( &AttrContext ),
                             PtrOffset(NtfsContainingFileRecord(&AttrContext), Attribute),
                             0,
-                            Vcb->ClustersPerFileRecordSegment );
+                            Vcb->BytesPerFileRecordSegment );
 
         //
         //  Change the attribute by calling the same routine called at restart.

@@ -173,8 +173,10 @@ local function build_sysfile_record(spec)
 
     -- $SECURITY_DESCRIPTOR (instance 2) — required by NT 3.5; without
     -- it NtfsLoadSecurityDescriptor raises STATUS_FILE_CORRUPT_ERROR
-    -- on any file open.  Use the World/NULL-DACL SD = "everyone has
-    -- all access" for boot-volume simplicity.
+    -- on any file open.  Use an inheritable allow-all DACL so newly-
+    -- created files inherit the same grant via SeAssignSecurity (a
+    -- NULL DACL grants all on direct check but yields STATUS_NO_INHERITANCE,
+    -- leaving new files at the mercy of the boot token's default DACL).
     rec:append(M.attrs.resident{
         type_code = M.attrs.TYPE_SECURITY_DESCRIPTOR,
         value     = M.attrs.world_security_descriptor(),
@@ -601,6 +603,10 @@ local function build_mft_records(layout)
     local mft_bitmap = build_mft_bitmap(layout.mft_records_total,
                                         #layout.node_list)
     local mft_data_bytes = layout.mft_records_total * M.MFT_RECORD_SIZE
+    -- $MFT/$BITMAP is nonresident: see the layout comment above
+    -- mft_bitmap_lcn for why.  data_size is the live byte count; the
+    -- kernel zero-extends within the cluster as it sets new bits, and
+    -- grows the allocation when it crosses a cluster boundary.
     records[1] = build_sysfile_record{
         file_number     = 0,
         name            = '$MFT',
@@ -609,10 +615,13 @@ local function build_mft_records(layout)
         file_size       = mft_data_bytes,
         extra_attrs     = {
             nrdata(layout.mft_lcn, layout.mft_clusters, 3, mft_data_bytes),
-            M.attrs.resident{
-                type_code = M.attrs.TYPE_BITMAP,
-                value     = mft_bitmap,
-                instance  = 4,
+            M.attrs.nonresident_single_extent{
+                type_code      = M.attrs.TYPE_BITMAP,
+                start_lcn      = layout.mft_bitmap_lcn,
+                cluster_count  = layout.mft_bitmap_clusters,
+                allocated_size = layout.mft_bitmap_clusters * cluster_size,
+                data_size      = #mft_bitmap,
+                instance       = 4,
             },
         },
         instance_start  = 5,
@@ -819,6 +828,7 @@ local function build_cluster_bitmap(layout)
     set(layout.attrdef_lcn,      1)                           -- $AttrDef
     set(layout.upcase_lcn,       layout.upcase_clusters)      -- $UpCase
     set(layout.bitmap_lcn,       layout.bitmap_clusters)      -- $Bitmap
+    set(layout.mft_bitmap_lcn,   layout.mft_bitmap_clusters)  -- $MFT/$BITMAP
 
     -- User nodes: claim their clusters.
     for _, n in ipairs(layout.node_list) do
@@ -1104,13 +1114,24 @@ local function compute_layout(opts)
                                                     cluster_size))
 
     -- Sequential allocation: system structures first.
+    -- $MFT/$BITMAP gets its own cluster so the attribute is nonresident
+    -- from format time.  NT 4.0 onward assumes nonresident throughout
+    -- the bitmap-extend code paths; the resident form would require
+    -- shuffling the FRS layout on every grow, which is contention-
+    -- and lifetime-hostile (cached attribute pointers go stale across
+    -- the move, and the FRS-exclusive lock blocks readers on every
+    -- create).  Single cluster gives us 8*cluster_size bits which is
+    -- plenty of headroom — the kernel will extend nonresidently when
+    -- it fills.
+    local mft_bitmap_clusters = 1
     local lcn = boot_clusters
-    local mft_lcn = lcn;       lcn = lcn + mft_clusters
-    local mft_mirr_lcn = lcn;  lcn = lcn + mft_mirr_clusters
-    local log_lcn = lcn;       lcn = lcn + log_clusters
-    local attrdef_lcn = lcn;   lcn = lcn + 1
-    local upcase_lcn = lcn;    lcn = lcn + upcase_clusters
-    local bitmap_lcn = lcn;    lcn = lcn + bitmap_clusters
+    local mft_lcn = lcn;        lcn = lcn + mft_clusters
+    local mft_mirr_lcn = lcn;   lcn = lcn + mft_mirr_clusters
+    local log_lcn = lcn;        lcn = lcn + log_clusters
+    local attrdef_lcn = lcn;    lcn = lcn + 1
+    local upcase_lcn = lcn;     lcn = lcn + upcase_clusters
+    local bitmap_lcn = lcn;     lcn = lcn + bitmap_clusters
+    local mft_bitmap_lcn = lcn; lcn = lcn + mft_bitmap_clusters
 
     -- User files / dirs: walk the flattened tree.  For files larger
     -- than the resident threshold, allocate clusters contiguously
@@ -1201,6 +1222,8 @@ local function compute_layout(opts)
         bitmap_lcn         = bitmap_lcn,
         bitmap_clusters    = bitmap_clusters,
         bitmap_data_bytes  = bitmap_data_bytes,
+        mft_bitmap_lcn     = mft_bitmap_lcn,
+        mft_bitmap_clusters= mft_bitmap_clusters,
 
         node_list          = node_list,
         root_node          = opts.root,
@@ -1406,6 +1429,13 @@ function NtfsImage:build(platform, ctx)
     -- 7. Cluster bitmap.
     local cb = build_cluster_bitmap(layout)
     bcopy("bitmap", layout.bitmap_lcn * layout.cluster_size, cb, #cb)
+
+    -- 7b. $MFT/$BITMAP — same bytes the FRS-resident form held in
+    -- pre-NT4 layouts, now in its own cluster so bitmap-extend writes
+    -- never touch FRS 0's attribute layout.
+    local mft_bm = build_mft_bitmap_for_layout(layout)
+    bcopy("mft_bitmap", layout.mft_bitmap_lcn * layout.cluster_size,
+          mft_bm, #mft_bm)
 
     -- 8. User node data:
     --    - Files with non-resident $DATA: write bytes to allocated clusters.

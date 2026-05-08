@@ -6709,7 +6709,7 @@ Return Value:
                 } else {
 
                     (VOID)
-                    NtfsWriteLog( IrpContext, Scb, NULL, HotFix, NULL, 0, Noop, NULL, 0, BadVcn, 0, 0, 1 );
+                    NtfsWriteLog( IrpContext, Scb, NULL, HotFix, NULL, 0, Noop, NULL, 0, LlBytesFromClusters( Vcb, BadVcn ), 0, 0, Vcb->BytesPerCluster );
 
                     //
                     //  And we have to commit that one, too.

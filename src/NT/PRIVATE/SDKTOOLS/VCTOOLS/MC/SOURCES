@@ -38,4 +38,7 @@ SOURCES=mc.c        \
 
 UMTYPE=console
 
-UMLIBS=$(BASEDIR)\public\sdk\lib\*\user32.lib
+# MicroNT: dropped user32.lib from upstream UMLIBS — MC's sources
+# don't actually call any user32 function (verified: no wsprintf /
+# MessageBox / etc.), so the link line was carrying a dead dep.
+UMLIBS=

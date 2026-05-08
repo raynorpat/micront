@@ -574,6 +574,26 @@ Return Value:
             (VOID)NtfsReserveMftRecord( IrpContext,
                                         Vcb,
                                         &AttrContext );
+
+            //
+            //  NtfsReserveMftRecord can extend the bitmap attribute,
+            //  which may relocate it within the MFT FRS.  Even with the
+            //  underlying page kept alive (mapped or pinned), the
+            //  cached AttrContext->FoundAttribute.Attribute pointer
+            //  may now point at the wrong byte offset inside the FRS.
+            //  Re-lookup the attribute so the cached pointer is fresh
+            //  for NtfsAllocateRecord / NtfsAllocateMftReservedRecord.
+            //
+            NtfsCleanupAttributeContext( IrpContext, &AttrContext );
+            NtfsInitializeAttributeContext( &AttrContext );
+            FoundAttribute = NtfsLookupAttributeByCode( IrpContext,
+                                                        Vcb->MftScb->Fcb,
+                                                        &Vcb->MftScb->Fcb->FileReference,
+                                                        $BITMAP,
+                                                        &AttrContext );
+            if (!FoundAttribute) {
+                NtfsRaiseStatus( IrpContext, STATUS_DISK_CORRUPT_ERROR, NULL, NULL );
+            }
         }
 
         //
@@ -719,10 +739,10 @@ Return Value:
                                     DeallocateFileRecordSegment,
                                     NULL,
                                     0,
-                                    Cluster,
+                                    FileRecordOffset,
                                     0,
                                     0,
-                                    Vcb->ClustersPerFileRecordSegment );
+                                    Vcb->BytesPerFileRecordSegment );
 
     RtlZeroMemory( &FileRecord->ReferenceCount,
                    Vcb->BytesPerFileRecordSegment - FIELD_OFFSET( FILE_RECORD_SEGMENT_HEADER, ReferenceCount ));
@@ -891,10 +911,10 @@ Return Value:
                                             InitializeFileRecordSegment,
                                             FileRecord,
                                             PtrOffset(FileRecord, &FileRecord->Flags) + 4,
-                                            FileOffset >> Vcb->ClusterShift,
+                                            FileOffset,
                                             0,
                                             0,
-                                            Vcb->ClustersPerFileRecordSegment );
+                                            Vcb->BytesPerFileRecordSegment );
 
             //
             //  We increment the sequence count in the file record and clear
@@ -1346,10 +1366,10 @@ Return Value:
                   UndoOperation,
                   UndoBuffer,
                   UndoLength,
-                  Vcn,
+                  LlBytesFromClusters( Vcb, Vcn ),
                   0,
                   0,
-                  Vcb->ClustersPerFileRecordSegment );
+                  Vcb->BytesPerFileRecordSegment );
 
     return;
 }

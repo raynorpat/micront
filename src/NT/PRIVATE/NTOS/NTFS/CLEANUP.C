@@ -222,6 +222,37 @@ Return Value:
     USHORT TotalLinkAdj = 0;
     PLIST_ENTRY Links;
 
+    //
+    //  SEH-runtime workaround.  After the inner try/except wrapping
+    //  NtfsUpdateDuplicateInfo below, fs:[0] does NOT equal this
+    //  function's own EH3 frame any more.  When NtfsCommonCleanup
+    //  later returns, the compiler-emitted __SEH_epilog pops what it
+    //  thinks is our frame off fs:[0] but actually pops a stranded
+    //  inner frame, leaving fs:[0] pointing into dead stack memory.
+    //  The next exception (often several t.raises calls later) walks
+    //  the corrupt chain and KiValidateExceptionChain trips
+    //  KI_SEH_GUARD_BUGCHECK (0xCAFE5E1F, arg2=3) — the bad frame's
+    //  Handler reads as 0x00000246 (an EFLAGS value left on stack).
+    //
+    //  Save fs:[0] at function entry, restore explicitly post-inner-
+    //  except.  Root cause unidentified — somewhere in the chain
+    //  _except_handler2 → _global_unwind2 → RtlUnwind → ZwContinue
+    //  → specific_handler thunk an extra frame leaks on fs:[0].  All
+    //  candidates live in libcntpr.lib (pre-built kernel CRT) +
+    //  EXDSPTCH.C; NT4's CLEANUP.C has no such workaround so the bug
+    //  is in our linked binary or compiler-emitted thunk, not in
+    //  NTFS itself.  See memory note project_seh_global_unwind2_bug
+    //  for the suspect list and a debugging plan.  If another NTFS
+    //  function with deep try/except over an SEH-heavy callee starts
+    //  bugchecking the same way, replicate this pattern there until
+    //  the underlying SEH leak is fixed.
+    //
+    ULONG _saved_fs0;
+    __asm {
+        mov eax, dword ptr fs:[0]
+        mov _saved_fs0, eax
+    }
+
     ASSERT_IRP_CONTEXT( IrpContext );
     ASSERT_IRP( Irp );
 
@@ -1632,6 +1663,16 @@ Return Value:
                       : EXCEPTION_EXECUTE_HANDLER ) {
 
                 NOTHING;
+            }
+
+            //
+            //  Restore fs:[0] = our function's EH3 frame (saved at
+            //  entry).  See the top-of-function block for the SEH
+            //  chain corruption this prevents.
+            //
+            __asm {
+                mov eax, _saved_fs0
+                mov dword ptr fs:[0], eax
             }
 
             UpdateDuplicateInfo = TRUE;

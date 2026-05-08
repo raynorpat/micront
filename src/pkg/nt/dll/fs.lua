@@ -213,6 +213,20 @@ local M = {}
 M.FILE_GENERIC_READ            = 0x00120089
 M.FILE_GENERIC_WRITE           = 0x00120116
 
+-- Specific-rights bits within the file generic mapping.  Useful for
+-- callers that want a finer-grained access mask (e.g. tests that open
+-- with FILE_READ_DATA only to verify FILE_READ_ATTRIBUTES isn't
+-- implicitly granted).  Composite GENERIC_READ / _WRITE above are
+-- preferred for normal callers.
+M.FILE_READ_DATA               = 0x00000001
+M.FILE_WRITE_DATA              = 0x00000002
+M.FILE_APPEND_DATA             = 0x00000004
+M.FILE_READ_EA                 = 0x00000008
+M.FILE_WRITE_EA                = 0x00000010
+M.FILE_EXECUTE                 = 0x00000020
+M.FILE_READ_ATTRIBUTES         = 0x00000080
+M.FILE_WRITE_ATTRIBUTES        = 0x00000100
+
 -- Standard rights commonly OR'd with the per-class bits above.
 M.DELETE                       = 0x00010000
 M.SYNCHRONIZE                  = 0x00100000

@@ -2371,10 +2371,10 @@ Return Value:
                           ClearBitsInNonresidentBitMap,
                           &BitmapRange,
                           sizeof(BITMAP_RANGE),
-                          BaseLcn >> (CHAR)(Vcb->ClusterShift + 3),
+                          Int64ShraMod32( BaseLcn, 3 ),
                           0,
                           0,
-                          ClustersFromBytes(Vcb, Bitmap.SizeOfBitMap >> 3) );
+                          Bitmap.SizeOfBitMap >> 3 );
 
             //
             //  Now set the bits by calling the same routine used at restart.
@@ -2583,10 +2583,10 @@ Return Value:
                           SetBitsInNonresidentBitMap,
                           &BitmapRange,
                           sizeof(BITMAP_RANGE),
-                          BaseLcn >> (Vcb->ClusterShift + 3),
+                          Int64ShraMod32( BaseLcn, 3 ),
                           0,
                           0,
-                          ClustersFromBytes(Vcb, Bitmap.SizeOfBitMap >> 3) );
+                          Bitmap.SizeOfBitMap >> 3 );
 
 
             //
@@ -4667,6 +4667,7 @@ Return Value:
     //
 
     DataScb = RecordAllocationContext->DataScb;
+
     NtfsAcquireExclusiveScb( IrpContext, DataScb );
 
     try {
@@ -5277,10 +5278,10 @@ Return Value:
                                          ClearBitsInNonresidentBitMap,
                                          &BitmapRange,
                                          sizeof(BITMAP_RANGE),
-                                         Vcn,
+                                         LlBytesFromClusters( Vcb, Vcn ),
                                          0,
                                          0,
-                                         ClustersFromBytes( Vcb, Bitmap.SizeOfBitMap / 8 ));
+                                         SizeToPin );
 
                     NtfsRestartSetBitsInBitMap( IrpContext,
                                                 &Bitmap,
@@ -5669,10 +5670,10 @@ Return Value:
                                          SetBitsInNonresidentBitMap,
                                          &BitmapRange,
                                          sizeof(BITMAP_RANGE),
-                                         Vcn,
+                                         LlBytesFromClusters( Vcb, Vcn ),
                                          0,
                                          0,
-                                         ClustersFromBytes(Vcb, SizeToPin) );
+                                         SizeToPin );
                 }
 
                 //
@@ -6043,79 +6044,114 @@ Return Value:
 
         BitOffset = FIRST_USER_FILE_NUMBER;
 
-        for (((ULONG)Vcn) = 0;
-             ((ULONG)Vcn) < BitmapClusters;
-             ((ULONG)Vcn) += Vcb->ClustersPerPage) {
+        if (BitmapScb == NULL) {
 
             //
-            //  Remember the offset of the start of this page.
+            //  Resident bitmap: the $MFT $Bitmap fits in the attribute
+            //  record, so there is no stream to map and the data lives
+            //  directly in the attribute value.  Mirrors the resident
+            //  branch of NtfsAllocateRecord above.  Without this branch
+            //  the loop below would call NtfsMapStream with a NULL Scb
+            //  and AV at the AllocationSize comparison (offset 0x12).
             //
 
-            PageOffset = BytesFromClusters( Vcb, ((ULONG)Vcn) );
+            PUCHAR ResidentBitmap = (PUCHAR) NtfsAttributeValue( NtfsFoundAttribute( BitmapAttribute ));
 
-            //
-            //  Calculate the size to read from this point to the end of
-            //  bitmap, or a page, whichever is less.
-            //
+            PageOffset = 0;
 
-            SizeToPin = ((ULONG)BitmapSizeInBytes) - PageOffset;
-
-            if (SizeToPin > PAGE_SIZE) { SizeToPin = PAGE_SIZE; }
-
-            //
-            //  Unpin any Bcb from a previous loop.
-            //
-
-            if (StuffAdded) { NtfsFreePagedPool( Bitmap.Buffer ); StuffAdded = FALSE; }
-
-            NtfsUnpinBcb( IrpContext, &BitmapBcb );
-
-            //
-            //  Read the desired bitmap page.
-            //
-
-
-            NtfsMapStream( IrpContext,
-                           BitmapScb,
-                           (LONGLONG)PageOffset,
-                           SizeToPin,
-                           &BitmapBcb,
-                           &BitmapBuffer );
-
-            //
-            //  Initialize the bitmap and search for a free bit.
-            //
-
-            RtlInitializeBitMap( &Bitmap, BitmapBuffer, SizeToPin * 8 );
+            RtlInitializeBitMap( &Bitmap,
+                                 (PULONG) ResidentBitmap,
+                                 *CurrentBitmapSize );
 
             StuffAdded = NtfsAddDeallocatedRecords( IrpContext,
                                                     Vcb,
                                                     DataScb,
-                                                    PageOffset * 8,
+                                                    0,
                                                     &Bitmap );
 
             Index = RtlFindClearBits( &Bitmap, 1, BitOffset );
 
-            //
-            //  If we found something, then leave the loop.
-            //
-
             if (Index != 0xffffffff) {
 
-                //
-                //  Remember the byte containing the reserved index.
-                //
-
                 BitmapByte = ((PCHAR) Bitmap.Buffer)[Index / 8];
-
-                break;
             }
 
-            //
-            //  For each subsequent page the page offset is zero.
-            //
+        } else {
 
-            BitOffset = 0;
+            for (((ULONG)Vcn) = 0;
+                ((ULONG)Vcn) < BitmapClusters;
+                ((ULONG)Vcn) += Vcb->ClustersPerPage) {
+
+                //
+                //  Remember the offset of the start of this page.
+                //
+
+                PageOffset = BytesFromClusters( Vcb, ((ULONG)Vcn) );
+
+                //
+                //  Calculate the size to read from this point to the end of
+                //  bitmap, or a page, whichever is less.
+                //
+
+                SizeToPin = ((ULONG)BitmapSizeInBytes) - PageOffset;
+
+                if (SizeToPin > PAGE_SIZE) { SizeToPin = PAGE_SIZE; }
+
+                //
+                //  Unpin any Bcb from a previous loop.
+                //
+
+                if (StuffAdded) { NtfsFreePagedPool( Bitmap.Buffer ); StuffAdded = FALSE; }
+
+                NtfsUnpinBcb( IrpContext, &BitmapBcb );
+
+                //
+                //  Read the desired bitmap page.
+                //
+
+
+                NtfsMapStream( IrpContext,
+                            BitmapScb,
+                            (LONGLONG)PageOffset,
+                            SizeToPin,
+                            &BitmapBcb,
+                            &BitmapBuffer );
+
+                //
+                //  Initialize the bitmap and search for a free bit.
+                //
+
+                RtlInitializeBitMap( &Bitmap, BitmapBuffer, SizeToPin * 8 );
+
+                StuffAdded = NtfsAddDeallocatedRecords( IrpContext,
+                                                        Vcb,
+                                                        DataScb,
+                                                        PageOffset * 8,
+                                                        &Bitmap );
+
+                Index = RtlFindClearBits( &Bitmap, 1, BitOffset );
+
+                //
+                //  If we found something, then leave the loop.
+                //
+
+                if (Index != 0xffffffff) {
+
+                    //
+                    //  Remember the byte containing the reserved index.
+                    //
+
+                    BitmapByte = ((PCHAR) Bitmap.Buffer)[Index / 8];
+
+                    break;
+                }
+
+                //
+                //  For each subsequent page the page offset is zero.
+                //
+
+                BitOffset = 0;
+            }
         }
 
         //
@@ -6132,6 +6168,29 @@ Return Value:
             if (StuffAdded) { NtfsFreePagedPool( Bitmap.Buffer ); StuffAdded = FALSE; }
 
             NtfsUnpinBcb( IrpContext, &BitmapBcb );
+
+            //
+            //  Bitmap full — extend the nonresident attribute by
+            //  BITMAP_EXTEND_GRANULARITY bits.  We don't handle a
+            //  resident $MFT/$BITMAP here: mkntfs writes it
+            //  nonresident from format time and NT 4.0 onward
+            //  preserves that invariant (resident-extend would force
+            //  FRS-exclusive locking on every create and invalidate
+            //  cached attribute pointers across the move — the same
+            //  class of bug as the NT 4.0 $INDEX_ROOT byte-form
+            //  WriteLog backport addressed).  If we ever encounter a
+            //  volume with a resident $MFT/$BITMAP, treat it as
+            //  corrupt rather than crash; chkdsk equivalent can
+            //  rewrite it nonresident.
+            //
+
+            if (BitmapScb == NULL) {
+
+                NtfsRaiseStatus( IrpContext,
+                                 STATUS_DISK_CORRUPT_ERROR,
+                                 NULL,
+                                 NULL );
+            }
 
             //
             //  Calculate the page offset for the next page to pin.
@@ -6575,10 +6634,10 @@ Return Value:
                              ClearBitsInNonresidentBitMap,
                              &BitmapRange,
                              sizeof(BITMAP_RANGE),
-                             Vcn,
+                             LlBytesFromClusters( Vcb, Vcn ),
                              0,
                              0,
-                             ClustersFromBytes( Vcb, Bitmap.SizeOfBitMap / 8 ));
+                             SizeToPin );
 
         NtfsRestartSetBitsInBitMap( IrpContext, &Bitmap, RelativeIndex, 1 );
 

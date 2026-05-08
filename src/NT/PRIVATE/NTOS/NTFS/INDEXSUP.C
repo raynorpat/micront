@@ -742,10 +742,10 @@ Return Value:
                               UpdateFileNameAllocation,
                               &FileNameInIndex->Info,
                               sizeof(DUPLICATED_INFORMATION),
-                              IndexBuffer->ThisVcn,
+                              LlBytesFromClusters(Scb->Vcb, IndexBuffer->ThisVcn),
                               0,
                               (PCHAR)IndexEntry - (PCHAR)IndexBuffer,
-                              Scb->ScbType.Index.ClustersPerIndexBuffer );
+                              Scb->ScbType.Index.BytesPerIndexBuffer );
 
                 //
                 //  Now call the Restart routine to do it.
@@ -842,10 +842,10 @@ Return Value:
                               UpdateFileNameRoot,
                               &FileNameInIndex->Info,
                               sizeof(DUPLICATED_INFORMATION),
-                              NtfsMftVcn(Context, Vcb),
+                              NtfsMftOffset(Context),
                               (PCHAR)Attribute - (PCHAR)FileRecord,
                               (PCHAR)IndexEntry - (PCHAR)Attribute,
-                              Vcb->ClustersPerFileRecordSegment );
+                              Vcb->BytesPerFileRecordSegment );
 
                 if (ARGUMENT_PRESENT( QuickIndex )) {
 
@@ -890,10 +890,10 @@ Return Value:
                               UpdateFileNameAllocation,
                               &FileNameInIndex->Info,
                               sizeof(DUPLICATED_INFORMATION),
-                              IndexBuffer->ThisVcn,
+                              LlBytesFromClusters(Scb->Vcb, IndexBuffer->ThisVcn),
                               0,
                               (PCHAR)Sp->IndexEntry - (PCHAR)IndexBuffer,
-                              Scb->ScbType.Index.ClustersPerIndexBuffer );
+                              Scb->ScbType.Index.BytesPerIndexBuffer );
 
                 if (ARGUMENT_PRESENT( QuickIndex )) {
 
@@ -922,6 +922,7 @@ Return Value:
         }
 
     try_exit:  NOTHING;
+
     } finally{
 
         DebugUnwind( NtfsUpdateFileNameInIndex );
@@ -4201,10 +4202,10 @@ Return Value:
                       DeleteIndexEntryRoot,
                       NULL,
                       0,
-                      NtfsMftVcn(Context, Vcb),
+                      NtfsMftOffset(Context),
                       (PCHAR)Attribute - (PCHAR)FileRecord,
                       (PCHAR)BeforeIndexEntry - (PCHAR)Attribute,
-                      Vcb->ClustersPerFileRecordSegment );
+                      Vcb->BytesPerFileRecordSegment );
 
     } finally {
 
@@ -4536,10 +4537,10 @@ Return Value:
                       Noop,
                       NULL,
                       0,
-                      IndexBuffer->ThisVcn,
+                      LlBytesFromClusters(Scb->Vcb, IndexBuffer->ThisVcn),
                       0,
                       0,
-                      Scb->ScbType.Index.ClustersPerIndexBuffer );
+                      Scb->ScbType.Index.BytesPerIndexBuffer );
 
         //
         //  Remember if we extended the valid data for this Scb.
@@ -4713,10 +4714,10 @@ Return Value:
                       DeleteIndexEntryAllocation,
                       NULL,
                       0,
-                      IndexBuffer->ThisVcn,
+                      LlBytesFromClusters(Scb->Vcb, IndexBuffer->ThisVcn),
                       0,
                       (PCHAR)BeforeIndexEntry - (PCHAR)IndexBuffer,
-                      Scb->ScbType.Index.ClustersPerIndexBuffer );
+                      Scb->ScbType.Index.BytesPerIndexBuffer );
 
         //
         //  Update the quick index buffer if we have it.
@@ -5022,10 +5023,10 @@ Return Value:
                       Noop,
                       NULL,
                       0,
-                      IndexBuffer2->ThisVcn,
+                      LlBytesFromClusters(Scb->Vcb, IndexBuffer2->ThisVcn),
                       0,
                       0,
-                      Scb->ScbType.Index.ClustersPerIndexBuffer );
+                      Scb->ScbType.Index.BytesPerIndexBuffer );
 
         //
         //  Remember if we extended the valid data for this Scb.
@@ -5072,10 +5073,10 @@ Return Value:
                       WriteEndOfIndexBuffer,
                       MiddleIndexEntry,
                       MiddleIndexEntry->Length + LengthToMove,
-                      IndexBuffer->ThisVcn,
+                      LlBytesFromClusters(Scb->Vcb, IndexBuffer->ThisVcn),
                       0,
                       (PCHAR)MiddleIndexEntry - (PCHAR)IndexBuffer,
-                      Scb->ScbType.Index.ClustersPerIndexBuffer );
+                      Scb->ScbType.Index.BytesPerIndexBuffer );
 
         //
         //  Now call the restart routine to write the new end of the index
@@ -5180,10 +5181,10 @@ Return Value:
                           SetIndexEntryVcnRoot,
                           &IndexBuffer->ThisVcn,
                           sizeof(VCN),
-                          NtfsMftVcn(Context, Vcb),
+                          NtfsMftOffset(Context),
                           (PCHAR)Attribute - (PCHAR)FileRecord,
                           (PCHAR)Sp->IndexEntry - (PCHAR)Attribute,
-                          Vcb->ClustersPerFileRecordSegment );
+                          Vcb->BytesPerFileRecordSegment );
 
         //
         //  Otherwise, our parent is also an Index Buffer.
@@ -5219,10 +5220,10 @@ Return Value:
                           SetIndexEntryVcnAllocation,
                           &IndexBuffer->ThisVcn,
                           sizeof(VCN),
-                          ParentIndexBuffer->ThisVcn,
+                          LlBytesFromClusters(Scb->Vcb, ParentIndexBuffer->ThisVcn),
                           0,
                           (PCHAR)Sp->IndexEntry - (PCHAR)ParentIndexBuffer,
-                          Scb->ScbType.Index.ClustersPerIndexBuffer );
+                          Scb->ScbType.Index.BytesPerIndexBuffer );
         }
 
         //
@@ -5814,10 +5815,10 @@ Return Value:
                       AddIndexEntryRoot,
                       IndexEntry,
                       IndexEntry->Length,
-                      NtfsMftVcn(Context, Vcb),
+                      NtfsMftOffset(Context),
                       (PCHAR)Attribute - (PCHAR)FileRecord,
                       (PCHAR)IndexEntry - (PCHAR)Attribute,
-                      Vcb->ClustersPerFileRecordSegment );
+                      Vcb->BytesPerFileRecordSegment );
 
         //
         //  Now call the same routine as Restart to actually delete it.
@@ -5866,10 +5867,10 @@ Return Value:
                       AddIndexEntryAllocation,
                       IndexEntry,
                       IndexEntry->Length,
-                      IndexBuffer->ThisVcn,
+                      LlBytesFromClusters(Scb->Vcb, IndexBuffer->ThisVcn),
                       0,
                       (PCHAR)IndexEntry - (PCHAR)IndexBuffer,
-                      Scb->ScbType.Index.ClustersPerIndexBuffer );
+                      Scb->ScbType.Index.BytesPerIndexBuffer );
 
         //
         //  Now call the same routine as Restart to delete the entry.
@@ -6223,10 +6224,10 @@ Return Value:
                               SetIndexEntryVcnRoot,
                               &NtfsIndexEntryVcn(NextEntry),
                               sizeof(VCN),
-                              NtfsMftVcn(Context, Vcb),
+                              NtfsMftOffset(Context),
                               (PCHAR)Attribute - (PCHAR)FileRecord,
                               (PCHAR)NextEntry - (PCHAR)Attribute,
-                              Vcb->ClustersPerFileRecordSegment );
+                              Vcb->BytesPerFileRecordSegment );
 
             //
             //  Otherwise, our parent is also an Index Buffer.
@@ -6258,10 +6259,10 @@ Return Value:
                               SetIndexEntryVcnAllocation,
                               &NtfsIndexEntryVcn(NextEntry),
                               sizeof(VCN),
-                              IndexBuffer->ThisVcn,
+                              LlBytesFromClusters(Scb->Vcb, IndexBuffer->ThisVcn),
                               0,
                               (PCHAR)NextEntry - (PCHAR)IndexBuffer,
-                              Scb->ScbType.Index.ClustersPerIndexBuffer );
+                              Scb->ScbType.Index.BytesPerIndexBuffer );
             }
 
             //

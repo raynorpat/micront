@@ -264,7 +264,7 @@ function M.main(opts)
         local extras = {...}
         targets[name] = function()
             if t_opts and t_opts.pre and not t_opts.pre() then return 1 end
-            local since = os.time()
+            local since = platform.now()
             local rc = run_nmake(dir, desc, extras, t_opts)
             if rc ~= 0 then return rc end
             -- Auto-scan: most components produce final binaries here.
@@ -325,11 +325,6 @@ function M.main(opts)
     nmake_target("vioser",     NTOS .. "/DD/VIOSER",     "VIOSER - virtio-console driver")
     nmake_target("vioinput",   NTOS .. "/DD/VIOINPUT",   "VIOINPUT - virtio-input keyboard/mouse driver")
 
-    -- ----- Tests -----
-    nmake_target("cowtest", NT_ROOT .. "/PRIVATE/TESTS/cowtest",
-                 "COWTEST - COW test program",
-                 { keep_umappl = true })
-
     -- ----- WINDOWS / BASE / CLIENT — kernel32.dll (the only Win32 lib) -----
     -- Lifted from NT 3.5 source under src/NT/PRIVATE/WINDOWS/.  Two
     -- static-lib dependencies (windows_base_rtl, windows_winnls) are
@@ -364,7 +359,7 @@ function M.main(opts)
     targets.windows_base_client = function()
         if targets.windows_base_rtl() ~= 0 then return 1 end
         if targets.windows_winnls()   ~= 0 then return 1 end
-        local since = os.time()
+        local since = platform.now()
         local rc = run_nmake(WIN .. "/BASE/CLIENT",
                          "WINDOWS/BASE/CLIENT - kernel32.dll",
                          { "makedll=1" })
@@ -484,7 +479,7 @@ function M.main(opts)
     targets.ntdll = function()
         -- DAYTONA needs an i386 subdir for the generated usrstubs.asm.
         mkdir_p(NTOS .. "/DLL/DAYTONA/i386")
-        local since = os.time()
+        local since = platform.now()
         local rc = run_nmake(NTOS .. "/DLL/DAYTONA",
                          "NTDLL - user-mode runtime library",
                          { "makedll=1" })
@@ -506,7 +501,7 @@ function M.main(opts)
     -- ----- HAL (DLL link step on top of hal.lib) --------------------------
     targets.hal = function()
         local hal_dir = NTOS .. "/NTHALS/HAL"
-        local since = os.time()
+        local since = platform.now()
         local rc = run_nmake(hal_dir, "HAL - MicroNT HAL (lib)")
         if rc ~= 0 then return rc end
 
@@ -547,7 +542,7 @@ function M.main(opts)
     targets.init = function()
         if targets.hal_stubs() ~= 0 then return 1 end
         if not ensure_bugcodes() then return 1 end
-        local since = os.time()
+        local since = platform.now()
         -- INIT's SOURCES depends on NTTEST=ntoskrnl reaching NMAKE so
         -- MAKEFILE.DEF selects the ntoskrnl.exe link rule.  Use the
         -- standard run_nmake with keep_nttest=true; this dispatches
@@ -595,6 +590,17 @@ function M.main(opts)
         log(">>> LINK.EXE rebuilt with error message resources")
         return 0
     end
+    -- LINK pulls five sibling .lib's together (CVTOMF / DISASM /
+    -- DISASM68 / STUBS / the COFF link itself).  PDB/DBI is shared
+    -- with cvpack so we deliberately leave it out of `clean:link` —
+    -- a separate `clean:cvpack` pass handles that one if needed.
+    clean_dirs.link = {
+        NT_ROOT .. "/PRIVATE/SDKTOOLS/VCTOOLS/LINK/CVTOMF",
+        NT_ROOT .. "/PRIVATE/SDKTOOLS/VCTOOLS/LINK/DISASM",
+        NT_ROOT .. "/PRIVATE/SDKTOOLS/VCTOOLS/LINK/DISASM68",
+        NT_ROOT .. "/PRIVATE/SDKTOOLS/VCTOOLS/LINK/STUBS",
+        NT_ROOT .. "/PRIVATE/SDKTOOLS/VCTOOLS/LINK/COFF",
+    }
 
     -- ----- MKMSG — message-resource compiler (host EXE).
     -- Tiny single-source tool; cvpack needs it to turn its msg.us /
@@ -853,14 +859,15 @@ function M.main(opts)
     -- of the historical tools/mkhive.py + tools/mkdisk.py pair).  Zero
     -- Python dependency on this path; everything in-tree.
     --
-    -- Layout selection via LAYOUT= env (default 'split-fat'):
-    --   single     — one FAT16 partition (ESP = system)
-    --   split-fat  — ESP FAT16 + system FAT16 (canonical)
-    --   split-ntfs — ESP FAT16 + system NTFS
+    -- Layout is fixed to 'split-fat' here (ESP FAT16 + system FAT16 —
+    -- the canonical shape).  Operators wanting a different layout
+    -- (single / split-ntfs) go through the Makefile route, which
+    -- threads `--layout=` through ntosbe.main:
+    --     make -C src disk LAYOUT=split-ntfs
     targets.disk = function()
         local out_dir = REPO_ROOT .. "/build/disk"
         local efi_bin = SCRIPT_DIR .. "/boot-efi/BOOTX64.EFI"
-        local layout  = os.getenv("LAYOUT") or "split-fat"
+        local layout  = "split-fat"
         banner("boot disk image (layout=" .. layout .. ")")
 
         if not file_exists(efi_bin) then
