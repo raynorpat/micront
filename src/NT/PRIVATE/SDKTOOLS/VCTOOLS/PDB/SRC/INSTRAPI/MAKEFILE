@@ -57,7 +57,7 @@ INCLUDE = ..\..\include;$(TOOL_DIR)\include;
 PATH    = $(TOOL_DIR)\bin
 CL      = cl
 LINKER  = link
-LIBER   = link -lib
+LIBER   = link -lib -nologo
 !else
 !if "$(CPU)" == "MIPS"
 LIB     = $(TOOL_DIR)\lib;$(LIB)

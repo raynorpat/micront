@@ -108,7 +108,7 @@ OBJS =	$(OBJS) 		\
 
 all:	$(ODIR) $(OBJS)
 	- del $(ODIR)\$(EXE).lib
-	 link -lib @<<
+	 link -lib -nologo @<<
 -out:$(ODIR)\$(EXE).lib $(OBJS)
 <<
 !ifndef NOBROWSER

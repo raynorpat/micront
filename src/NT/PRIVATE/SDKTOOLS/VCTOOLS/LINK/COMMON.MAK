@@ -57,7 +57,7 @@ INCLUDE = $(LANGAPI_DIR)\undname;$(LANGAPI_DIR)\include;$(TOOL_DIR)\include
 
 CC	= cl
 LINKER	= link
-LIBER	= link -lib
+LIBER	= link -lib -nologo
 !if "$(DOLPHIN)" == "1"
 OPTIONS = /D_X86_ /Gfyd /MD /W3 /DINSTRUMENT
 !else

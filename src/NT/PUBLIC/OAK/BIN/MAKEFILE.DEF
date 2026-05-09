@@ -930,8 +930,8 @@ LINKER_DBG_SECTION=-debug:none
 # that just does _spawnv("link.exe", "-lib", ...)).  LINK.EXE
 # supports -lib natively, so skipping the wrapper means one less
 # binary to build, install, and stage on PATH.
-LIBRARIAN=link -lib -out:$@ $(LIBRARIAN_FLAGS) $(LINKER_DBG_TYPE) -machine:$(TARGET_DIRECTORY)
-LINKER=link $(LINKER_FLAGS) $(LINKER_DBG_SECTION) $(LINKER_DBG_TYPE) -machine:$(TARGET_DIRECTORY)
+LIBRARIAN=link -lib -nologo -out:$@ $(LIBRARIAN_FLAGS) $(LINKER_DBG_TYPE) -machine:$(TARGET_DIRECTORY)
+LINKER=link -nologo $(LINKER_FLAGS) $(LINKER_DBG_SECTION) $(LINKER_DBG_TYPE) -machine:$(TARGET_DIRECTORY)
 
 !IFDEF EXEPROFILEINPUT
 EXEORDER=-order:@$(@B).prf
@@ -1237,7 +1237,7 @@ $(UMEXEFILES): $(UMLIBS) $(CRTLIBS) $(LINKLIBS)
 !IF "$(TARGET)" != ""
 !IF "$(TARGETTYPE)"=="PROGLIB"
 $(TARGET:.exe=.lib) $(TARGET:.exe=.exp): $(DLLDEF) $(LIBRARY_OBJS)
-    link -lib -out:$(@R).lib @<<
+    link -lib -nologo -out:$(@R).lib @<<
 -machine:$(TARGET_DIRECTORY)
 -def:$(DLLDEF)
 $(LIBRARY_OBJS)
@@ -1273,7 +1273,7 @@ $**
 !IF "$(DLLLIBOBJECTS)" == ""
 
 $(DYNLINK_LIB) $(DYNLINK_LIB:.lib=.exp): $(DLLDEF) $(LIBRARY_OBJS)
-    link -lib -out:$(@R).lib @<<
+    link -lib -nologo -out:$(@R).lib @<<
 -machine:$(TARGET_DIRECTORY)
 -def:$(DLLDEF)
 $(LIBRARY_OBJS)
@@ -1282,14 +1282,14 @@ $(LIBRARY_OBJS)
 !ELSE # "$(DLLLIBOBJECTS)" == ""
 
 $(DYNLINK_LIB) $(DYNLINK_LIB:.lib=.exp): $(DLLDEF) $(LIBRARY_OBJS) $(DLLLIBOBJECTS)
-    link -lib -out:$(@D)\tmp.lib @<<
+    link -lib -nologo -out:$(@D)\tmp.lib @<<
 -machine:$(TARGET_DIRECTORY)
 -def:$(DLLDEF)
 $(LIBRARY_OBJS)
 <<NOKEEP
     -erase $(@R).exp
     ren $(@D)\tmp.exp $(@B).exp
-    link -lib -out:$(@R).lib @<<
+    link -lib -nologo -out:$(@R).lib @<<
 -machine:$(TARGET_DIRECTORY)
 $(@D)\tmp.lib
 $(DLLLIBOBJECTS)
@@ -1321,7 +1321,7 @@ $**
 <<NOKEEP
     $(BINPLACE_CMD)
 !IFDEF _NTDUMPAMAP
-    link -dump -map $@ | sort /R /+62 > $(_NTDUMPAMAP)\$(@B).srt
+    link -dump -nologo -map $@ | sort /R /+62 > $(_NTDUMPAMAP)\$(@B).srt
 !ENDIF
 
 !ENDIF # "$(MAKEDLL)" != ""
@@ -1358,7 +1358,7 @@ $**
 <<NOKEEP
     $(BINPLACE_CMD)
 !IFDEF _NTDUMPAMAP
-    link -dump -map $@ | sort /R /+62 > $(_NTDUMPAMAP)\$(@B).srt
+    link -dump -nologo -map $@ | sort /R /+62 > $(_NTDUMPAMAP)\$(@B).srt
 !ENDIF
 
 !ELSEIF "$(TARGETTYPE)"=="EXPORT_DRIVER"
@@ -1369,10 +1369,10 @@ ORDER=-order:@$(@B).prf
 
 !IF "$(MAKEDLL)" == ""
 $(TARGET) $(TARGET:.lib=.exp): $(DLLDEF) $(OBJECTS) $(LINKLIBS)
-    link -lib -out:$(@R).lib -machine:$(TARGET_DIRECTORY) -def:$(DLLDEF) $(OBJECTS) $(LINKLIBS)
+    link -lib -nologo -out:$(@R).lib -machine:$(TARGET_DIRECTORY) -def:$(DLLDEF) $(OBJECTS) $(LINKLIBS)
 !ELSE
 $(TARGET:.sys=.lib) $(TARGET:.sys=.exp): $(DLLDEF) $(LIBRARY_OBJS)
-    link -lib -out:$(@R).lib -machine:$(TARGET_DIRECTORY) -def:$(DLLDEF) $(LIBRARY_OBJS)
+    link -lib -nologo -out:$(@R).lib -machine:$(TARGET_DIRECTORY) -def:$(DLLDEF) $(LIBRARY_OBJS)
 $(TARGET): $(TARGETPATH)\$(TARGET_DIRECTORY)\$(TARGETNAME).exp $(OBJECTS) $(CRTLIBS) $(MACHINE_TARGETLIBS) $(LINKLIBS)
     $(LINKER) @<<
 $(ORDER)
@@ -1392,10 +1392,10 @@ $**
 
 !IF "$(MAKEDLL)" == ""
 $(TARGET) $(TARGET:.lib=.exp): $(DLLDEF) obj\$(TARGET_DIRECTORY)\*.obj
-    link -lib -out:$(@R).lib -machine:$(TARGET_DIRECTORY) -def:$(DLLDEF) obj\$(TARGET_DIRECTORY)\*.obj
+    link -lib -nologo -out:$(@R).lib -machine:$(TARGET_DIRECTORY) -def:$(DLLDEF) obj\$(TARGET_DIRECTORY)\*.obj
 !ELSE
 $(TARGET:.dll=.lib) $(TARGET:.dll=.exp): $(DLLDEF) obj\$(TARGET_DIRECTORY)\*.obj
-    link -lib -out:$(@R).lib -machine:$(TARGET_DIRECTORY) -def:$(DLLDEF) obj\$(TARGET_DIRECTORY)\*.obj
+    link -lib -nologo -out:$(@R).lib -machine:$(TARGET_DIRECTORY) -def:$(DLLDEF) obj\$(TARGET_DIRECTORY)\*.obj
 
 $(TARGET): $(TARGETPATH)\$(TARGET_DIRECTORY)\$(TARGETNAME).exp $(OBJECTS) $(CRTLIBS) $(MACHINE_TARGETLIBS) $(LINKLIBS)
     $(LINKER) @<<
@@ -1410,7 +1410,7 @@ $**
 <<NOKEEP
     $(BINPLACE_CMD)
 !IFDEF _NTDUMPAMAP
-    link -dump -map $@ | sort /R /+62 > $(_NTDUMPAMAP)\$(@B).srt
+    link -dump -nologo -map $@ | sort /R /+62 > $(_NTDUMPAMAP)\$(@B).srt
 !ENDIF
 !ENDIF
 
@@ -1464,7 +1464,7 @@ $**
 <<NOKEEP
     $(BINPLACE_CMD)
 !IFDEF _NTDUMPAMAP
-    link -dump -map $@ | sort /R /+62 > $(_NTDUMPAMAP)\$(@B).srt
+    link -dump -nologo -map $@ | sort /R /+62 > $(_NTDUMPAMAP)\$(@B).srt
 !ENDIF
 
 !ENDIF

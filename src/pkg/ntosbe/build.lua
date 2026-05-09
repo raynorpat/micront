@@ -523,6 +523,7 @@ function M.main(opts)
             and { "-DEBUG:FULL", "-DEBUGTYPE:CV" }
             or  { "-DEBUG:MINIMAL", "-DEBUGTYPE:COFF" }
         rc = run_wibo_tool(hal_dir, "link",
+            "-NOLOGO",
             "-OUT:obj\\i386\\hal.dll", "-DLL", "-MACHINE:i386",
             "-BASE:0x80400000", "-SUBSYSTEM:NATIVE", "-ENTRY:HalInitSystem@8",
             "-NODEFAULTLIB", "-RELEASE",
