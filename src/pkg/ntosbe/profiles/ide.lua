@@ -442,6 +442,16 @@ function M.disk_files(paths, list_tree)
         -- the EXEs that import it.  ps.spawn passes the msvc20 dir
         -- as DllPath so the loader resolves it from there.
         { dest = "pkg/msvc20/CRTDLL.DLL",   src = paths.sdk_lib .. "/CRTDLL.DLL" },
+        -- splitsym + dbg2dwf — debug-info post-build pass that
+        -- ntosbe.build's install_host_tool wrapper runs on every PE
+        -- it stages.  Without these, the in-OS rebuild path fails
+        -- ("tool not found in <pkg/msvc20 path>") as soon as the
+        -- wrapper tries to extract symbols from a freshly-built
+        -- link.exe.  splitsym depends on imagehlp.dll for its CV
+        -- section walks; staged alongside.
+        { dest = "pkg/msvc20/SPLITSYM.EXE", src = msvc .. "/SPLITSYM.EXE" },
+        { dest = "pkg/msvc20/DBG2DWF.EXE",  src = msvc .. "/DBG2DWF.EXE"  },
+        { dest = "pkg/msvc20/IMAGEHLP.DLL", src = msvc .. "/IMAGEHLP.DLL" },
         -- NT 3.5 cmd.exe (lifted from stuff/, in-tree at WINDOWS/CMD/).
         -- NMAKE shells inline commands through COMSPEC; we point
         -- COMSPEC at this exact path via tchain's NT_ENV.  Drops the

@@ -321,7 +321,10 @@ end
 function M.run_wibo_tool(cwd, tool_name, ...)
     local tool_path = M.wibo_tool_path(tool_name)
     if not tool_path then
-        platform.log("ERROR: tool not found in wibo-tools: " .. tool_name)
+        -- Host: cfg.wibo_tools = src/wibo-tools/ (symlinks into PUBLIC/OAK/BIN/I386).
+        -- Guest: cfg.wibo_tools = \SystemRoot\pkg\msvc20\ (staged copies).
+        -- Print whichever path applies so the failure is actionable.
+        platform.log("ERROR: tool not found in " .. cfg.wibo_tools .. ": " .. tool_name)
         return 1
     end
     local args = {}

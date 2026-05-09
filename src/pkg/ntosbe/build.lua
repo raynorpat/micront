@@ -142,7 +142,10 @@ function M.main(opts)
     local run_nmake          = toolchain.run_nmake
     local run_wibo_tool      = toolchain.run_wibo_tool
     local wibo_spawn_args    = toolchain.wibo_spawn_args
-    local install_host_tool  = toolchain.install_host_tool
+    -- Imported raw; wrapped further down (after run_splitsym + run_dbg2dwf
+    -- are in scope) so every PE host-tool install also gets a .DBG/.dwf
+    -- next to its source binary.  Call sites use the wrapped form below.
+    local install_host_tool_raw = toolchain.install_host_tool
 
     -- ----------------------------------------------------------------
     -- Codegen helpers — small "regenerate this generated file" steps
@@ -217,6 +220,68 @@ function M.main(opts)
         local elf_win   = path_to_win(elf_path)
         log(">>> DBG2DWF " .. elf_win)
         return run_wibo_tool(WIBO_TOOLS, "DBG2DWF.EXE", dbg_win, elf_win)
+    end
+
+    -- pe_has_debug_dir — does this PE have a non-empty IMAGE_DEBUG_DIRECTORY?
+    -- Without one, splitsym has nothing to extract, so we skip the symbol
+    -- pass instead of treating it as a failure.  An empty Debug Directory
+    -- in a target indicates a build-flag bug (its link rule is missing
+    -- -debug:full -debugtype:cv) and is worth flagging at install time so
+    -- it's visible in the build log, but not worth aborting the build for.
+    local function pe_has_debug_dir(path)
+        -- platform.read_file works on host (LuaJIT + io) and guest
+        -- (run.exe + ntdll FFI); io.open does not exist on the guest
+        -- because cr's libc-free LuaJIT has no CRT-backed io library.
+        local data = platform.read_file(path)
+        if not data or #data < 0x40 then return false end
+        local function rd_u32(off)
+            -- off is 0-based; lua strings are 1-based
+            local b1, b2, b3, b4 = data:byte(off + 1, off + 4)
+            if not b4 then return nil end
+            return bit.bor(b1, bit.lshift(b2, 8),
+                               bit.lshift(b3, 16),
+                               bit.lshift(b4, 24))
+        end
+        local pe_off = rd_u32(0x3c)
+        if not pe_off then return false end
+        -- DataDirectory[6] (Debug) lives at OptionalHeader+144 in PE32:
+        --   24 (sig + COFF header) + 96 (std OptHdr) + 6*8 (dir entries) = 192
+        local sz = rd_u32(pe_off + 24 + 96 + 6*8 + 4)
+        return sz ~= nil and sz > 0
+    end
+
+    -- install_host_tool — wrapper around toolchain.install_host_tool that
+    -- ALSO runs splitsym + dbg2dwf on the source binary whenever it's
+    -- a PE (.exe / .dll) with embedded debug info, so every host tool
+    -- consistently produces a <name>.DBG and <name>.dwf next to its
+    -- obj/i386/<name>.exe.  Non-PE artifacts (.err / .lib / etc.) skip
+    -- the symbol pass; PEs that were linked without -debug also skip
+    -- (with a one-line note) so a single missing-debug target doesn't
+    -- cascade-fail unrelated installs.  Gated on the global debug_symbols
+    -- flag so --no-syms builds stay clean.
+    --
+    -- Why here and not on the toolchain side: run_splitsym and
+    -- run_dbg2dwf are local closures over WIBO_TOOLS / log / file_exists
+    -- and only make sense in the build-driver scope.
+    local function install_host_tool(built, name)
+        if not install_host_tool_raw(built, name) then return false end
+        if not debug_symbols then return true end
+        local lname = name:lower()
+        if not (lname:match("%.exe$") or lname:match("%.dll$")) then
+            return true
+        end
+        if not pe_has_debug_dir(built) then
+            log("    " .. name .. ": no Debug Directory, skipping splitsym/dbg2dwf"
+                .. " (link rule missing -debug:full -debugtype:cv?)")
+            return true
+        end
+        local rc = run_splitsym(built)
+        if rc == 0 then rc = run_dbg2dwf(built) end
+        if rc ~= 0 then
+            log("!!! " .. name .. ": symbol extraction failed (rc=" .. rc .. ")")
+            return false
+        end
+        return true
     end
 
     -- splitsym_dir — splitsym every PE image in `dir` modified at or
@@ -596,15 +661,6 @@ function M.main(opts)
         local link_exe = link_dir .. "/COFF/obj/i386/link.exe"
         if not install_host_tool(link_exe, "LINK.EXE") then
             return 1
-        end
-        -- Build target only ran splitsym automatically against PUBLIC/SDK/
-        -- LIB/I386; link.exe lands in its own obj dir so we need an
-        -- explicit pass to get a .DBG/.dwf next to it.  Required to
-        -- resolve any link.exe userland AV during self-host builds.
-        if debug_symbols then
-            local rc = run_splitsym(link_exe)
-            if rc == 0 then rc = run_dbg2dwf(link_exe) end
-            if rc ~= 0 then return rc end
         end
         log(">>> LINK.EXE rebuilt with error message resources")
         return 0
