@@ -77,7 +77,7 @@ src/cr/                 native-NT LuaJIT runtime (run.exe + lua.dll + librt)
 src/pkg/                Lua tree staged at \SystemRoot\lua\ on disk
 src/pkg/ntosbe/         NT OS Build Environment (hive + disk + profiles)
 src/cmd-stub/           minimal cmd.exe replacement for NMAKE
-src/tools/              utility scripts (gdb.init, gdb_drivers, dumphive, …)
+src/tools/              utility scripts (gdb_nt, agent_run, decode_av, dumphive, …)
 src/wibo-tools/         symlinks into PUBLIC/OAK/BIN/I386 (built first-run)
 src/build.sh            host CLI entry — bootstraps LuaJIT + dispatches into ntosbe.build
 src/bootstrap.sh        builds the host LuaJIT used by build.sh

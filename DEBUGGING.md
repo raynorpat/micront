@@ -24,7 +24,7 @@ stop at a known symbol, dump some state, exit cleanly."
 src/tools/agent_run.sh \
     --machine q35 --disk nvme \
     --break IopInitializeBootDrivers \
-    --inspect 'loaddrivers' \
+    --inspect 'nt modules' \
     --inspect 'info functions ^FatCommonRead' \
     --json
 ```
@@ -121,12 +121,12 @@ make -C src gdb                # terminal 2: gdb attached, ntoskrnl + hal symbol
 ```
 
 `make gdb` symbol-files `ntoskrnl.dwf` and `hal.dwf` (both linked at
-canonical bases — no slide), sources `gdb.init` + `gdb_drivers.py` +
-`gdb_users.py`, and connects to `:1234`.  Drivers can't be loaded
-statically — their runtime VA is chosen by the kernel's loader; after
-the first kernel-side breakpoint hits past `IoInitSystem`, run
-`loaddrivers` to walk `PsLoadedModuleList` and add each driver's `.dwf`
-at its `DllBase`.
+canonical bases — no slide), sources `gdb.init` + `gdb_nt.py`, and
+connects to `:1234`.  Drivers can't be loaded statically — their
+runtime VA is chosen by the kernel's loader; after the first
+kernel-side breakpoint hits past `IoInitSystem`, run `nt modules` to
+walk `PsLoadedModuleList` and add each module's `.dwf` at its
+`DllBase`.
 
 ```
 (gdb) hbreak Phase1Initialization
@@ -137,39 +137,58 @@ Breakpoint 1, Phase1Initialization (Context=<optimised out>) at init.c:1065
 Phase1Initialization (Context=0x8077c100) at init.c:1111
 (gdb) info args                        # full state visible
 Context = 0x8077c100
-(gdb) loaddrivers                      # post-IoInitSystem
+(gdb) nt modules                       # post-IoInitSystem
 (gdb) hbreak FatCommonRead
 ```
 
-### Helper commands (sourced by `make gdb`)
+### The `nt` namespace
 
-From `gdb.init` — kernel-state inspection:
+All extension commands live under one `nt` prefix in `tools/gdb_nt.py`
+(sourced automatically by `make gdb`).  Type `(gdb) nt <TAB>` to list
+subcommands, `(gdb) help nt <name>` for usage.
 
-| cmd | what it does |
-|---|---|
-| `regs` | EIP/ESP/EBP/CR2 + GP regs + segment regs, 32-bit-formatted |
-| `stk`  | 32 dwords from `$rsp` |
-| `jb`   | manual EBP-chain unwind with symbol resolution |
-| `pcr`  | KPCR fields (ExceptionList, StackLimit, Self, Prcb) |
-| `seh`  | walk the SEH chain from `KPCR.NtTib.ExceptionList` |
-| `trapframe <addr>` | decode KTRAP_FRAME at `<addr>` |
-| `iret` | decode the iret return frame at top of stack |
-| `bugcheck` | dump KeBugCheckEx args at frame entry; resolves common codes |
-
-From `gdb_drivers.py` — kernel-loaded modules:
+State walks (read NT kernel structures):
 
 | cmd | what it does |
 |---|---|
-| `loaddrivers` | walk `PsLoadedModuleList`; `add-symbol-file` per driver |
+| `nt modules` | walk `PsLoadedModuleList`, add-symbol-file each module's `.dwf` (kernel + drivers) |
+| `nt process [count]` | walk `PsActiveProcessHead` → EPROCESS list (planned) |
+| `nt thread <eproc>` | walk that process's thread list (planned) |
+| `nt handles <eproc>` | walk that process's handle table (planned) |
+| `nt objects [path]` | walk the object namespace from `\` (planned) |
+| `nt devstack <devobj>` | follow `AttachedDevice` chain (planned) |
 
-From `gdb_users.py` — userland binaries during a kernel-mode session:
+Decoders (no kernel access; static lookup):
 
 | cmd | what it does |
 |---|---|
-| `loaduser <name> <runtime_base>` | tree-scan + slide + add-symbol-file |
-| `loaduserpath <pe_path> <runtime_base>` | same, explicit path |
-| `findpe <addr>` | reverse: which PE owns this address? |
-| `decodeav [logfile]` | symbolicate `qemu.log` inline (shells out to decode_av.py) |
+| `nt status <code\|name>` | NTSTATUS → `STATUS_*` + description; severity-bit retry; substring name match |
+
+CPU snapshot (formatted views of current state at the breakpoint):
+
+| cmd | what it does |
+|---|---|
+| `nt regs` | EIP/ESP/EBP/CR2 + GP regs + segment regs, 32-bit-formatted from x86-64 gdbstub |
+| `nt stack [N]` | N (default 32) dwords from current ESP |
+| `nt frame` | manual EBP-chain unwind with symbol resolution (use when DWARF unwind misses) |
+| `nt pcr` | KPCR fields (ExceptionList, StackLimit, Self, Prcb) |
+| `nt seh` | walk the SEH chain from `KPCR.NtTib.ExceptionList` |
+| `nt trapframe <addr>` | decode KTRAP_FRAME at `<addr>` |
+| `nt iret` | decode the iret return frame at top of stack |
+| `nt bugcheck` | dump KeBugCheckEx args at frame entry; resolves common codes |
+
+Symbols (load `.dwf` at the right runtime address):
+
+| cmd | what it does |
+|---|---|
+| `nt addsym <name\|path> <base>` | load PE symbols at runtime base (tree-scan by name, or explicit path) |
+| `nt findsym <addr>` | reverse: which PE owns this address? |
+
+Logs:
+
+| cmd | what it does |
+|---|---|
+| `nt decode [logfile]` | shell out to `decode_av.py` against `qemu.log` (or supplied path) and print symbolicated frames inline |
 
 ### Caveats / gotchas
 
@@ -305,16 +324,16 @@ That's a UAF, not a kernel data-corruption bug.
 **Setup**:
 
 ```
-(gdb) loaduser link.exe 0x01000000      # tree-scan + slide + add-symbol-file
-(gdb) loaduserpath /abs/path/link.exe 0x01000000   # if outside src/
-(gdb) findpe 0x01002be0                 # reverse: which PE owns this addr?
-(gdb) decodeav                          # symbolicate qemu.log inline
+(gdb) nt addsym link.exe 0x01000000              # tree-scan + slide + add-symbol-file
+(gdb) nt addsym /abs/path/link.exe 0x01000000    # explicit path also works
+(gdb) nt findsym 0x01002be0                      # reverse: which PE owns this addr?
+(gdb) nt decode                                  # symbolicate qemu.log inline
 ```
 
-`loaduser` finds the binary by name under `src/`, reads the PE
-ImageBase, computes `slide = runtime_base - pe_base`, and runs
-`add-symbol-file`.  All four commands are registered by
-`tools/gdb_users.py`, sourced automatically by `make gdb`.
+`nt addsym` finds the binary (by name under `src/`, or by explicit
+path), reads its PE ImageBase, computes `slide = runtime_base - pe_base`,
+and runs `add-symbol-file`.  All commands are registered by
+`tools/gdb_nt.py`, sourced automatically by `make gdb`.
 
 **Break in the right place**:
 
@@ -367,10 +386,11 @@ make -C src gdb
 (gdb) c
 ... wait for bugcheck ...
 Breakpoint, KeBugCheckEx (BugCheckCode=0xcafe5e1f, ...) at bugcheck.c:LINE
-(gdb) bugcheck                         # gdb.init helper, prints all 4 args
+(gdb) nt bugcheck                      # decodes args + names common codes
 (gdb) bt
-(gdb) loaddrivers                      # if past IoInitSystem
+(gdb) nt modules                       # if past IoInitSystem
 (gdb) bt full                          # locals at every frame
+(gdb) nt status 0xc0000005             # decode any NTSTATUS in the args
 ```
 
 **For specific bugcheck codes**:
@@ -388,7 +408,7 @@ Breakpoint, KeBugCheckEx (BugCheckCode=0xcafe5e1f, ...) at bugcheck.c:LINE
 
 **Symptom**: something is going wrong but you don't know what or where.
 
-**Recipe** *(planned: integrate as default into `gdb.init`)*:
+**Recipe** *(planned: ship as `nt trap` in `gdb_nt.py`)*:
 
 ```
 (gdb) hbreak KiDispatchException
@@ -522,17 +542,17 @@ make -C src gdb
 | Tool | Status | Purpose |
 |---|---|---|
 | `src/tools/agent_run.sh` | **exists** | full-driving harness: boot+breakpoint+inspect+exit, bounded, structured rc / `--json` |
-| `src/tools/gdb_drivers.py` | exists | `loaddrivers` cmd: walks `PsLoadedModuleList`, `add-symbol-file` per driver |
-| `src/tools/gdb.init` | exists | `regs`, `stk`, `pcr`, `seh`, `trapframe`, `iret`, `bugcheck` helpers |
+| `src/tools/gdb_nt.py` | **exists** | the `nt` namespace: 17 subcommands grouped state-walks / decoders / CPU-snapshot / symbols / logs |
+| `src/tools/gdb.init` | exists | session config (disassembly flavour, `$kpcr` convenience var) — no user commands |
 | `src/tools/decode_av.py` | **exists** | parses serial log → resolved frames + paste-into-gdb commands |
-| `src/tools/gdb_users.py` | **exists** | `loaduser`, `loaduserpath`, `findpe`, `decodeav` gdb cmds |
 | `KiAgentExit` (NTOS) | **exists** | exported kernel function whose body is the qemu-exit OUT; gdb does `set $pc = KiAgentExit; continue` to terminate cleanly |
 | `isa-debug-exit` (boot.sh) | **exists** | qemu device wired in boot.sh; OUT to 0xf4 → qemu exits with `(val<<1)|1` |
+| **`nt process` / `thread` / `handles` / `objects` / `devstack`** | **planned** | EPROCESS / ETHREAD / object-namespace walks (subcommands stubbed in `gdb_nt.py`) |
 | **`make syms <comp>`** | **planned** | run splitsym + dbg2dwf on a target's `obj/i386/*.{exe,dll}` (today: per-target wiring in `build.lua`) |
 | **`tools/ntfs_walk.py`** | **planned** | offline NTFS volume dumper for ghost-entry / corruption diagnosis |
 | **`tools/dump_esp.py`** | **planned** | offline ESP / FAT16 dumper |
-| **`KiDispatchException` default trap** | **planned** | always-on first-chance exception logger in `gdb.init` |
-| **PEB-walk auto-base for `loaduser`** | **planned** | drop the `<runtime_base>` argument by walking active process's `PEB->Ldr->InLoadOrderModuleList` |
+| **`KiDispatchException` default trap** | **planned** | always-on first-chance exception logger as `nt trap` or similar |
+| **PEB-walk auto-base for `nt addsym`** | **planned** | drop the `<runtime_base>` argument by walking active process's `PEB->Ldr->InLoadOrderModuleList` |
 
 The "planned" entries are the highest-leverage missing pieces.  None
 require deep architectural work — each is a small Python or Lua script
