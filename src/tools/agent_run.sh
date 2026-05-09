@@ -242,11 +242,21 @@ done
     echo "source $SRC/tools/gdb_users.py"
     echo "target remote :$GDB_PORT"
     if [[ $NO_BREAK = 0 ]]; then
-        echo "echo \\n=== hbreak $BREAK ===\\n"
+        # hbreak first so we stop somewhere in the function — it honours
+        # the literal low_pc, so this fires at offset 0 (before prologue).
+        # Then `tbreak <SYM>` resolves through DWARF's prologue_end marker
+        # and lands at body_start, where the BP-relative location list
+        # for formal parameters is actually in effect.  Two stops, but
+        # the user-supplied --inspect commands run at the second one
+        # where args/locals are visible.  hbreak first because software
+        # bps don't always arm before the kernel is fully mapped.
+        echo "echo \\n=== hbreak $BREAK (entry) ===\\n"
         echo "hbreak $BREAK"
-        echo "echo === continuing ===\\n"
         echo "continue"
-        echo "echo \\n=== inspection commands ===\\n"
+        echo "echo === advancing past prologue ===\\n"
+        echo "tbreak $BREAK"
+        echo "continue"
+        echo "echo \\n=== inspection commands (post-prologue) ===\\n"
         for cmd in "${INSPECT_CMDS[@]}"; do
             echo "$cmd"
         done

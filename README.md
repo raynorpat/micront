@@ -159,10 +159,11 @@ boot.sh --mem 256                    # bump guest RAM (default 128 MiB)
 `build.sh` defaults to `--syms`: every PE gets a sidecar `.DBG`
 (extracted by the in-tree `splitsym`) and a `.dwf` (CodeView 4 → DWARF,
 emitted by the in-tree `dbg2dwf`).  The `.dwf` carries function names,
-source-line tables, BP-relative locals scoped to each function's body
-range, the CV4 type table converted to DWARF type DIEs, `.debug_aranges`
-for precise CU-by-PC lookup, and `.debug_frame` CFI for 32-bit-on-x86-64
-unwinding.
+source-line tables with `DW_LNS_set_prologue_end` markers (so `b <func>`
+lands at body_start, not the prologue), BP-relative locals scoped to
+each function's body range, the CV4 type table converted to DWARF type
+DIEs, `.debug_aranges` for precise CU-by-PC lookup, and `.debug_frame`
+CFI for 32-bit-on-x86-64 unwinding.
 
 Build, then in two terminals:
 
@@ -192,17 +193,23 @@ Breakpoint 1, Phase1Initialization (Context=0x8077c100) at init.c:1065
 
 Caveats:
 
-- **`hbreak` not `b`** for any pre-`IoInitSystem` kernel symbol —
-  software bps set before the kernel's pages are mapped won't arm.
+- **`hbreak` lands at `low_pc`, `b` lands at `prologue_end`.**  Hardware
+  breakpoints stop at the function's literal entry address (offset 0,
+  before `push ebp; mov ebp, esp` runs), where the BP-relative location
+  list for formal parameters isn't yet in effect — `info args` shows
+  `<optimised out>`.  Software breakpoints (`b` / `tbreak`) honour
+  `DW_LNS_set_prologue_end` and skip to body_start, where args and
+  locals are fully visible.  `agent_run.sh` runs both: `hbreak` to
+  catch the function entry (works pre-IoInitSystem, before .text is
+  fully mapped), then immediately `tbreak <SYM>; continue` to advance
+  past the prologue before running inspection commands.
 - **gdb is in x86-64 mode** (qemu-system-x86_64 advertises target as
   `i386:x86-64`).  The `.dwf` works around this by emitting x86-64
   DWARF register numbers and 4-byte `DW_OP_deref_size` for stack reads.
   Don't `set architecture i386` — it breaks the gdbstub protocol.
-- **FPO functions show params as `<optimized out>`** in their bodies.
-  Most kernel funcs compile with FPO under `/Oxs` despite `/Oy-`; CV
-  records BP-relative offsets that aren't valid at runtime, so dbg2dwf
-  emits an empty location list rather than wrong values.  Proper
-  ESP-relative tracking would need `.debug$F` FPO_DATA + esp-rel CFI.
+  Convenience-variable names matching x86 register names (`$bp`, `$ip`)
+  alias the 16-bit register and silently truncate on assignment; the
+  `gdb.init` helpers use `$rNN` + 32-bit casts.
 - **Source files don't auto-open** (`init.c: No such file or directory`).
   CV records mixed-case (`AcChkSup.c`) but the dump tooling DOS-flattened
   on-disk to uppercase (`ACCHKSUP.C`).  Linux is case-sensitive.  Until

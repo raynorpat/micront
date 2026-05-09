@@ -1087,6 +1087,7 @@ static void walk_codeview(const unsigned char *cv_base, unsigned long cv_cb)
 #define DW_LNS_set_file          4
 #define DW_LNS_const_add_pc      8
 #define DW_LNS_fixed_advance_pc  9
+#define DW_LNS_set_prologue_end 10  /* DWARF 3; gdb honours against DW2 too */
 
 #define DW_LNE_end_sequence      1
 #define DW_LNE_set_address       2
@@ -1117,6 +1118,8 @@ static void emit_debug_line_for_module(Buf *line_buf, Module *m)
     unsigned long i;
     unsigned long cur_va, cur_line, cur_file;
     int           is_first;
+    unsigned long *body_starts;
+    unsigned long  n_body_starts;
     static const unsigned char std_op_lengths[] = {
         0, /* DW_LNS_copy */
         1, /* DW_LNS_advance_pc */
@@ -1128,6 +1131,7 @@ static void emit_debug_line_for_module(Buf *line_buf, Module *m)
         0, /* DW_LNS_const_add_pc */
         1, /* DW_LNS_fixed_advance_pc — 1 fixed-2-byte arg, but ULEB count
               field still says "1 operand" */
+        0, /* DW_LNS_set_prologue_end (opcode 10) — flag for next row */
     };
 
     if (m->n_lines == 0) {
@@ -1156,8 +1160,12 @@ static void emit_debug_line_for_module(Buf *line_buf, Module *m)
     buf_u8(line_buf, 1);    /* line_base = 1 (signed) */
     buf_u8(line_buf, 1);    /* line_range = 1 — disables special opcodes,
                                we explicitly emit advance_pc + advance_line */
-    buf_u8(line_buf, 10);   /* opcode_base: 10 standard ops + 0-th reserved */
-    /* standard_opcode_lengths[opcode_base - 1] = 9 entries. */
+    buf_u8(line_buf, 11);   /* opcode_base: 11 standard ops + 0-th reserved
+                               (DW_LNS_set_prologue_end is opcode 10, used to
+                               mark each function's first body line so gdb's
+                               `b <func>` skips the prologue and lands where
+                               the BP-relative location list is in effect). */
+    /* standard_opcode_lengths[opcode_base - 1] = 10 entries. */
     buf_put(line_buf, std_op_lengths, sizeof(std_op_lengths));
 
     /* include_directories: collect unique parent dirs across all of
@@ -1225,6 +1233,45 @@ static void emit_debug_line_for_module(Buf *line_buf, Module *m)
     cur_file   = 1;
     is_first   = 1;
 
+    /* Build a sorted array of function body_start VAs so we can mark
+     * each first-line-after-prologue row with DW_LNS_set_prologue_end.
+     * Without this, gdb's `b <function>` lands at func_va (offset 0,
+     * before `push ebp; mov ebp, esp`), where the BP-relative
+     * location list isn't yet in effect, and every formal parameter
+     * shows as <optimised out> — even though /Oy- is on and the CV
+     * record correctly reports has-FP.  The fix isn't FPO-related,
+     * it's purely a missing prologue_end marker. */
+    body_starts   = NULL;
+    n_body_starts = 0;
+    if (m->n_funcs) {
+        body_starts = (unsigned long *)malloc(m->n_funcs * sizeof(unsigned long));
+        if (!body_starts) { fputs("dbg2dwf: oom body_starts\n", stderr); exit(2); }
+        for (i = 0; i < m->n_funcs; i++) {
+            /* Only mark functions whose CV record has a real prologue
+             * range (body_start > func_va).  Some leaves have no
+             * prologue at all; gdb's auto-skip would land at the same
+             * address and the marker is a no-op. */
+            if (m->funcs[i].body_start > m->funcs[i].va) {
+                body_starts[n_body_starts++] = m->funcs[i].body_start;
+            }
+        }
+        /* Sort ascending; binary search per row keeps the loop O(n log n)
+         * vs O(n*m) of a naive linear scan (matters for ntoskrnl: ~50k
+         * rows × ~4k functions). */
+        if (n_body_starts > 1) {
+            unsigned long a, b;
+            for (a = 1; a < n_body_starts; a++) {
+                unsigned long x = body_starts[a];
+                b = a;
+                while (b > 0 && body_starts[b - 1] > x) {
+                    body_starts[b] = body_starts[b - 1];
+                    b--;
+                }
+                body_starts[b] = x;
+            }
+        }
+    }
+
     {
         unsigned long cur_seq = 0;
         for (i = 0; i < m->n_lines; i++) {
@@ -1266,9 +1313,29 @@ static void emit_debug_line_for_module(Buf *line_buf, Module *m)
                 buf_sleb(line_buf, (long)r->line - (long)cur_line);
                 cur_line = r->line;
             }
+
+            /* If this row sits exactly at a function's body_start
+             * (i.e. immediately after its prologue), mark it via
+             * DW_LNS_set_prologue_end (DWARF 3 opcode 0x0a, but
+             * supported by gdb against DWARF 2 files since 7.x).  The
+             * flag applies to the next-emitted row via DW_LNS_copy. */
+            if (n_body_starts) {
+                unsigned long lo = 0, hi = n_body_starts;
+                while (lo < hi) {
+                    unsigned long mid = (lo + hi) / 2;
+                    if (body_starts[mid] < r->va)       lo = mid + 1;
+                    else if (body_starts[mid] > r->va)  hi = mid;
+                    else { lo = mid; break; }
+                }
+                if (lo < n_body_starts && body_starts[lo] == r->va) {
+                    buf_u8(line_buf, 0x0a);    /* DW_LNS_set_prologue_end */
+                }
+            }
             buf_u8(line_buf, DW_LNS_copy);
         }
     }
+
+    if (body_starts) free(body_starts);
 
     /* End sequence. */
     buf_u8 (line_buf, 0);
