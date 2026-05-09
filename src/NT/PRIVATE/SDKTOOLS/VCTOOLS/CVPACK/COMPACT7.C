@@ -234,11 +234,22 @@ INLINE void CompactEnum(TENTRY *OldEntry){
 
 void _fastcall PickUpFwdRefs(void){
 	pFwdRefChain_t pChain;
+	pFwdRefChain_t pNext;
 	TENTRY	*OldEntry;
 	CV_typ_t	type;
 	TYPPTR		pType;
 
-	for (pChain = pFwdRefHead; pChain != NULL; pChain = pChain->pNext) {
+	/* MicroNT: capture pNext BEFORE the body runs.  The loop body
+	 * free()s pChain, so the original `pChain = pChain->pNext`
+	 * iter step would read from already-freed memory and pick up
+	 * 0xFEEEFEEE (the NT RTL heap-free fill pattern).  On FAT-staged
+	 * disks the timing happens to mask this — a one-entry chain
+	 * exits cleanly and a multi-entry chain often still finds its
+	 * old pNext bytes intact — but on NTFS the chain regularly grows
+	 * past one entry and the iter pickup hits the fill pattern. */
+	for (pChain = pFwdRefHead; pChain != NULL; pChain = pNext) {
+		pNext = pChain->pNext;
+
 		OldEntry = GetTypeEntry ((CV_typ_t)(pChain->index - usCurFirstNonPrim), &type);
 		DASSERT(OldEntry->flags.IsMatched);
 
