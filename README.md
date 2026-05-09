@@ -156,121 +156,33 @@ boot.sh --mem 256                    # bump guest RAM (default 128 MiB)
 
 ## Debugging under gdb
 
-`build.sh` defaults to `--syms`: every PE gets a sidecar `.DBG`
-(extracted by the in-tree `splitsym`) and a `.dwf` (CodeView 4 → DWARF,
-emitted by the in-tree `dbg2dwf`).  The `.dwf` carries function names,
-source-line tables with `DW_LNS_set_prologue_end` markers (so `b <func>`
-lands at body_start, not the prologue), BP-relative locals scoped to
-each function's body range, the CV4 type table converted to DWARF type
-DIEs, `.debug_aranges` for precise CU-by-PC lookup, and `.debug_frame`
-CFI for 32-bit-on-x86-64 unwinding.
-
-Build, then in two terminals:
+`build.sh` defaults to `--syms`: every PE gets a `.dwf` (CodeView 4 →
+DWARF) next to it, with full type info, source lines, and prologue_end
+markers.  One-shot demo of the agentic debug loop:
 
 ```sh
-src/boot.sh --gdb              # boots paused, listens on :1234
-make -C src gdb                # loads ntoskrnl.dwf + hal.dwf, attaches
+src/tools/agent_run.sh --break Phase1Initialization \
+                       --inspect 'info args' \
+                       --inspect 'bt 4'
 ```
 
-`make gdb` symbol-files `ntoskrnl.dwf` and `hal.dwf` (both linked at
-canonical bases — no slide).  Drivers can't be loaded statically since
-their runtime VA is chosen by the kernel's loader; after the first
-kernel-side breakpoint hits, run `loaddrivers` (registered by
-`tools/gdb_drivers.py`) to walk `PsLoadedModuleList` and
-`add-symbol-file` each driver `.dwf` at its actual `DllBase`.
-
 ```
-(gdb) hbreak Phase1Initialization      # hbreak for pre-IoInitSystem syms
-(gdb) c
-Breakpoint 1, Phase1Initialization (Context=0x8077c100) at init.c:1065
-(gdb) bt
-#0  Phase1Initialization (Context=0x8077c100) at init.c:1065
-#1  0x801b2e48 in KiInitializeKernel (Process=0x8019c3b0 <KiIdleProcess>,
-    Thread=0x8019c5a0 <P0BootThread>, ...) at kernlini.c:547
-(gdb) loaddrivers                       # post-IoInitSystem
-(gdb) hbreak FatCommonRead
+=== inspection commands (post-prologue) ===
+Context = 0x8077c100
+#0  Phase1Initialization (Context=0x8077c100) at init.c:1111
+#1  PspSystemThreadStartup (StartRoutine=0x801b9f3b, ...) at create.c:1641
+#2  KiThreadStartup ()
+status=PASS  exit_rc=0  qemu_rc=1
 ```
 
-Caveats:
+That's the canonical flow: boot a chosen machine config, break at a
+kernel symbol, dump state, exit cleanly with a structured rc.  No
+human in the loop, no infinite spin on bugcheck (we exit qemu via
+`isa-debug-exit` at the end of `KeBugCheckEx`/`ExpSystemErrorHandler`,
+so `boot.sh` returns `rc=0x85` on a STOP and `0` on clean shutdown).
 
-- **`hbreak` lands at `low_pc`, `b` lands at `prologue_end`.**  Hardware
-  breakpoints stop at the function's literal entry address (offset 0,
-  before `push ebp; mov ebp, esp` runs), where the BP-relative location
-  list for formal parameters isn't yet in effect — `info args` shows
-  `<optimised out>`.  Software breakpoints (`b` / `tbreak`) honour
-  `DW_LNS_set_prologue_end` and skip to body_start, where args and
-  locals are fully visible.  `agent_run.sh` runs both: `hbreak` to
-  catch the function entry (works pre-IoInitSystem, before .text is
-  fully mapped), then immediately `tbreak <SYM>; continue` to advance
-  past the prologue before running inspection commands.
-- **gdb is in x86-64 mode** (qemu-system-x86_64 advertises target as
-  `i386:x86-64`).  The `.dwf` works around this by emitting x86-64
-  DWARF register numbers and 4-byte `DW_OP_deref_size` for stack reads.
-  Don't `set architecture i386` — it breaks the gdbstub protocol.
-  Convenience-variable names matching x86 register names (`$bp`, `$ip`)
-  alias the 16-bit register and silently truncate on assignment; the
-  `gdb.init` helpers use `$rNN` + 32-bit casts.
-- **Source files don't auto-open** (`init.c: No such file or directory`).
-  CV records mixed-case (`AcChkSup.c`) but the dump tooling DOS-flattened
-  on-disk to uppercase (`ACCHKSUP.C`).  Linux is case-sensitive.  Until
-  dbg2dwf gains case-insensitive resolution, gdb resolves all symbols/
-  lines/types correctly; only the source-text display is missing.
-
-For ad-hoc poking: `src/tools/gdb.init` defines helpers — `regs`, `stk`,
-`pcr`, `seh`, `trapframe <addr>`, `iret`, `bugcheck` — sourced
-automatically by `make gdb`.  Break at `KeBugCheckEx` to catch every
-bugcheck and run `bugcheck` to dump the args.
-
-For user-mode crashes: `src/tools/gdb_users.py` adds `loaduser <name>
-<runtime_base>` (mirror of `loaddrivers` but for `link.exe`,
-`run.exe`, etc.), `loaduserpath`, `findpe <addr>` (reverse lookup),
-and `decodeav` (symbolicate `qemu.log` inline without leaving gdb).
-Hardware breakpoints (`hbreak`) work across CPL transitions — once
-the user binary's `.dwf` is symbol-loaded, debugging is identical to
-kernel-mode.
-
-For one-shot symbolication outside gdb: `src/tools/decode_av.py
-qemu.log` parses every `UMODE EXC` / `STOP` line, classifies each
-address, runs `addr2line` against the right `.dwf`, annotates
-faulting-address heap-fill patterns, and emits paste-ready gdb
-commands.  Use `--addr 0xVALUE` for a single-address lookup.
-
-**Bounded exit on bugcheck.**  Stock NT 3.5 spins forever after
-printing the "STOP:" text (the operator was meant to transcribe it
-from VGA and call Microsoft).  MicroNT exits QEMU cleanly via
-`isa-debug-exit` (port 0xf4) at the end of `KeBugCheckEx`,
-`KeEnterKernelDebugger`, and `ExpSystemErrorHandler` — `boot.sh`
-returns `rc = 0x85` (= 133) on bugcheck, `0` on clean shutdown.
-Lets an agentic harness terminate deterministically and read the
-bugcheck text from the serial log instead of staring at a stuck
-console.  When a kernel debugger is attached (`boot.sh --gdb`)
-`DbgBreakPoint()` is caught by gdb and the OUT never executes —
-original freeze-for-inspection semantics preserved.
-
-**Full-driving harness for agents.**  `src/tools/agent_run.sh`
-boots a chosen machine config under gdb, breaks at a symbol, runs
-inspection commands, and exits cleanly with a structured rc — one
-shell command from "code on disk" to "I have the symbolicated
-state at `<breakpoint>`".  Bounded in time (no infinite spins),
-process-group isolated (no zombie qemus on Ctrl-C), and
-JSON-emittable for agent consumption.  Uses an exported
-`KiAgentExit` kernel function as a deterministic gdb-driven exit
-point; gdb does `set $pc = KiAgentExit; continue` after inspection
-and qemu terminates with rc=1.  Example:
-
-```sh
-src/tools/agent_run.sh --machine q35 --disk nvme \
-    --break IopInitializeBootDrivers \
-    --inspect 'loaddrivers' \
-    --inspect 'info functions ^Iop' \
-    --json
-```
-
-Exit-code matrix and the recipes for common debug shapes are in
-[DEBUG-RECIPES.md](DEBUG-RECIPES.md) — keep that doc honest as the
-loop evolves.
-
-Recipes for common crash shapes (kernel bugcheck, user-mode AV, NTFS
-ghost entries, SEH chain corruption, hung boot) live in
-[DEBUG-RECIPES.md](DEBUG-RECIPES.md), updated as we hone the loop.
+Full reference — exit codes, the bang-command battery, recipes for
+every common failure shape (kernel bugcheck, user-mode AV, NTFS
+corruption, SEH chain damage, hung boot), tool matrix, dbg2dwf
+internals — lives in [DEBUGGING.md](DEBUGGING.md).
 

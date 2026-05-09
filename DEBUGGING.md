@@ -110,6 +110,112 @@ to fix — without symbols every recipe below is just hex-staring.  See
 
 ---
 
+## Manual gdb session (interactive)
+
+When `agent_run.sh` is too coarse — e.g. you want to step instructions
+or set conditional breakpoints by hand — drive gdb directly:
+
+```sh
+src/boot.sh --gdb              # terminal 1: qemu paused on :1234
+make -C src gdb                # terminal 2: gdb attached, ntoskrnl + hal symbols loaded
+```
+
+`make gdb` symbol-files `ntoskrnl.dwf` and `hal.dwf` (both linked at
+canonical bases — no slide), sources `gdb.init` + `gdb_drivers.py` +
+`gdb_users.py`, and connects to `:1234`.  Drivers can't be loaded
+statically — their runtime VA is chosen by the kernel's loader; after
+the first kernel-side breakpoint hits past `IoInitSystem`, run
+`loaddrivers` to walk `PsLoadedModuleList` and add each driver's `.dwf`
+at its `DllBase`.
+
+```
+(gdb) hbreak Phase1Initialization
+(gdb) c
+Breakpoint 1, Phase1Initialization (Context=<optimised out>) at init.c:1065
+(gdb) tbreak Phase1Initialization      # advance past prologue (see caveats)
+(gdb) c
+Phase1Initialization (Context=0x8077c100) at init.c:1111
+(gdb) info args                        # full state visible
+Context = 0x8077c100
+(gdb) loaddrivers                      # post-IoInitSystem
+(gdb) hbreak FatCommonRead
+```
+
+### Helper commands (sourced by `make gdb`)
+
+From `gdb.init` — kernel-state inspection:
+
+| cmd | what it does |
+|---|---|
+| `regs` | EIP/ESP/EBP/CR2 + GP regs + segment regs, 32-bit-formatted |
+| `stk`  | 32 dwords from `$rsp` |
+| `jb`   | manual EBP-chain unwind with symbol resolution |
+| `pcr`  | KPCR fields (ExceptionList, StackLimit, Self, Prcb) |
+| `seh`  | walk the SEH chain from `KPCR.NtTib.ExceptionList` |
+| `trapframe <addr>` | decode KTRAP_FRAME at `<addr>` |
+| `iret` | decode the iret return frame at top of stack |
+| `bugcheck` | dump KeBugCheckEx args at frame entry; resolves common codes |
+
+From `gdb_drivers.py` — kernel-loaded modules:
+
+| cmd | what it does |
+|---|---|
+| `loaddrivers` | walk `PsLoadedModuleList`; `add-symbol-file` per driver |
+
+From `gdb_users.py` — userland binaries during a kernel-mode session:
+
+| cmd | what it does |
+|---|---|
+| `loaduser <name> <runtime_base>` | tree-scan + slide + add-symbol-file |
+| `loaduserpath <pe_path> <runtime_base>` | same, explicit path |
+| `findpe <addr>` | reverse: which PE owns this address? |
+| `decodeav [logfile]` | symbolicate `qemu.log` inline (shells out to decode_av.py) |
+
+### Caveats / gotchas
+
+- **`hbreak` lands at `low_pc`, `b` lands at `prologue_end`.**  Hardware
+  breakpoints stop at the function's literal entry address (offset 0,
+  before `push ebp; mov ebp, esp` runs), where the BP-relative location
+  list for formal parameters isn't yet in effect — `info args` shows
+  `<optimised out>`.  Software breakpoints (`b` / `tbreak`) honour
+  `DW_LNS_set_prologue_end` (emitted by `dbg2dwf`) and skip to
+  body_start, where args and locals are fully visible.  `agent_run.sh`
+  runs both: `hbreak` to catch the function entry (works
+  pre-IoInitSystem before .text is fully mapped), then immediately
+  `tbreak <SYM>; continue` to advance past the prologue.
+
+- **gdb is in x86-64 mode** (qemu-system-x86_64 advertises target as
+  `i386:x86-64`).  The `.dwf` works around this by emitting x86-64
+  DWARF register numbers and 4-byte `DW_OP_deref_size` for stack reads.
+  Don't `set architecture i386` — it breaks the gdbstub protocol.
+  Convenience-variable names matching x86 register names (`$bp`, `$ip`)
+  alias the 16-bit register and silently truncate on assignment; the
+  `gdb.init` helpers use `$rNN` + 32-bit casts.
+
+- **Source files don't auto-open** (`init.c: No such file or directory`).
+  CV records mixed-case (`AcChkSup.c`) but the dump tooling DOS-flattened
+  on-disk to uppercase (`ACCHKSUP.C`).  Linux is case-sensitive.  Until
+  `dbg2dwf` gains case-insensitive resolution, gdb resolves all symbols/
+  lines/types correctly; only the source-text display is missing.
+
+### What's in a `.dwf`
+
+Each PE built with `--syms` gets a sidecar `.DBG` (extracted by
+in-tree `splitsym`) and a `.dwf` (CodeView 4 → DWARF, emitted by
+in-tree `dbg2dwf`).  The `.dwf` is a regular ELF gdb can symbol-file,
+containing:
+
+- function names and source-line tables, with `DW_LNS_set_prologue_end`
+  markers per function so `b <func>` lands at body_start
+- BP-relative locals scoped to each function's body range
+- the CV4 type table converted to DWARF type DIEs (struct fields,
+  unions, arrays — `print pIrp->Tail.Overlay.Thread` walks nested
+  structs natively)
+- `.debug_aranges` for precise CU-by-PC lookup
+- `.debug_frame` CFI for 32-bit-on-x86-64 unwinding so `bt` works
+
+---
+
 ## Recipe 0: no `.dwf` for this binary
 
 **Symptom**: gdb shows `??` for addresses in this module; or the file
