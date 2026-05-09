@@ -30,6 +30,10 @@
 #                      --inspect 'bt 10'                 # repeatable
 #   tools/agent_run.sh --no-break                        # boot+exit asap
 #   tools/agent_run.sh --json                            # machine-readable tail
+#   tools/agent_run.sh --break KiDispatchException \
+#                      --break-cond 'ExceptionRecord->ExceptionCode == 0xc0000005' \
+#                      --inspect 'p *ExceptionRecord' \
+#                      --inspect 'nt trapframe'
 #
 # Exit codes (precise — agents branch on these):
 #   0  inspection completed, qemu exited via KiAgentExit (rc=1) or
@@ -51,6 +55,7 @@ MACHINE=q35
 DISK=nvme
 MEM=128
 BREAK=Phase1Initialization
+BREAK_COND=""
 NO_BREAK=0
 INSPECT_CMDS=()
 GDB_TIMEOUT=120        # gdb-script timeout (bp must hit + script complete)
@@ -58,6 +63,7 @@ WALL_TIMEOUT=240       # outer fence (everything must terminate by now)
 PORT_BASE=12340        # gdb port slot — random offset to avoid clashes
 JSON=0
 KEEP_LOGS=0
+KERNEL_OPTS=""
 
 usage() {
     sed -n '2,/^$/{s/^# \?//;p;}' "$0"
@@ -71,6 +77,7 @@ while [[ $# -gt 0 ]]; do
         --disk)        DISK="$2"; shift 2 ;;
         --mem)         MEM="$2"; shift 2 ;;
         --break)       BREAK="$2"; NO_BREAK=0; shift 2 ;;
+        --break-cond)  BREAK_COND="$2"; shift 2 ;;
         --no-break)    NO_BREAK=1; shift ;;
         --inspect)     INSPECT_CMDS+=("$2"); shift 2 ;;
         --timeout)     GDB_TIMEOUT="$2"; shift 2 ;;
@@ -78,6 +85,7 @@ while [[ $# -gt 0 ]]; do
         --port-base)   PORT_BASE="$2"; shift 2 ;;
         --json)        JSON=1; shift ;;
         --keep-logs)   KEEP_LOGS=1; shift ;;
+        --kernel-opts) KERNEL_OPTS="$2"; shift 2 ;;
         -h|--help)     usage ;;
         *)             echo "agent_run: unknown arg: $1" >&2; usage ;;
     esac
@@ -184,6 +192,15 @@ cp /usr/share/OVMF/OVMF_VARS_4M.fd "$OVMF_VARS"
 
 echo ">>> qemu: machine=$MACHINE disk=$DISK port=$GDB_PORT" >&2
 
+# LoadOptions plumbing: only attach the fw_cfg blob when --kernel-opts
+# was supplied.  qemu rejects `string=` (empty), so an absent flag is
+# represented by omitting the option entirely — boot-efi's reader
+# treats a missing file the same as an empty one.
+KOPTS_FLAG=()
+if [[ -n "$KERNEL_OPTS" ]]; then
+    KOPTS_FLAG=(-fw_cfg "name=opt/micront/loadopts,string=$KERNEL_OPTS")
+fi
+
 setsid qemu-system-x86_64 \
     -machine "$MACHINE" \
     -m "$MEM" \
@@ -192,6 +209,7 @@ setsid qemu-system-x86_64 \
     $STORAGE \
     -serial file:"$QEMU_LOG" \
     -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+    "${KOPTS_FLAG[@]}" \
     -no-reboot \
     -display none \
     -monitor none \
@@ -238,25 +256,39 @@ done
     echo "symbol-file $NTOSKRNL_DWF"
     echo "add-symbol-file $HAL_DWF"
     echo "source $SRC/tools/gdb.init"
-    echo "source $SRC/tools/gdb_drivers.py"
-    echo "source $SRC/tools/gdb_users.py"
+    echo "source $SRC/tools/gdb_nt.py"
     echo "target remote :$GDB_PORT"
     if [[ $NO_BREAK = 0 ]]; then
-        # hbreak first so we stop somewhere in the function — it honours
-        # the literal low_pc, so this fires at offset 0 (before prologue).
-        # Then `tbreak <SYM>` resolves through DWARF's prologue_end marker
-        # and lands at body_start, where the BP-relative location list
-        # for formal parameters is actually in effect.  Two stops, but
-        # the user-supplied --inspect commands run at the second one
-        # where args/locals are visible.  hbreak first because software
-        # bps don't always arm before the kernel is fully mapped.
-        echo "echo \\n=== hbreak $BREAK (entry) ===\\n"
+        # Two flows:
+        #
+        #   no --break-cond   ->  hbreak then tbreak (advance-past-prologue
+        #                         dance so args/locals are visible on the
+        #                         second stop)
+        #   with --break-cond ->  hbreak with the operator's expression as
+        #                         a condition; we don't try to advance past
+        #                         the prologue (the tbreak would discard
+        #                         the condition + the operator's expression
+        #                         is usually phrased so it can be evaluated
+        #                         at offset 0 — e.g. trap-frame fields read
+        #                         from $rsp). args may show <optimised out>
+        #                         at this stop; that's expected.
+        #
+        # hbreak in both cases because software bps don't always arm before
+        # the kernel is fully mapped.
+        echo "echo \\n=== hbreak $BREAK ===\\n"
         echo "hbreak $BREAK"
-        echo "continue"
-        echo "echo === advancing past prologue ===\\n"
-        echo "tbreak $BREAK"
-        echo "continue"
-        echo "echo \\n=== inspection commands (post-prologue) ===\\n"
+        if [[ -n "$BREAK_COND" ]]; then
+            echo "condition \$bpnum $BREAK_COND"
+            echo "echo condition: $BREAK_COND\\n"
+            echo "continue"
+            echo "echo \\n=== inspection commands (conditional bp hit) ===\\n"
+        else
+            echo "continue"
+            echo "echo === advancing past prologue ===\\n"
+            echo "tbreak $BREAK"
+            echo "continue"
+            echo "echo \\n=== inspection commands (post-prologue) ===\\n"
+        fi
         for cmd in "${INSPECT_CMDS[@]}"; do
             echo "$cmd"
         done
