@@ -35,6 +35,14 @@ include callconv.inc
         extrn   _KiServiceTable:dword
         extrn   _KiServiceLimit:dword
 
+;
+; Service numbers for state-modifying services that require a real
+; KTRAP_FRAME at [ebp+0] (see kkd_with_trap_frame in _KiKernelDispatch).
+; If the SYSSTUBS_ENTRY1 invocations below are reordered, update these.
+;
+NTCONTINUE_SVC          equ     16
+NTRAISEEXCEPTION_SVC    equ     118
+
 STUBS_BEGIN1 macro t
     TITLE t
 endm
@@ -194,6 +202,24 @@ _KiKernelDispatch proc
         ja      kkd_bad_service
 
 ;
+; Trap-frame contract for state-modifying services.  NtContinue and
+; NtRaiseException read [ebp+0] (their saved EBP, set by their own
+; `push ebp; mov ebp, esp` prolog) as a PKTRAP_FRAME and modify it via
+; KeContextToKframes.  EXIT_ALL on exit reads TsExceptionList,
+; TsPreviousPreviousMode, and the iret frame at TsEip/TsSegCs/TsEflags
+; (with FRAME_EDITED iret emulation when ESP needs to be edited).
+;
+; The fast path below skips the trap-frame build for ~190 other services
+; that don't need one.  Branch out for these two so kkd_with_trap_frame
+; can synthesize what KiSystemService's ENTER_SYSCALL would have built
+; for the legacy INT 2E path.
+;
+        cmp     eax, NTCONTINUE_SVC
+        je      kkd_with_trap_frame
+        cmp     eax, NTRAISEEXCEPTION_SVC
+        je      kkd_with_trap_frame
+
+;
 ; Build a small frame: saved non-volatiles + two locals (ArgSize and
 ; saved PCR.ExceptionList) so callee-pop stdcall + SEH-chain restore
 ; both work after the service returns.
@@ -300,6 +326,141 @@ _KiKernelDispatch proc
 kkd_bad_service:
         int 3
         jmp     kkd_bad_service
+
+;
+;------------------------------------------------------------------------
+; kkd_with_trap_frame — synthetic-trap-frame dispatch for state-modifying
+; services (NtContinue, NtRaiseException).
+;
+; Stock NT 3.5 kernel-mode INT 2E built a real KTRAP_FRAME on the kernel
+; stack via ENTER_SYSCALL.  These two services read [ebp+0] (the saved
+; EBP from their own prolog) as PKTRAP_FRAME and edit fields like TsEip
+; (KeContextToKframes), TsExceptionList (NtRaiseException explicitly,
+; NtContinue via EXIT_ALL), and TempEsp (KiEspToTrapFrame, when the
+; captured CONTEXT.Esp differs from trap-frame ESP — which it always
+; does for kernel-mode unwind, since we're called from RtlUnwind which
+; lives much deeper on the stack than the captured _gu_return frame).
+;
+; EXIT_ALL on exit:
+;   1. Restores PCR.ExceptionList from TsExceptionList — so the SEH
+;      chain head is whatever fs:[0] was at our entry, which for
+;      RtlUnwind ZwContinue is exactly TargetFrame (the unwind target).
+;   2. Restores Thread.PreviousMode from TsPreviousPreviousMode.
+;   3. Detects FRAME_EDITED bits cleared in TsSegCs (set by
+;      KiEspToTrapFrame when it stashed CsEsp into TsTempEsp) and
+;      runs the iret-emulation path: writes EIP/CS/EFLAGS to
+;      [TempEsp-12..TempEsp-1], pops non-volatiles from the trap frame,
+;      switches ESP to TempEsp-12, iretd → resumes at CsEip with
+;      ESP = CsEsp.
+;
+; This is exactly the mechanism stock NT used for kernel-mode INT 2E
+; unwind.  We just synthesize the trap frame at direct-call entry
+; instead of relying on hardware INT 2E + ENTER_SYSCALL.
+;
+; Entry:
+;   eax = service number (16 or 118, already bounds-checked)
+;   [esp]   = retaddr (Zw stub did jmp, didn't push)
+;   [esp+4..] = caller's args
+;
+; Exit: never returns directly; service jmps to KiServiceExit2.
+;------------------------------------------------------------------------
+;
+align 4
+kkd_with_trap_frame:
+
+;
+; Allocate trap frame on stack.  After: esp = trap_frame_base; original
+; args (above the retaddr) live at trap_frame_base+KTRAP_FRAME_LENGTH+4.
+;
+        sub     esp, KTRAP_FRAME_LENGTH
+
+;
+; Initialize the trap-frame fields EXIT_ALL/DISPATCH_USER_APC depend on
+; that KeContextToKframes will not overwrite from CONTEXT:
+;
+;   TsErrCode             = 0          (skipped past iret emulation)
+;   TsSegCs               = KGDT_R0_CODE — has FRAME_EDITED bits set
+;                            (bit 3), so KiEspToTrapFrame's first-edit
+;                            branch fires; KeContextToKframes will then
+;                            stash real CS in TsTempSegCs and clear the
+;                            FRAME_EDITED bits, marking the frame for
+;                            EXIT_ALL's iret emulation
+;   TsHardwareSegSs       = KGDT_R0_DATA (defensive; intra-priv iret
+;                            doesn't pop SS but EXIT_ALL touches SegCs)
+;   TsDbgArgMark          = 0BADB0D00h (DBG sanity check in EXIT_ALL)
+;
+; Other fields (TsEip, TsEFlags, TsEbp, TsEdi, TsEsi, TsEbx, TsEax,
+; TsEcx, TsEdx, segment regs, TsTempEsp, TsTempSegCs) are written by
+; KeContextToKframes from the CONTEXT record the service receives.
+;
+        mov     dword ptr [esp]+TsErrCode, 0
+        mov     dword ptr [esp]+TsSegCs, KGDT_R0_CODE
+        mov     dword ptr [esp]+TsHardwareSegSs, KGDT_R0_DATA
+;
+; Pre-clear TsEflags so KeContextToKframes' V86-mismatch check
+; (EXCEPTN.C:542) doesn't see stack-garbage V86 bits and spuriously
+; trigger Ki386AdjustEsp0.  The field is overwritten with CONTEXT
+; EFLAGS at EXCEPTN.C:558 anyway; this is just for the pre-overwrite
+; comparison.  DISPATCH_USER_APC also reads V86 bit before overwrite,
+; for the same reason.
+;
+        mov     dword ptr [esp]+TsEflags, 0
+if DBG
+        mov     dword ptr [esp]+TsDbgArgMark, 0BADB0D00h
+endif
+
+;
+; Capture & break the SEH chain (ENTER_SYSCALL contract).
+;   - EXIT_ALL restores PCR.ExceptionList from TsExceptionList on exit.
+;   - NtRaiseException explicitly restores it at its prolog
+;     (TRAP.ASM:5340) so KiDispatchException sees the real chain.
+;   - For NtContinue, no body re-restore happens; the chain head we save
+;     here equals TargetFrame at RtlUnwind ZwContinue, which is exactly
+;     what fs:[0] should be after the unwind completes.
+;
+        mov     ecx, fs:[PcExceptionList]
+        mov     [esp]+TsExceptionList, ecx
+        mov     dword ptr fs:[PcExceptionList], EXCEPTION_CHAIN_END
+
+;
+; Capture & switch Thread.PreviousMode to KernelMode (ENTER_SYSCALL
+; contract).  EXIT_ALL restores from TsPreviousPreviousMode (read as a
+; dword; only the low byte is used, but DBG checks the full dword
+; against -1).  movzx zero-extends the byte so the dword is never -1.
+;
+        mov     edi, fs:[PcPrcbData+PbCurrentThread]
+        movzx   ebx, byte ptr [edi+ThPreviousMode]
+        mov     [esp]+TsPreviousPreviousMode, ebx
+        mov     byte ptr [edi+ThPreviousMode], 0
+
+;
+; Set ebp to trap frame.  The service's `push ebp; mov ebp, esp` prolog
+; will save this as [their_ebp+0]; their NcTrapFrame macro then
+; dereferences it as PKTRAP_FRAME correctly.
+;
+        mov     ebp, esp
+
+;
+; Copy caller's args to a fresh slot below the trap frame, then call
+; the service.  Args are above the retaddr at trap_frame_base+
+; KTRAP_FRAME_LENGTH+4.
+;
+        movzx   ecx, byte ptr _KiArgumentTable[eax]
+        sub     esp, ecx
+        lea     esi, [ebp + KTRAP_FRAME_LENGTH + 4]
+        mov     edi, esp
+        shr     ecx, 2
+        rep     movsd
+
+        mov     edx, _KiServiceTable[eax*4]
+        call    edx                             ; NtContinue or NtRaiseException
+
+;
+; The service jmps to _KiServiceExit2 → EXIT_ALL → iret emulation and
+; never returns to us.  If we get here something is very wrong.
+;
+        int     3
+        jmp     short kkd_with_trap_frame
 
 _KiKernelDispatch endp
 
