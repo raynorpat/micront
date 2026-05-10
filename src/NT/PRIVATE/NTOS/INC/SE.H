@@ -872,89 +872,31 @@ SeGenerateMessage (
 
 // begin_ntifs
 
-NTKERNELAPI
-VOID
-SeOpenObjectAuditAlarm (
-    IN PUNICODE_STRING ObjectTypeName,
-    IN PVOID Object OPTIONAL,
-    IN PUNICODE_STRING AbsoluteObjectName OPTIONAL,
-    IN PSECURITY_DESCRIPTOR SecurityDescriptor,
-    IN PACCESS_STATE AccessState,
-    IN BOOLEAN ObjectCreated,
-    IN BOOLEAN AccessGranted,
-    IN KPROCESSOR_MODE AccessMode,
-    OUT PBOOLEAN GenerateOnClose
-    );
+// MicroNT: audit subsystem removed. All audit-emit helpers stub to no-ops;
+// OUT-param helpers clear their result to FALSE so callers that gate on
+// "do I need to call SeClose..." see "no".
+
+#define SeOpenObjectAuditAlarm(ObjectTypeName, Object, AbsoluteObjectName, SecurityDescriptor, AccessState, ObjectCreated, AccessGranted, AccessMode, GenerateOnClose) \
+    do { if ((GenerateOnClose) != NULL) *(PBOOLEAN)(GenerateOnClose) = FALSE; } while (0)
 
 // end_ntifs
 
-VOID
-SeCloseObjectAuditAlarm(
-    IN PVOID Object,
-    IN HANDLE Handle,
-    IN BOOLEAN GenerateOnClose
-    );
+#define SeCloseObjectAuditAlarm(Object, Handle, GenerateOnClose) ((void)0)
 
-VOID
-SeTraverseAuditAlarm(
-    IN PLUID OperationID,
-    IN PVOID DirectoryObject,
-    IN PSECURITY_DESCRIPTOR SecurityDescriptor,
-    IN PSECURITY_SUBJECT_CONTEXT SubjectSecurityContext,
-    IN BOOLEAN SubjectContextLocked,
-    IN ACCESS_MASK TraverseAccess,
-    IN PPRIVILEGE_SET Privileges OPTIONAL,
-    IN BOOLEAN AccessGranted,
-    IN KPROCESSOR_MODE AccessMode
-    );
+#define SeTraverseAuditAlarm(OperationID, DirectoryObject, SecurityDescriptor, SubjectSecurityContext, SubjectContextLocked, TraverseAccess, Privileges, AccessGranted, AccessMode) \
+    ((void)0)
 
-VOID
-SeCreateInstanceAuditAlarm(
-    IN PLUID OperationID OPTIONAL,
-    IN PVOID Object,
-    IN PSECURITY_DESCRIPTOR SecurityDescriptor,
-    IN PSECURITY_SUBJECT_CONTEXT SubjectSecurityContext,
-    IN ACCESS_MASK DesiredAccess,
-    IN PPRIVILEGE_SET Privileges OPTIONAL,
-    IN BOOLEAN AccessGranted,
-    IN KPROCESSOR_MODE AccessMode
-    );
+#define SeCreateInstanceAuditAlarm(OperationID, Object, SecurityDescriptor, SubjectSecurityContext, DesiredAccess, Privileges, AccessGranted, AccessMode) \
+    ((void)0)
 
-VOID
-SeCreateObjectAuditAlarm(
-    IN PLUID OperationID OPTIONAL,
-    IN PVOID Object,
-    IN PUNICODE_STRING ComponentName,
-    IN PSECURITY_DESCRIPTOR SecurityDescriptor,
-    IN PSECURITY_SUBJECT_CONTEXT SubjectSecurityContext,
-    IN ACCESS_MASK DesiredAccess,
-    IN PPRIVILEGE_SET Privileges OPTIONAL,
-    IN BOOLEAN AccessGranted,
-    OUT PBOOLEAN AuditPerformed,
-    IN KPROCESSOR_MODE AccessMode
-    );
+#define SeCreateObjectAuditAlarm(OperationID, Object, ComponentName, SecurityDescriptor, SubjectSecurityContext, DesiredAccess, Privileges, AccessGranted, AuditPerformed, AccessMode) \
+    do { if ((AuditPerformed) != NULL) *(PBOOLEAN)(AuditPerformed) = FALSE; } while (0)
 
-VOID
-SeObjectReferenceAuditAlarm(
-    IN PLUID OperationID OPTIONAL,
-    IN PVOID Object,
-    IN PSECURITY_DESCRIPTOR SecurityDescriptor,
-    IN PSECURITY_SUBJECT_CONTEXT SubjectSecurityContext,
-    IN ACCESS_MASK DesiredAccess,
-    IN PPRIVILEGE_SET Privileges OPTIONAL,
-    IN BOOLEAN AccessGranted,
-    IN KPROCESSOR_MODE AccessMode
-    );
+#define SeObjectReferenceAuditAlarm(OperationID, Object, SecurityDescriptor, SubjectSecurityContext, DesiredAccess, Privileges, AccessGranted, AccessMode) \
+    ((void)0)
 
-VOID
-SePrivilegeObjectAuditAlarm(
-    IN HANDLE Handle,
-    IN PSECURITY_SUBJECT_CONTEXT SubjectSecurityContext,
-    IN ACCESS_MASK DesiredAccess,
-    IN PPRIVILEGE_SET Privileges,
-    IN BOOLEAN AccessGranted,
-    IN KPROCESSOR_MODE AccessMode
-    );
+#define SePrivilegeObjectAuditAlarm(Handle, SubjectSecurityContext, DesiredAccess, Privileges, AccessGranted, AccessMode) \
+    ((void)0)
 
 BOOLEAN
 SeCheckPrivilegedObject(
@@ -989,11 +931,7 @@ SeValidSecurityDescriptor(
 //    );
 //
 
-VOID
-SeAuditHandleCreation(
-    IN PACCESS_STATE AccessState,
-    IN HANDLE Handle
-    );
+#define SeAuditHandleCreation(AccessState, Handle) ((void)0)
 
 
 
@@ -1119,10 +1057,6 @@ SeUpdateClientSecurity(
     OUT PBOOLEAN NewToken
     );
 
-BOOLEAN
-SeRmInitPhase1(
-    );
-
 // begin_ntifs
 
 NTKERNELAPI
@@ -1160,13 +1094,8 @@ SeComputeQuotaInformationSize(
     OUT PULONG Size
     );
 
-VOID
-SePrivilegedServiceAuditAlarm (
-    IN PUNICODE_STRING ServiceName,
-    IN PSECURITY_SUBJECT_CONTEXT SubjectSecurityContext,
-    IN PPRIVILEGE_SET Privileges,
-    IN BOOLEAN AccessGranted
-    );
+#define SePrivilegedServiceAuditAlarm(ServiceName, SubjectSecurityContext, Privileges, AccessGranted) \
+    ((void)0)
 
 NTKERNELAPI                                                     // ntddk ntifs
 BOOLEAN                                                         // ntddk ntifs
@@ -1174,12 +1103,6 @@ SeSinglePrivilegeCheck(                                         // ntddk ntifs
     LUID PrivilegeValue,                                        // ntddk ntifs
     KPROCESSOR_MODE PreviousMode                                // ntddk ntifs
     );                                                          // ntddk ntifs
-
-BOOLEAN
-SeCheckAuditPrivilege (
-   IN PSECURITY_SUBJECT_CONTEXT SubjectSecurityContext,
-   IN KPROCESSOR_MODE PreviousMode
-   );
 
 NTSTATUS
 SeAssignWorldSecurityDescriptor(
@@ -1195,31 +1118,13 @@ SeFastTraverseCheck(
     KPROCESSOR_MODE AccessMode
     );
 
-NTKERNELAPI                                                     // ntifs
-BOOLEAN                                                         // ntifs
-SeAuditingFileEvents(                                           // ntifs
-    IN BOOLEAN AccessGranted,                                   // ntifs
-    IN PSECURITY_DESCRIPTOR SecurityDescriptor                  // ntifs
-    );                                                          // ntifs
+#define SeAuditingFileEvents(AccessGranted, SecurityDescriptor) ((BOOLEAN)FALSE)              // ntifs
 
-VOID
-SeAuditProcessCreation(
-    PEPROCESS Process,
-    PEPROCESS Parent
-    );
+#define SeAuditProcessCreation(Process, Parent) ((void)0)
 
-VOID
-SeAuditProcessExit(
-    PEPROCESS Process
-    );
+#define SeAuditProcessExit(Process) ((void)0)
 
-VOID
-SeAuditHandleDuplication(
-    PVOID SourceHandle,
-    PVOID NewHandle,
-    PEPROCESS SourceProcess,
-    PEPROCESS TargetProcess
-    );
+#define SeAuditHandleDuplication(SourceHandle, NewHandle, SourceProcess, TargetProcess) ((void)0)
 
 
 ////////////////////////////////////////////////////////////////////////
@@ -1331,19 +1236,13 @@ extern LUID SeRemoteShutdownPrivilege;
 
 
 //
-// Auditing information array
+// MicroNT: audit subsystem removed. SeDetailedAuditing and SepAdtAuditingEnabled
+// stub to FALSE so callsites like `if (SeDetailedAuditing) {...}` dead-code
+// eliminate cleanly.
 //
 
-extern SE_AUDITING_STATE SeAuditingState[];
-
-//
-// Flag so that other components may quickly check for
-// auditing.
-//
-
-extern BOOLEAN SeDetailedAuditing;
-
-extern UNICODE_STRING SeSubsystemName;
+#define SeDetailedAuditing       ((BOOLEAN)FALSE)
+#define SepAdtAuditingEnabled    ((BOOLEAN)FALSE)
 
 extern PSE_EXPORTS SeExports;                       // ntifs
 

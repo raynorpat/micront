@@ -26,8 +26,6 @@ Revision History:
 #pragma alloc_text(PAGE,ObMakeTemporaryObject)
 #endif
 
-extern BOOLEAN SepAdtAuditingEnabled;
-
 #if DBG
 extern POBJECT_TYPE IoFileObjectType;
 extern PRTL_EVENT_ID_INFO IopCloseFileEventId;

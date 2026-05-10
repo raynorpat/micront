@@ -1450,7 +1450,6 @@ obj\$(TARGET_DIRECTORY)\$(NTTEST).exe: $(NTRES) obj\$(TARGET_DIRECTORY)\$(NTTEST
                         $(LINKLIBS)                      \
                         $(BASEDIR)\public\sdk\lib\$(TARGET_DIRECTORY)\hal.lib \
                         $(BASEDIR)\public\sdk\lib\$(TARGET_DIRECTORY)\ntoskrnl.exp \
-                        $(BASEDIR)\public\sdk\lib\$(TARGET_DIRECTORY)\lsakrnlp.lib \
                         $(BASEDIR)\public\sdk\lib\$(TARGET_DIRECTORY)\libcntpr.lib
     $(LINKER) @<<
 $(ORDER)

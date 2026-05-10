@@ -59,8 +59,7 @@ Revision History:
 
 #define MUTEX_LEVEL_PS_REAPER_LOCK          (ULONG)0x00010000
 
-#define MUTEX_LEVEL_SE_LSA_QUEUE            (ULONG)0x00020000
-
+// MicroNT: MUTEX_LEVEL_SE_LSA_QUEUE removed (LSA work queue gone)
 
 #define MUTEX_LEVEL_MM_SECTION_BASED        (ULONG)0x10001000
 #define MUTEX_LEVEL_MM_SECTION_COMMIT       (ULONG)0x10001001

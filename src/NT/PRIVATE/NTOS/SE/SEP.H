@@ -25,7 +25,6 @@ Revision History:
 #define _SEP_
 
 #include "ntos.h"
-#include <ntrmlsa.h>
 #include "seopaque.h"
 
 
@@ -322,107 +321,11 @@ Revision History:
 ///////////////////////////////////////////////////////////////////////////
 
 
-extern HANDLE SepLsaHandle;
-
-extern BOOLEAN SepAuditShutdownEvents;
-
 //
-// Spinlock protecting the queue of work being passed to LSA
+// MicroNT: LSA bridge removed. SepLsaHandle, SepLsaQueue*,
+// SEP_LSA_WORK_ITEM, SEP_WORK_ITEM, SepAuditShutdownEvents and the
+// LSA queue macros are all deleted with the RM/audit subsystem.
 //
-
-extern FAST_MUTEX SepLsaQueueLock;
-
-extern ULONG SepLsaQueueLength;
-
-//
-// Doubly linked list of work items queued to worker threads.
-//
-
-extern LIST_ENTRY SepLsaQueue;
-
-
-
-#define SepLockLsaQueue() ExAcquireFastMutex(&SepLsaQueueLock)
-
-#define SepUnlockLsaQueue() ExReleaseFastMutex(&SepLsaQueueLock)
-
-#define  SepWorkListHead()  ((PSEP_LSA_WORK_ITEM)(&SepLsaQueue)->Flink)
-
-typedef
-VOID
-(*PSEP_LSA_WORKER_CLEANUP_ROUTINE)(
-    IN PVOID Parameter
-    );
-
-
-typedef enum _SEP_LSA_WORK_ITEM_TAG {
-    SepDeleteLogon,
-    SepAuditRecord
-} SEP_LSA_WORK_ITEM_TAG, *PSEP_LSA_WORK_ITEM_TAG;
-
-
-
-
-
-typedef struct _SEP_LSA_WORK_ITEM {
-
-    //
-    // This field must be the first field of this structure
-    //
-
-    LIST_ENTRY                      List;
-
-    //
-    // Command Params Memory type
-    //
-
-    SEP_RM_LSA_MEMORY_TYPE          CommandParamsMemoryType;
-
-    //
-    // Tag describing what kind of structure we've got
-    //
-
-    SEP_LSA_WORK_ITEM_TAG           Tag;
-
-    //
-    // The following union contains the data to be passed
-    // to LSA.
-    //
-
-    union {
-
-        PVOID                       BaseAddress;
-        LUID                        LogonId;
-
-    } CommandParams;
-
-    //
-    // These fields must be filled in by the caller of SepRmCallLsa
-    //
-
-    LSA_COMMAND_NUMBER              CommandNumber;
-    ULONG                           CommandParamsLength;
-    PVOID                           ReplyBuffer;
-    ULONG                           ReplyBufferLength;
-
-    //
-    // CleanupFunction (if specified) will be called with CleanupParameter
-    // as its argument before the SEP_LSA_WORK_ITEM is freed by SepRmCallLsa
-    //
-
-    PSEP_LSA_WORKER_CLEANUP_ROUTINE CleanupFunction;
-    PVOID                           CleanupParameter;
-
-} SEP_LSA_WORK_ITEM, *PSEP_LSA_WORK_ITEM;
-
-
-typedef struct _SEP_WORK_ITEM {
-
-    WORK_QUEUE_ITEM  WorkItem;
-
-} SEP_WORK_ITEM, *PSEP_WORK_ITEM;
-
-extern SEP_WORK_ITEM SepExWorkItem;
 
 
 
@@ -472,18 +375,6 @@ SepCreateToken(
     IN PTOKEN_SOURCE TokenSource,
     IN BOOLEAN SystemToken
     );
-
-
-NTSTATUS
-SepReferenceLogonSession(
-    IN PLUID LogonId
-    );
-
-VOID
-SepDeReferenceLogonSession(
-    IN PLUID LogonId
-    );
-
 
 
 VOID
@@ -541,24 +432,7 @@ SepSinglePrivilegeCheck (
 
 
 
-NTSTATUS
-SepRmCallLsa(
-    PSEP_WORK_ITEM SepWorkItem
-    );
-
-
-
-BOOLEAN
-SepInitializeWorkList(
-    VOID
-    );
-
-
-
-BOOLEAN
-SepRmInitPhase0(
-    );
-
+// MicroNT: SepRmCallLsa, SepInitializeWorkList, SepRmInitPhase0 removed.
 
 VOID
 SepApplyAclToObject (
@@ -660,33 +534,6 @@ SepQueryTypeString(
 POBJECT_NAME_INFORMATION
 SepQueryNameString(
     IN PVOID Object
-    );
-
-BOOLEAN
-SepFilterPrivilegeAudits(
-    IN PPRIVILEGE_SET PrivilegeSet
-    );
-
-BOOLEAN
-SepQueueWorkItem(
-    IN PSEP_LSA_WORK_ITEM LsaWorkItem,
-    IN BOOLEAN ForceQueue
-    );
-
-PSEP_LSA_WORK_ITEM
-SepDequeueWorkItem(
-    VOID
-    );
-
-VOID
-SepAdtGenerateDiscardAudit(
-    VOID
-    );
-
-BOOLEAN
-SepAdtValidateAuditBounds(
-    ULONG Upper,
-    ULONG Lower
     );
 
 #endif // _SEP_

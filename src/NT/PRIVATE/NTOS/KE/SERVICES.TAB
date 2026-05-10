@@ -1,6 +1,5 @@
 AcceptConnectPort,6
 AccessCheck,8
-AccessCheckAndAuditAlarm,11
 AdjustGroupsToken,6
 AdjustPrivilegesToken,6
 AlertResumeThread,2
@@ -11,7 +10,6 @@ CancelIoFile,2
 CancelTimer,2
 ClearEvent,1
 Close,1
-CloseObjectAuditAlarm,3
 CompleteConnectPort,1
 ConnectPort,8
 Continue,2
@@ -73,7 +71,6 @@ OpenFile,6
 OpenIoCompletion,3
 OpenKey,3
 OpenMutant,3
-OpenObjectAuditAlarm,12
 OpenProcess,4
 OpenProcessToken,3
 OpenSection,3
@@ -83,8 +80,6 @@ OpenThread,4
 OpenThreadToken,4
 OpenTimer,3
 PrivilegeCheck,3
-PrivilegedServiceAuditAlarm,5
-PrivilegeObjectAuditAlarm,6
 ProtectVirtualMemory,5
 PulseEvent,2
 QueryAttributesFile,2

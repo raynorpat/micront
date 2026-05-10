@@ -1,7 +1,0 @@
-LIBRARY msaudit
-
-DESCRIPTION 'Object access names for auditing'
-
-EXPORTS
-        MsObjsDummyEntry
-

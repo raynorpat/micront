@@ -829,29 +829,12 @@ Return Value:
 
             if (NT_SUCCESS( Status )) {
 
-                Status = NtPrivilegedServiceAuditAlarm (
-                             NULL,                         // Subsystemname
-                             NULL,                         // ServiceName
-                             Token,
-                             &PrivilegeSet,
-                             HasPrivilege
-                             );
-
-                if (NT_SUCCESS( Status )) {
-
-                    if ( !HasPrivilege ) {
-                        RequestorCanAssignDescriptor = FALSE;
-                        Status = STATUS_PRIVILEGE_NOT_HELD;
-                    }
-
-                } else {
-
-                    //
-                    // We failed the attempt to audit the privilege
-                    // check, fail the entire operation.
-                    //
-
+                // MicroNT: audit subsystem removed; previously this called
+                // NtPrivilegedServiceAuditAlarm to log the SACL-assignment
+                // privilege check. With no audit, just enforce the privilege.
+                if ( !HasPrivilege ) {
                     RequestorCanAssignDescriptor = FALSE;
+                    Status = STATUS_PRIVILEGE_NOT_HELD;
                 }
             } else {
 

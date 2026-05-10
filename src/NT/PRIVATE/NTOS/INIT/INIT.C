@@ -1634,18 +1634,10 @@ Phase1Initialization(
 #endif // DEVL
 
     //
-    // Perform Phase 1 Reference Monitor Initialization.  This includes
-    // creating the Reference Monitor Command Server Thread, a permanent
-    // thread of the System Init process.  That thread will create an LPC
-    // port called the Reference Monitor Command Port through which
-    // commands sent by the Local Security Authority Subsystem will be
-    // received.  These commands (e.g. Enable Auditing) change the Reference
-    // Monitor State.
+    // MicroNT: LSA removed. No \SeRmCommandPort, no \SeLsaCommandPort, no
+    // RM command server thread. Token + access-check engine remains entirely
+    // kernel-internal.
     //
-
-    if (!SeRmInitPhase1()) {
-        KeBugCheck(REFMON_INITIALIZATION_FAILED);
-    }
 
     //
     // Set up process parameters for the Session Manager Subsystem

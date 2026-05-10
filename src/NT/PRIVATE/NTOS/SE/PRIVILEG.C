@@ -573,3 +573,34 @@ Return Value:
     return( AccessGranted );
 
 }
+
+
+// MicroNT: SepSinglePrivilegeCheck was originally in SEAUDIT.C; relocated here
+// when audit subsystem was removed. Used by ACCESSCK.C.
+BOOLEAN
+SepSinglePrivilegeCheck (
+   LUID DesiredPrivilege,
+   IN PACCESS_TOKEN Token,
+   IN KPROCESSOR_MODE PreviousMode
+   )
+{
+   LUID_AND_ATTRIBUTES Privilege;
+   BOOLEAN Result;
+
+   PAGED_CODE();
+
+   ASSERT(!RtlLargeIntegerEqualTo(DesiredPrivilege,SeTcbPrivilege));
+
+   Privilege.Luid = DesiredPrivilege;
+   Privilege.Attributes = 0;
+
+   Result = SepPrivilegeCheck(
+               Token,
+               &Privilege,
+               1,
+               PRIVILEGE_SET_ALL_NECESSARY,
+               PreviousMode
+               );
+
+   return(Result);
+}

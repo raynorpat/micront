@@ -436,15 +436,9 @@ Return Value:
 
 
     //
-    // Increment the reference count for this logon session
-    // This can not fail, since there is already a token in this logon
-    // session.
+    // MicroNT: no LSA logon-session tracking; AuthenticationId rides along
+    // on the duplicate without a refcount touch.
     //
-
-    Status = SepReferenceLogonSession( &(ExistingToken->AuthenticationId) );
-    ASSERT( NT_SUCCESS(Status) );
-
-
 
     //
     // Note that the size of the dynamic portion of a token can not change
@@ -462,7 +456,6 @@ Return Value:
                               );
 
     if (DynamicPart == NULL) {
-        SepDeReferenceLogonSession( &(ExistingToken->AuthenticationId) );
         return( STATUS_INSUFFICIENT_RESOURCES );
     }
 
@@ -490,7 +483,6 @@ Return Value:
                  );
 
     if (!NT_SUCCESS(Status)) {
-        SepDeReferenceLogonSession( &(ExistingToken->AuthenticationId) );
         ExFreePool( DynamicPart );
         return Status;
     }

@@ -47,7 +47,6 @@ $(TARGETPATH)\$(TARGET_DIRECTORY)\raw.lib
 $(TARGETPATH)\$(TARGET_DIRECTORY)\ntosrtl.lib
 $(TARGETPATH)\$(TARGET_DIRECTORY)\se.lib
 $(TARGETPATH)\$(TARGET_DIRECTORY)\vdm.lib
-$(BASEDIR)\public\sdk\lib\$(TARGET_DIRECTORY)\lsakrnlp.lib
 $(BASEDIR)\public\sdk\lib\$(TARGET_DIRECTORY)\libcntpr.lib
 !ENDIF
 <<NOKEEP

@@ -25,7 +25,6 @@ Revision History:
 --*/
 
 #include "sep.h"
-#include "adt.h"
 #include "seopaque.h"
 
 VOID
@@ -40,7 +39,6 @@ SepInitSystemDacls( VOID );
 #pragma alloc_text(INIT,SepVariableInitialization)
 #pragma alloc_text(INIT,SepInitializePrivilegeSets)
 #pragma alloc_text(INIT,SepInitSystemDacls)
-#pragma alloc_text(INIT,SepInitializeWorkList)
 #pragma alloc_text(PAGE,SepAssemblePrivileges)
 #endif
 
@@ -187,68 +185,12 @@ static PPRIVILEGE_SET SepDoublePrivilegeSet;
 
 
 //
-// Array containing information describing what is to be audited
+// MicroNT: audit state globals (SeAuditingState, SepAdtAuditingEnabled,
+// SeDetailedAuditing), audit subsystem name, LSA process handle, and the
+// LSA work queue (SepLsaQueue/Lock/Length) have all been removed along
+// with the LSA bridge. SeDetailedAuditing/SepAdtAuditingEnabled are now
+// compile-time FALSE macros in SE.H.
 //
-
-SE_AUDITING_STATE SeAuditingState[POLICY_AUDIT_EVENT_TYPE_COUNT] =
-    {
-        { FALSE, FALSE },
-        { FALSE, FALSE },
-        { FALSE, FALSE },
-        { FALSE, FALSE },
-        { FALSE, FALSE },
-        { FALSE, FALSE },
-        { FALSE, FALSE }
-    };
-
-//
-// Boolean indicating whether or not auditing is enabled for the system
-//
-
-BOOLEAN SepAdtAuditingEnabled = FALSE;
-
-//
-// Boolean to hold whether or not the user wants the system to crash when
-// an audit fails.
-//
-
-BOOLEAN SepCrashOnAuditFail = FALSE;
-
-//
-// Handle to the LSA process
-//
-
-HANDLE SepLsaHandle;
-
-//
-// Boolean indicating that we're auditing detailed events
-// such as process creation.
-//
-
-BOOLEAN SeDetailedAuditing = FALSE;
-
-UNICODE_STRING SeSubsystemName;
-
-
-//
-// Mutex protecting the queue of work being passed to LSA
-//
-
-FAST_MUTEX SepLsaQueueLock;
-
-//
-// Doubly linked list of work items queued to worker threads.
-//
-
-LIST_ENTRY SepLsaQueue;
-
-//
-// Count to tell us how long the queue gets in SepRmCallLsa
-//
-
-ULONG SepLsaQueueLength = 0;
-
-SEP_WORK_ITEM SepExWorkItem;
 
 
 
@@ -862,37 +804,4 @@ Return Value:
 
 
 
-BOOLEAN
-SepInitializeWorkList(
-    VOID
-    )
-
-/*++
-
-Routine Description:
-
-    Initializes the mutex and list head used to queue work from the
-    Executive to LSA.  This mechanism operates on top of the normal ExWorkerThread
-    mechanism by capturing the first thread to perform LSA work and keeping it
-    until all the current work is done.
-
-    The reduces the number of worker threads that are blocked on I/O to LSA.
-
-Arguments:
-
-    None.
-
-
-Return Value:
-
-    TRUE if successful, FALSE otherwise.
-
---*/
-
-{
-    PAGED_CODE();
-
-    ExInitializeFastMutex(&SepLsaQueueLock);
-    InitializeListHead(&SepLsaQueue);
-    return( TRUE );
-}
+// MicroNT: SepInitializeWorkList removed - LSA work queue is gone.

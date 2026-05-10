@@ -1744,11 +1744,9 @@ Return Value:
     PAGED_CODE();
 
     //
-    // De-reference the logon session referenced by this token object
+    // MicroNT: no LSA logon-session tracking; token's AuthenticationId
+    // is just a tag now.
     //
-
-    SepDeReferenceLogonSession( &(((TOKEN *)Token)->AuthenticationId) );
-
 
     //
     // If the token has an associated Dynamic part, deallocate it.
@@ -2021,17 +2019,9 @@ Return Value:
 
 
     //
-    // Increment the reference count for this logon session
-    // (fail if there is no corresponding logon session.)
+    // MicroNT: no LSA logon-session tracking; AuthenticationId is recorded
+    // verbatim on the token without a refcount bump.
     //
-
-    Status = SepReferenceLogonSession( AuthenticationId );
-    if ( !NT_SUCCESS(Status) ) {
-        return Status;
-    }
-
-
-
 
     //
     //  Calculate the length needed for the variable portion of the token
@@ -2083,14 +2073,8 @@ Return Value:
                  );
 
     if (!NT_SUCCESS(Status)) {
-        SepDeReferenceLogonSession( AuthenticationId );
         return Status;
     }
-
-    //
-    // After this point, we rely on token deletion to clean up the referenced
-    // logon session if the creation fails.
-    //
 
 
     //

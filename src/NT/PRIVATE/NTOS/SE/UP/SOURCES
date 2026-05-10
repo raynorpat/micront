@@ -41,12 +41,7 @@ SOURCES=              \
         ..\accessck.c \
         ..\capture.c  \
         ..\privileg.c \
-        ..\rmlogon.c  \
-        ..\rmmain.c   \
-        ..\rmvars.c   \
         ..\seassign.c \
-        ..\seaudit.c  \
-        ..\sepaudit.c \
         ..\seclient.c \
         ..\seglobal.c \
         ..\seinit.c   \
@@ -59,11 +54,7 @@ SOURCES=              \
         ..\tokendup.c \
         ..\tokenopn.c \
         ..\tokenqry.c \
-        ..\tokenset.c \
-        ..\adtlog.c   \
-        ..\adtinit.c  \
-        ..\adtvars.c  \
-        ..\rmaudit.c
+        ..\tokenset.c
 
 ! IF 0
 

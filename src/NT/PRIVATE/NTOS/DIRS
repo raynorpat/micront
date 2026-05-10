@@ -49,7 +49,6 @@ DIRS=rtl        \
      ntfs       \
      lfs        \
      mailslot   \
-     seaudit    \
      fsrec
 
 OPTIONAL_DIRS=ndis      \

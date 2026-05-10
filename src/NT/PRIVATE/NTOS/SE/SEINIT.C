@@ -21,7 +21,6 @@ Revision History:
 #include <nt.h>
 #include "sep.h"
 #include "tokenp.h"
-#include "adt.h"
 #include <string.h>
 
 //
@@ -127,13 +126,9 @@ Return Value:
     }
 
     //
-    // Perform Phase 0 Reference Monitor Initialization.
+    // MicroNT: SepRmInitPhase0 only set up the LSA logon-session tracking
+    // table; with no LSA we skip it.
     //
-
-    if (!SepRmInitPhase0()) {
-        KdPrint(("Security: Ref Mon state initialization failed.\n"));
-        return FALSE;
-    }
 
     //
     // Initialize the token object type.
@@ -141,29 +136,6 @@ Return Value:
 
     if (!SepTokenInitialization()) {
         KdPrint(("Security: Token object initialization failed.\n"));
-        return FALSE;
-    }
-
-//    //
-//    // Initialize auditing structures
-//    //
-//
-//    if (!SepAdtInitializePhase0()) {
-//        KdPrint(("Security: Auditing initialization failed.\n"));
-//        return FALSE;
-//    }
-//
-    //
-    // Initialize SpinLock and list for the LSA worker thread
-    //
-
-    //
-    // Initialize the work queue spinlock, list head, and semaphore
-    // for each of the work queues.
-    //
-
-    if (!SepInitializeWorkList()) {
-        KdPrint(("Security: Unable to initialize work queue\n"));
         return FALSE;
     }
 
@@ -187,16 +159,10 @@ Routine Description:
 
     Perform phase 1 security initialization.
 
-    This includes:
-
-        - Create an object directory for security related objects.
-          (\Security).
-
-        - Create an event to be signalled after the LSA has initialized.
-          (\Security\LSA_Initialized)
-
-
-
+    MicroNT: no LSA. The original Phase-1 work was creating the \Security
+    object directory, the LSA_AUTHENTICATION_INITIALIZED event, and the
+    audit subsystem - all gone. This function remains as a noop hook for
+    the init sequence in case future kernel-only Phase-1 work appears.
 
 Arguments:
 
@@ -211,83 +177,7 @@ Return Value:
 --*/
 
 {
-
-    NTSTATUS Status;
-    STRING Name;
-    UNICODE_STRING UnicodeName;
-    OBJECT_ATTRIBUTES ObjectAttributes;
-    HANDLE SecurityRoot, TemporaryHandle;
-
     PAGED_CODE();
-
-    //
-    // Create the security object directory.
-    //
-
-    RtlInitString( &Name, "\\Security" );
-    Status = RtlAnsiStringToUnicodeString(
-                 &UnicodeName,
-                 &Name,
-                 TRUE );  ASSERT( NT_SUCCESS(Status) );
-    InitializeObjectAttributes(
-        &ObjectAttributes,
-        &UnicodeName,
-        (OBJ_PERMANENT | OBJ_CASE_INSENSITIVE),
-        NULL,
-        NULL
-        );
-
-    Status = NtCreateDirectoryObject(
-                 &SecurityRoot,
-                 DIRECTORY_ALL_ACCESS,
-                 &ObjectAttributes
-                 );
-    RtlFreeUnicodeString( &UnicodeName );
-    ASSERTMSG("Security root object directory creation failed.",NT_SUCCESS(Status));
-
-
-
-    //
-    // Create an event in the security directory
-    //
-
-    RtlInitString( &Name, "LSA_AUTHENTICATION_INITIALIZED" );
-    Status = RtlAnsiStringToUnicodeString(
-                 &UnicodeName,
-                 &Name,
-                 TRUE );  ASSERT( NT_SUCCESS(Status) );
-    InitializeObjectAttributes(
-        &ObjectAttributes,
-        &UnicodeName,
-        (OBJ_PERMANENT | OBJ_CASE_INSENSITIVE),
-        SecurityRoot,
-        NULL
-        );
-
-    Status = NtCreateEvent(
-                 &TemporaryHandle,
-                 GENERIC_WRITE,
-                 &ObjectAttributes,
-                 NotificationEvent,
-                 FALSE
-                 );
-    RtlFreeUnicodeString( &UnicodeName );
-    ASSERTMSG("LSA Initialization Event Creation Failed.",NT_SUCCESS(Status));
-
-    Status = NtClose( SecurityRoot );
-    ASSERTMSG("Security object directory handle closure Failed.",NT_SUCCESS(Status));
-    Status = NtClose( TemporaryHandle );
-    ASSERTMSG("LSA Initialization Event handle closure Failed.",NT_SUCCESS(Status));
-
-    //
-    // Initialize auditing structures
-    //
-
-    if (!SepAdtInitializePhase1()) {
-        KdPrint(("Security: Auditing initialization failed.\n"));
-        return FALSE;
-    }
-
 
 #ifndef SETEST
 
