@@ -4,7 +4,6 @@ i386_SOURCES=..\i386\mpipi.c      \
              ..\i386\clockint.asm \
              ..\i386\ctxswap.asm  \
              ..\i386\cpu.asm      \
-             ..\i386\cyrix.c      \
              ..\i386\dmpstate.c   \
              ..\i386\emxcptn.asm  \
              ..\i386\exceptn.c    \

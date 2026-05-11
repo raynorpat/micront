@@ -1006,13 +1006,6 @@ KiGetFeatureBits ()
     return NtBits;
 }
 
-VOID
-KeOptimizeProcessorControlState (
-    VOID
-    )
-{
-    Ke386ConfigureCyrixProcessor ();
-}
 
 
 

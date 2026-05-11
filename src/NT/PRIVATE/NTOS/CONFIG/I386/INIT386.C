@@ -43,7 +43,6 @@ extern PCHAR Start;
 extern PCHAR End;
 extern WCHAR CmpVendorID[];
 extern WCHAR CmpFeatureBits[];
-extern UCHAR CmpCyrixID[];
 
 //
 // Bios date and version definitions
@@ -83,11 +82,6 @@ Ke386CpuID (
     PULONG  OutEbx,
     PULONG  OutEcx,
     PULONG  OutEdx
-    );
-
-ULONG
-Ke386CyrixId (
-    VOID
     );
 
 #ifdef ALLOC_PRAGMA
@@ -578,15 +572,6 @@ Returns:
                 VendorID = Buffer;
                 Buffer[12] = 0;
 
-            } else {
-
-                //
-                // Test for Cyrix processor
-                //
-
-                if (Ke386CyrixId ()) {
-                    VendorID = CmpCyrixID;
-                }
             }
 
             //
@@ -1077,10 +1062,9 @@ CmpConfigureProcessors (
     for (i=0; i < (ULONG)KeNumberProcessors; i++) {
         KeSetAffinityThread(KeGetCurrentThread(), (KAFFINITY) 1 << i);
 
-#if i386
-        // for now x86 only
-        KeOptimizeProcessorControlState ();
-#endif
+        // MicroNT: see CMSYSINI.C — KeOptimizeProcessorControlState
+        // was the Cyrix CCR-tuning hook; gone now.  Affinity walk
+        // stays as a no-op shell.
     }
 
     //

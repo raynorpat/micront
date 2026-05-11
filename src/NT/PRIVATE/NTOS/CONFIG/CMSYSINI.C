@@ -1903,10 +1903,11 @@ Routine Description:
     for (i=0; i < (ULONG)KeNumberProcessors; i++) {
         KeSetAffinityThread(KeGetCurrentThread(), (KAFFINITY) 1 << i);
 
-#if i386
-        // for now x86 only
-        KeOptimizeProcessorControlState ();
-#endif
+        // MicroNT: stock NT called KeOptimizeProcessorControlState()
+        // here to drive Cyrix CCR-register tuning.  Cyrix support is
+        // gone; the affinity walk is kept as a no-op shell for now
+        // (cheap, in case a future CPU-specific tweak wants this
+        // per-processor context back).
     }
 
     //

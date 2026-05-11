@@ -44,7 +44,6 @@ PCHAR Start = { 0 };
 PCHAR End = { 0 };
 
 WCHAR CmpVendorID[] = L"VendorIdentifier";
-UCHAR CmpCyrixID[] = "CyrixInstead";
 WCHAR CmpFeatureBits[] = L"FeatureSet";
 
 #ifdef ALLOC_DATA_PRAGMA

@@ -902,9 +902,8 @@ IoInitializeIrp@12
 IopRaiseInformationalHardError@12         
 IoThreadToProcess@4                       
 KdClearSpecialCalls@0                     
-KdpStub@24                                
-Ke386ConfigureCyrixProcessor@0            
-KeFreezeThread@4                          
+KdpStub@24
+KeFreezeThread@4
 KeInitializeEventPair@4                   
 KeReadStateProcess@4                      
 KeReadyThread@4                           
