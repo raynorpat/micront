@@ -1030,8 +1030,7 @@ typedef struct _KPCR {
 
 // end_ntddk
 
-    UCHAR   VdmAlert;
-    UCHAR   Reserved[1];                // dword align
+    UCHAR   Reserved[2];                // dword align (was: VdmAlert + 1 pad)
     ULONG   KernelReserved[16];         // For use by the kernel
     ULONG   HalReserved[16];            // For use by Hal
 
@@ -1082,7 +1081,15 @@ typedef KPCR *PKPCR;
 #define EFLAGS_IOPL_MASK      0x00003000L
 #define EFLAGS_VIF            0x00080000L
 #define EFLAGS_VIP            0x00100000L
-#define EFLAGS_USER_SANITIZE  0x001e0dd7L
+// MicroNT: bit 17 (VM, 0x00020000) cleared so user-supplied CONTEXT.EFlags
+// can never enable V86 mode.  V86 entry only happens via IRET-from-ring-0
+// with VM=1 in the popped EFLAGS, and the only path for VM to land in a
+// kernel trap frame is this sanitizer (KeContextToKframes / NtSetContext
+// / NtContinue / KiInitializeUserApc / KiInitializeContextThread all
+// converge here).  With NTVDM gone there's no legitimate VM consumer;
+// stripping it makes V86 mode provably unreachable from ring 3 and lets
+// every V86 trap-entry/exit path in the kernel be deleted as dead code.
+#define EFLAGS_USER_SANITIZE  0x001c0dd7L
 
 #define SANITIZE_FLAGS(eFlags, mode) (\
     ((mode) == KernelMode ? \
@@ -1251,10 +1258,11 @@ typedef struct _KTRAP_FRAME {
     ULONG   HardwareEsp;    // WARNING - segSS:esp are only here for stacks
     ULONG   HardwareSegSs;  // that involve a ring transition.
 
-    ULONG   V86Es;          // these will be present for all transitions from
-    ULONG   V86Ds;          // V86 mode
-    ULONG   V86Fs;
-    ULONG   V86Gs;
+    // MicroNT: stock NT reserved 4 dwords (V86Es/V86Ds/V86Fs/V86Gs)
+    // here for the CPU to push on V86->ring0 trap entry.  V86 mode is
+    // unreachable now (EFLAGS_USER_SANITIZE strips VM in
+    // KeContextToKframes), so the CPU never pushes them and the slots
+    // are gone — KTRAP_FRAME shrinks by 16 bytes.
 } KTRAP_FRAME;
 
 
@@ -1480,39 +1488,6 @@ typedef struct _LDTINFORMATION {
     ULONG AllocatedSize;
     PLDT_ENTRY Ldt;
 } LDTINFORMATION, *PLDTINFORMATION;
-
-//
-// SetProcessInformation Structure for ProcessSetIoHandlers info class
-//
-
-typedef struct _PROCESS_IO_PORT_HANDLER_INFORMATION {
-    BOOLEAN Install;            // true if handlers to be installed
-    ULONG NumEntries;
-    ULONG Context;
-    PEMULATOR_ACCESS_ENTRY EmulatorAccessEntries;
-} PROCESS_IO_PORT_HANDLER_INFORMATION, *PPROCESS_IO_PORT_HANDLER_INFORMATION;
-
-
-//
-//    Vdm Objects and Io handling structure
-//
-
-typedef struct _VDM_IO_HANDLER_FUNCTIONS {
-    PDRIVER_IO_PORT_ULONG  UlongIo;
-    PDRIVER_IO_PORT_ULONG_STRING UlongStringIo;
-    PDRIVER_IO_PORT_USHORT UshortIo[2];
-    PDRIVER_IO_PORT_USHORT_STRING UshortStringIo[2];
-    PDRIVER_IO_PORT_UCHAR UcharIo[4];
-    PDRIVER_IO_PORT_UCHAR_STRING UcharStringIo[4];
-} VDM_IO_HANDLER_FUNCTIONS, *PVDM_IO_HANDLER_FUNCTIONS;
-
-typedef struct _VDM_IO_HANDLER {
-    struct _VDM_IO_HANDLER *Next;
-    ULONG PortNumber;
-    VDM_IO_HANDLER_FUNCTIONS IoFunctions[2];
-} VDM_IO_HANDLER, *PVDM_IO_HANDLER;
-
-
 
 // begin_nthal begin_ntddk
 
@@ -2208,72 +2183,6 @@ Ke386SetVdmInterruptHandler (
     IN BOOLEAN Gate32
     );
 
-//
-// i386 ABIOS specific routines.
-//
-
-NTSTATUS
-KeI386GetLid(
-    IN USHORT DeviceId,
-    IN USHORT RelativeLid,
-    IN BOOLEAN SharedLid,
-    IN struct _DRIVER_OBJECT *DeviceObject,
-    OUT PUSHORT LogicalId
-    );
-
-NTSTATUS
-KeI386ReleaseLid(
-    IN USHORT LogicalId,
-    IN struct _DRIVER_OBJECT *DeviceObject
-    );
-
-NTSTATUS
-KeI386AbiosCall(
-    IN USHORT LogicalId,
-    IN struct _DRIVER_OBJECT *DriverObject,
-    IN PUCHAR RequestBlock,
-    IN USHORT EntryPoint
-    );
-
-NTSTATUS
-KeI386AllocateGdtSelectors(
-    OUT PUSHORT SelectorArray,
-    IN USHORT NumberOfSelectors
-    );
-
-NTSTATUS
-KeI386ReleaseGdtSelectors(
-    OUT PUSHORT SelectorArray,
-    IN USHORT NumberOfSelectors
-    );
-
-NTSTATUS
-KeI386FlatToGdtSelector(
-    IN ULONG SelectorBase,
-    IN USHORT Length,
-    IN USHORT Selector
-    );
-
-
-
-//
-// i386 Vdm specific functions
-//
-BOOLEAN
-Ke386VdmInsertQueueApc (
-    IN PKAPC             Apc,
-    IN struct _KTHREAD  *Thread,
-    IN KPROCESSOR_MODE   ApcMode,
-    IN PKKERNEL_ROUTINE  KernelRoutine,
-    IN PKRUNDOWN_ROUTINE RundownRoutine OPTIONAL,
-    IN PKNORMAL_ROUTINE  NormalRoutine  OPTIONAL,
-    IN PVOID             NormalContext   OPTIONAL,
-    IN PVOID             SystemArgument1 OPTIONAL,
-    IN PVOID             SystemArgument2 OPTIONAL,
-    IN KPRIORITY         Increment
-    );
-
-
 extern ULONG KeI386CpuType;
 extern ULONG KeI386CpuStep;
 extern BOOLEAN KeI386NpxPresent;
@@ -2282,7 +2191,6 @@ extern BOOLEAN KeI386NpxPresent;
 // i386 Feature bit definitions
 //
 
-#define KF_V86_VIS          0x00000001
 #define KF_RDTSC            0x00000002
 #define KF_MACHINE_CHECK    0x00000004
 #define KF_SYSENTER         0x00000008

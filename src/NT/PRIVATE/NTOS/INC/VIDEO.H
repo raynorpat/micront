@@ -442,62 +442,12 @@ typedef struct _VIDEO_PORT_CONFIG_INFO {
     // DMA information is not included since it is not yet supported by the
     // video port driver.
     //
-
+    // MicroNT: stock NT 3.5 reserved fields here for V86/VDM emulator
+    // port-trap hooks and a BIOS-shared video memory range
+    // (NumEmulatorAccessEntries, EmulatorAccessEntries,
+    // EmulatorAccessEntriesContext, VdmPhysicalVideoMemory{Address,Length}).
+    // V86 and the int10 BIOS path are gone — those fields are removed.
     //
-    // Specifies the number of emulator access entries that the adapter
-    // uses.  It indicates the number of array elements in the following field.
-    //
-    // This field can be reinitialized with the number of entries in the
-    // EmulatorAccessEntries structure if the structure is statically
-    // defined in the miniport driver. The EmulatorAccessEntries fields
-    // should also be updated.
-    //
-
-    ULONG NumEmulatorAccessEntries;
-
-    //
-    // Supplies a pointer to an array of EMULATOR_ACCESS_ENTRY structures.
-    // The number of elements in the array is indicated by the
-    // NumEmulatorAccessEntries field. The driver should fill out each entry
-    // for the adapter.
-    //
-    // The uninitialized value for the structure is NULL.
-    // EmulatorAccessEntries will be NULL if NumEmulatorAccessEntries is
-    // zero.
-    //
-    // A poiner to an array of emulator access entries can be passed back
-    // if such a structure is defined statically in the miniport driver. The
-    // NumEmulatorAccessEntries field should also be updated.
-    //
-
-    PEMULATOR_ACCESS_ENTRY EmulatorAccessEntries;
-
-    //
-    // This is a context values that is passed with each call to the
-    // emulator/validator functions defined in the EmulatorAccessEntries
-    // defined above.
-    // This parameter should in general be a pointer to the miniports
-    // device extension or other such storage location.
-    //
-    // This pointer will allow the miniport to save some state temporarily
-    // to allow for the batching of IO requests.
-    //
-
-    ULONG EmulatorAccessEntriesContext;
-
-    //
-    // Physical address of the video memory that must be mapped into a VDM's
-    // address space for proper BIOS support
-    //
-
-    PHYSICAL_ADDRESS VdmPhysicalVideoMemoryAddress;
-
-    //
-    // Length of the video memory that must be mapped into a VDM's addres
-    // space for proper BIOS support.
-    //
-
-    ULONG VdmPhysicalVideoMemoryLength;
 
     //
     // Determines the minimum size required to store the hardware state

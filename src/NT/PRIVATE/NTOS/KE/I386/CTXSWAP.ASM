@@ -725,13 +725,13 @@ sc06:
 ; (eax)->New initial stack base, less NPX frame.  Programs ESP0 in the
 ; current TSS so the next user-mode trap pushes onto this thread's stack.
 ;
-; KTRAP_FRAME still has the V86Es/Ds/Fs/Gs slots (kept so KIMACRO.INC's
-; dead V86 branches assemble), so even though V86 mode is purged, ESP0
-; must be biased down by the size of that slot region — the CPU only
-; pushes the 5 standard dwords for protected-mode traps, so it would
-; otherwise drop them into the V86 slots instead of HardwareSegSs/Esp.
+; MicroNT: stock NT subtracted a (TsV86Gs - TsHardwareSegSs) bias here
+; because the trap frame reserved 4 dwords at the top for the V86
+; segments the CPU pushes on a V86->ring0 trap.  V86 mode is unreachable
+; now (EFLAGS_USER_SANITIZE strips VM) and the V86 slots are gone from
+; KTRAP_FRAME, so ESP0 points directly at HardwareSegSs/Esp where the
+; CPU's 5 protected-mode-trap dwords land.
 ;
-        sub     eax,TsV86Gs - TsHardwareSegSs
         mov     ecx,[ebx]+PcTss
         mov     [ecx]+TssEsp0,eax
 

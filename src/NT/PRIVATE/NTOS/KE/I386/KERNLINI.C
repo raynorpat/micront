@@ -965,10 +965,6 @@ KiGetFeatureBits ()
 
         Ke386CpuID (1, &Junk, &Junk, &Junk, &ProcessorFeatures);
 
-        if (ProcessorFeatures & 0x02) {
-            NtBits |= KF_V86_VIS;
-        }
-
         if (ProcessorFeatures & 0x10) {
             NtBits |= KF_RDTSC;
         }
@@ -985,10 +981,6 @@ KiGetFeatureBits ()
 
     if (strcmp (Buffer, "AuthenticAMD") == 0) {
         Ke386CpuID (1, &Junk, &Junk, &Junk, &ProcessorFeatures);
-
-        if (ProcessorFeatures & 0x02) {
-            NtBits |= KF_V86_VIS;
-        }
 
         if (ProcessorFeatures & 0x10) {
             NtBits |= KF_RDTSC;
@@ -1010,15 +1002,6 @@ KiGetFeatureBits ()
         }
     }
 
-
-    /**
-     *
-     * Disable virtual interrupt support until otherwise
-     * informed to put it back in.   KenR.
-     *
-     */
-
-    NtBits &= ~KF_V86_VIS;
 
     return NtBits;
 }

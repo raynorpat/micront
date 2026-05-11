@@ -10,6 +10,7 @@ Implemented:
   kernel, drivers, and userland from source
 - [x] `gdb` powered kernel & driver debugging
 - [x] 64-bit UEFI bootloader (`BOOTX64.EFI`, OVMF on qemu)
+- [x] 32-bit userland (no VDM, V86, WoW16 or 16-bit paths)
 - [x] PCI-native HAL (BAR relocation above 4 GiB, no PC/AT assumptions)
 - [x] Fast `SYSENTER`/`SYSEXIT` & Zw* kernel service dispatch
 - [x] VirtIO transport (modern PCI, shared `virtio.lib`)

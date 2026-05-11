@@ -80,8 +80,7 @@ Return Value:
 
     PAGED_CODE();
 
-    ASSERT(((TrapFrame->SegCs & MODE_MASK) != KernelMode) ||
-           (TrapFrame->EFlags & EFLAGS_V86_MASK));
+    ASSERT((TrapFrame->SegCs & MODE_MASK) != KernelMode);
 
     KeContextFromKframes(TrapFrame, NULL, Context);
 }
@@ -123,8 +122,7 @@ Return Value:
 
 {
     UNREFERENCED_PARAMETER( NonVolatileContext );
-    ASSERT(((TrapFrame->SegCs & MODE_MASK) != KernelMode) ||
-           (TrapFrame->EFlags & EFLAGS_V86_MASK));
+    ASSERT((TrapFrame->SegCs & MODE_MASK) != KernelMode);
 
     PAGED_CODE();
 

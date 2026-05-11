@@ -30,7 +30,6 @@ Revision History:
 #include "bugcodes.h"
 #include "init.h"
 #include "ntmp.h"
-#include "v86emul.h"
 
 #ifdef _X86_
 #include "i386.h"

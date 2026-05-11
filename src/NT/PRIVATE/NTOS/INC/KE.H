@@ -525,10 +525,8 @@ typedef struct _KPROCESS {
 #if defined(_X86_)
 
     KGDTENTRY LdtDescriptor;
-    KIDTENTRY Int21Descriptor;
     USHORT IopmOffset;
     UCHAR Iopl;
-    BOOLEAN VdmFlag;
 
 #endif
 

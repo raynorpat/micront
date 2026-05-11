@@ -49,7 +49,6 @@ Revision History:
 #include "ntosdef.h"
 #include "bugcodes.h"
 #include "ntmp.h"
-#include "v86emul.h"
 #include "i386.h"
 #include "arc.h"
 #include "ke.h"
@@ -57,7 +56,6 @@ Revision History:
 #include "ps.h"
 #include "exboosts.h"
 
-#include "abios.h"
 #define _NTOS_
 #include "ki.h"
 
@@ -279,7 +277,6 @@ main(
     p2("PcTss", OFFSET(KPCR, TSS));
     p2("PcDebugActive", OFFSET(KPCR, DebugActive));
     p2("PcNumber", OFFSET(KPCR, Number));
-    p2("PcVdmAlert", OFFSET(KPCR, VdmAlert));
     p2("PcSetMember", OFFSET(KPCR, SetMember));
     p2("PcStallScaleFactor", OFFSET(KPCR, StallScaleFactor));
     p2("PcHal", OFFSET(KPCR, HalReserved));
@@ -323,8 +320,6 @@ main(
     p2("KGDT_R0_CODE", KGDT_R0_CODE);
     p2("KGDT_R0_DATA", KGDT_R0_DATA);
     p2("KGDT_R0_PCR", KGDT_R0_PCR);
-    p2("KGDT_STACK16", KGDT_STACK16);
-    p2("KGDT_CODE16", KGDT_CODE16);
     p2("KGDT_TSS", KGDT_TSS);
   DisableInc (HAL386);
     p2("KGDT_R3_TEB", KGDT_R3_TEB);
@@ -574,12 +569,8 @@ main(
     p2("PrActiveProcessors", OFFSET(KPROCESS, ActiveProcessors));
     p2("PrAffinity", OFFSET(KPROCESS, Affinity));
     p2("PrLdtDescriptor", OFFSET(KPROCESS, LdtDescriptor));
-    p2("PrInt21Descriptor", OFFSET(KPROCESS, Int21Descriptor));
-
-
     p2("PrIopmOffset", OFFSET(KPROCESS, IopmOffset));
     p2("PrIopl", OFFSET(KPROCESS, Iopl));
-    p2("PrVdmFlag", OFFSET(KPROCESS, VdmFlag));
     p2("PrStackCount", OFFSET(KPROCESS, StackCount));
     p2("PrAutoAlignment", OFFSET(KPROCESS, AutoAlignment));
     p2("PrBasePriority", OFFSET(KPROCESS, BasePriority));
@@ -868,15 +859,10 @@ main(
     p2("TsDr3", OFFSET(KTRAP_FRAME, Dr3));
     p2("TsDr6", OFFSET(KTRAP_FRAME, Dr6));
     p2("TsDr7", OFFSET(KTRAP_FRAME, Dr7));
-    p2("TsV86Es", OFFSET(KTRAP_FRAME, V86Es));
-    p2("TsV86Ds", OFFSET(KTRAP_FRAME, V86Ds));
-    p2("TsV86Fs", OFFSET(KTRAP_FRAME, V86Fs));
-    p2("TsV86Gs", OFFSET(KTRAP_FRAME, V86Gs));
     p2("KTRAP_FRAME_LENGTH", KTRAP_FRAME_LENGTH);
     p2("KTRAP_FRAME_ALIGN", KTRAP_FRAME_ALIGN);
     p2("FRAME_EDITED", FRAME_EDITED);
     p2("EFLAGS_ALIGN_CHECK", EFLAGS_ALIGN_CHECK);
-    p2("EFLAGS_V86_MASK", EFLAGS_V86_MASK);
     p2("EFLAGS_INTERRUPT_MASK", EFLAGS_INTERRUPT_MASK);
     p2("EFLAGS_VIF", EFLAGS_VIF);
     p2("EFLAGS_VIP", EFLAGS_VIP);
@@ -1088,7 +1074,6 @@ main(
     p1(";  KeI386NtFeatureBits defines\n");
     p1(";\n");
     p1("\n");
-    p2("KF_V86_VIS", KF_V86_VIS);
     p2("KF_RDTSC", KF_RDTSC);
     p2("KF_MACHINE_CHECK", KF_MACHINE_CHECK);
 

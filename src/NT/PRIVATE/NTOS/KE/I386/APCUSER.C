@@ -74,17 +74,6 @@ Return Value:
 
 
     //
-    // APCs are not defined for V86 mode; however, it is possible a
-    // thread is trying to set it's context to V86 mode - this isn't
-    // going to work, but we don't want to crash the system so we
-    // check for the possibility before hand.
-    //
-
-    if (TrapFrame->EFlags & EFLAGS_V86_MASK) {
-        return ;
-    }
-
-    //
     // Move machine state from trap and exception frames to the context frame.
     //
 

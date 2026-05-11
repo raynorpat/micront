@@ -63,11 +63,6 @@
     Ke386QueryIoAccessMap
     Ke386SetIoAccessMap
 
-    KeI386AbiosCall
-    KeI386AllocateGdtSelectors
-    KeI386FlatToGdtSelector
-    KeI386GetLid
-    KeI386ReleaseLid
     _abnormal_termination
     _except_handler2
     _global_unwind2

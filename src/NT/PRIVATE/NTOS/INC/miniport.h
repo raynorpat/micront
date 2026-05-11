@@ -491,34 +491,6 @@ typedef enum _BUS_DATA_TYPE {
 } BUS_DATA_TYPE, *PBUS_DATA_TYPE;
 
 
-//
-// Structures used by the kernel drivers to describe which ports must be
-// hooked out directly from the V86 emulator to the driver.
-//
-
-typedef enum _EMULATOR_PORT_ACCESS_TYPE {
-    Uchar,
-    Ushort,
-    Ulong
-} EMULATOR_PORT_ACCESS_TYPE, *PEMULATOR_PORT_ACCESS_TYPE;
-
-//
-// Access Modes
-//
-
-#define EMULATOR_READ_ACCESS    0x01
-#define EMULATOR_WRITE_ACCESS   0x02
-
-typedef struct _EMULATOR_ACCESS_ENTRY {
-    ULONG BasePort;
-    ULONG NumConsecutivePorts;
-    EMULATOR_PORT_ACCESS_TYPE AccessType;
-    UCHAR AccessMode;
-    UCHAR StringSupport;
-    PVOID Routine;
-} EMULATOR_ACCESS_ENTRY, *PEMULATOR_ACCESS_ENTRY;
-
-
 typedef struct _PCI_SLOT_NUMBER {
     union {
         struct {

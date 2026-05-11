@@ -121,7 +121,6 @@ PcGdt equ 03AH
 PcTss equ 03EH
 PcDebugActive equ 04EH
 PcNumber equ 04FH
-PcVdmAlert equ 050H
 PcSetMember equ 046H
 PcStallScaleFactor equ 04AH
 PcHal equ 092H
@@ -160,8 +159,6 @@ KGDT_R3_CODE equ 018H
 KGDT_R0_CODE equ 08H
 KGDT_R0_DATA equ 010H
 KGDT_R0_PCR equ 030H
-KGDT_STACK16 equ 0F8H
-KGDT_CODE16 equ 0F0H
 KGDT_TSS equ 028H
 KGDT_R3_TEB equ 038H
 KGDT_DF_TSS equ 050H
@@ -383,17 +380,15 @@ PrDirectoryTableBase equ 038H
 PrActiveProcessors equ 044H
 PrAffinity equ 048H
 PrLdtDescriptor equ 04CH
-PrInt21Descriptor equ 054H
-PrIopmOffset equ 05CH
-PrIopl equ 05EH
-PrVdmFlag equ 05FH
-PrStackCount equ 060H
-PrAutoAlignment equ 062H
-PrBasePriority equ 063H
-PrState equ 064H
-PrThreadQuantum equ 065H
-ProcessObjectLength equ 070H
-ExtendedProcessObjectLength equ 01F0H
+PrIopmOffset equ 054H
+PrIopl equ 056H
+PrStackCount equ 058H
+PrAutoAlignment equ 05AH
+PrBasePriority equ 05BH
+PrState equ 05CH
+PrThreadQuantum equ 05DH
+ProcessObjectLength equ 060H
+ExtendedProcessObjectLength equ 01E0H
 
 ; 
 ;  Thread Object Structure Offset Definitions
@@ -647,19 +642,14 @@ TsDr2 equ 020H
 TsDr3 equ 024H
 TsDr6 equ 028H
 TsDr7 equ 02CH
-TsV86Es equ 07CH
-TsV86Ds equ 080H
-TsV86Fs equ 084H
-TsV86Gs equ 088H
-KTRAP_FRAME_LENGTH equ 08CH
+KTRAP_FRAME_LENGTH equ 07CH
 KTRAP_FRAME_ALIGN equ 04H
 FRAME_EDITED equ 0FFF8H
 EFLAGS_ALIGN_CHECK equ 040000H
-EFLAGS_V86_MASK equ 020000H
 EFLAGS_INTERRUPT_MASK equ 0200H
 EFLAGS_VIF equ 080000H
 EFLAGS_VIP equ 0100000H
-EFLAGS_USER_SANITIZE equ 01E0DD7H
+EFLAGS_USER_SANITIZE equ 01C0DD7H
 
 ;
 ;  Context Frame Offset and Flag Definitions
@@ -742,7 +732,7 @@ ProcessorStateLength equ 0120H
 ;  EPROCESS
 ;
 
-EpDebugPort equ 0F2H
+EpDebugPort equ 0EAH
 ;
 ;  ETHREAD
 ;
@@ -799,7 +789,6 @@ MACHINE_TYPE_MCA equ 02H
 ;  KeI386NtFeatureBits defines
 ;
 
-KF_V86_VIS equ 01H
 KF_RDTSC equ 02H
 KF_MACHINE_CHECK equ 04H
 ;

@@ -434,9 +434,8 @@ FsRtlGetNextMcbEntry@20
 KiExceptionExit                           
 CcCopyWrite@20                            
 _allshl                                   
-KeSetAutoAlignmentThread@8                
-KiEndOfCode16                             
-RtlInsertElementGenericTable@16           
+KeSetAutoAlignmentThread@8
+RtlInsertElementGenericTable@16
 IoGetRequestorProcess@4                   
 MiFlushInPageSupportBlock@0               
 MmDeterminePoolType@4                     

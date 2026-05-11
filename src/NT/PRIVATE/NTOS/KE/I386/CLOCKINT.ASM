@@ -378,9 +378,6 @@ endif
         mov     ecx, ThApcState+AsProcess[ebx]
                                         ; (ecx)->current thread's process
 
-        test    dword ptr [ebp]+TsEFlags,EFLAGS_V86_MASK
-        jne     Kutp20                  ; if ne, user mode
-
         test    byte ptr [ebp]+TsSegCs, MODE_MASK ; test if prev mode was kernel
         jne     Kutp20                  ; if ne, user mode
 
@@ -601,12 +598,7 @@ kipi30: mov     eax,PCR[PcPrcbData+PbCurrentThread] ; (eax)-> current thread
         cmp     esi,edx
         je      kipi60                              ; process list end, return
 
-;
-;   Check for 16 bitness
-;
         movzx   ecx,word ptr kipsegcs
-        test    kipeflags,EFLAGS_V86_MASK
-        jnz     kipi100                             ; convert cs:ip to linear
 
         cmp     cx,KGDT_R0_CODE
         je      short kipi40
@@ -661,12 +653,6 @@ ifndef NT_UP
 ALIGN 4
 kipi96: SPIN_ON_SPINLOCK    eax,kipi05,,DbgMp
 endif
-
-ALIGN 4
-kipi100:
-        shl     ecx,4                   ; segment -> paragraph
-        add     ebx,ecx                 ; paragraph offset -> linear
-        jmp     kipi40
 
 ;
 ;   Update segment profile objects

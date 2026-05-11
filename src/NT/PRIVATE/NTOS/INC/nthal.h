@@ -5944,8 +5944,7 @@ typedef struct _KPCR {
 
 // end_ntddk
 
-    UCHAR   VdmAlert;
-    UCHAR   Reserved[1];                // dword align
+    UCHAR   Reserved[2];                // dword align (was: VdmAlert + 1 pad)
     ULONG   KernelReserved[16];         // For use by the kernel
     ULONG   HalReserved[16];            // For use by Hal
 
@@ -6075,11 +6074,6 @@ typedef struct _KTRAP_FRAME {
 
     ULONG   HardwareEsp;    // WARNING - segSS:esp are only here for stacks
     ULONG   HardwareSegSs;  // that involve a ring transition.
-
-    ULONG   V86Es;          // these will be present for all transitions from
-    ULONG   V86Ds;          // V86 mode
-    ULONG   V86Fs;
-    ULONG   V86Gs;
 } KTRAP_FRAME;
 
 

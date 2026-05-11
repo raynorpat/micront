@@ -33,10 +33,6 @@ include mac386.inc
 include i386\mi.inc
         .list
 
-FAST_BOP        equ      0
-FAST_V86_TRAP   equ      0
-
-
         page ,132
         extrn   _KeTickCount:DWORD
         extrn   _ExpTickCountMultiplier:DWORD
@@ -619,8 +615,7 @@ Kss_ErrorHandler:
         mov     eax,STATUS_INVALID_SYSTEM_SERVICE   ; (eax) = return status
         jmp     _KiServiceExit                      ; do trap exit processing
 
-        ENTER_DR_ASSIST kss_a, kss_t,NoAbiosAssist,NoV86Assist
-
+        ENTER_DR_ASSIST kss_a, kss_t
 ;
 ; SYSENTER fast-path entrypoint.  Sole entry to the system-service dispatch
 ; body — kernel-mode `Zw*` callers route through `_KiKernelDispatch` in
@@ -941,7 +936,7 @@ _KiFastSystemCall endp
 ;
 
 align 16
-        ENTER_DR_ASSIST kitx_a, kitx_t,NoAbiosAssist
+        ENTER_DR_ASSIST kitx_a, kitx_t
         PUBLIC  _KiGetTickCount
 _KiGetTickCount proc
 
@@ -1023,7 +1018,7 @@ _KiGetTickCount endp
 ; Fast path Nt/Zw SetHighWaitLowThread
 ;
 
-        ENTER_DR_ASSIST kshwl_a, kshwl_t,NoAbiosAssist,NoV86Assist
+        ENTER_DR_ASSIST kshwl_a, kshwl_t
 align 16
         PUBLIC  _KiSetHighWaitLowThread
 _KiSetHighWaitLowThread proc
@@ -1053,7 +1048,7 @@ _KiSetHighWaitLowThread endp
 ; Fast path Nt/Zw SetLowWaitHighThread
 ;
 
-        ENTER_DR_ASSIST kslwh_a, kslwh_t,NoAbiosAssist,NoV86Assist
+        ENTER_DR_ASSIST kslwh_a, kslwh_t
 align 16
         PUBLIC  _KiSetLowWaitHighThread
 _KiSetLowWaitHighThread proc
@@ -1668,7 +1663,7 @@ KiRestoreBaseFrame endp
 ;
 ;--
         ASSUME  DS:NOTHING, SS:NOTHING, ES:NOTHING
-        ENTER_DR_ASSIST kit0_a, kit0_t,NoAbiosAssist
+        ENTER_DR_ASSIST kit0_a, kit0_t
 align dword
         public  _KiTrap00
 _KiTrap00       proc
@@ -1744,7 +1739,7 @@ _KiTrap00       endp
 ;
 ;--
         ASSUME  DS:NOTHING, SS:NOTHING, ES:NOTHING
-        ENTER_DR_ASSIST kit1_a, kit1_t, NoAbiosAssist
+        ENTER_DR_ASSIST kit1_a, kit1_t
 align dword
         public  _KiTrap01
 _KiTrap01       proc
@@ -1807,7 +1802,7 @@ _KiTrap01       endp
 ;
 ;--
         ASSUME  DS:NOTHING, SS:NOTHING, ES:NOTHING
-;        ENTER_DR_ASSIST kit2_a, kit2_t, NoAbiosAssist
+;        ENTER_DR_ASSIST kit2_a, kit2_t
 align dword
         public  _KiTrap02
 _KiTrap02       proc
@@ -1897,7 +1892,7 @@ _KiTrap02       endp
 
         ASSUME  DS:NOTHING, SS:NOTHING, ES:NOTHING
 
-        ENTER_DR_ASSIST kids_a, kids_t, NoAbiosAssist
+        ENTER_DR_ASSIST kids_a, kids_t
 align dword
         public  _KiDebugService
 _KiDebugService  proc
@@ -1938,7 +1933,7 @@ _KiDebugService  endp
 ;--
         ASSUME  DS:NOTHING, SS:NOTHING, ES:NOTHING
 
-        ENTER_DR_ASSIST kit3_a, kit3_t, NoAbiosAssist
+        ENTER_DR_ASSIST kit3_a, kit3_t
 align dword
         public  _KiTrap03
 _KiTrap03       proc
@@ -2015,7 +2010,7 @@ _KiTrap03       endp
 ;--
         ASSUME  DS:NOTHING, SS:NOTHING, ES:NOTHING
 
-        ENTER_DR_ASSIST kit4_a, kit4_t, NoAbiosAssist
+        ENTER_DR_ASSIST kit4_a, kit4_t
 align dword
         public  _KiTrap04
 _KiTrap04       proc
@@ -2064,7 +2059,7 @@ _KiTrap04       endp
 ;
 ;--
         ASSUME  DS:NOTHING, SS:NOTHING, ES:NOTHING
-        ENTER_DR_ASSIST kit5_a, kit5_t, NoAbiosAssist
+        ENTER_DR_ASSIST kit5_a, kit5_t
 align dword
         public  _KiTrap05
 _KiTrap05       proc
@@ -2124,7 +2119,7 @@ _KiTrap05       endp
 ;--
         ASSUME  DS:FLAT, SS:NOTHING, ES:NOTHING
 
-        ENTER_DR_ASSIST kit6_a, kit6_t, NoAbiosAssist
+        ENTER_DR_ASSIST kit6_a, kit6_t
 align dword
         public  _KiTrap06
 _KiTrap06       proc
@@ -2216,7 +2211,7 @@ _KiTrap06       endp
 ;--
         ASSUME  DS:NOTHING, SS:NOTHING, ES:NOTHING
 
-        ENTER_DR_ASSIST kit7_a, kit7_t, NoAbiosAssist
+        ENTER_DR_ASSIST kit7_a, kit7_t
 align dword
         public  _KiTrap07
 _KiTrap07       proc
@@ -2651,7 +2646,7 @@ _KiTrap08       endp
 ;--
         ASSUME  DS:NOTHING, SS:NOTHING, ES:NOTHING
 
-        ENTER_DR_ASSIST kit9_a, kit9_t, NoAbiosAssist
+        ENTER_DR_ASSIST kit9_a, kit9_t
 align dword
         public  _KiTrap09
 _KiTrap09       proc
@@ -2705,7 +2700,7 @@ _KiTrap09       endp
 ;--
         ASSUME  DS:NOTHING, SS:NOTHING, ES:NOTHING
 
-        ENTER_DR_ASSIST kita_a, kita_t, NoAbiosAssist
+        ENTER_DR_ASSIST kita_a, kita_t
 align dword
         public  _KiTrap0A
 _KiTrap0A       proc
@@ -2772,8 +2767,7 @@ _KiTrap0A       endp
 ;--
         ASSUME  DS:NOTHING, SS:NOTHING, ES:NOTHING
 
-        ENTER_DR_ASSIST kitb_a, kitb_t, NoAbiosAssist
-
+        ENTER_DR_ASSIST kitb_a, kitb_t
 align dword
         public  _KiTrap0B
 _KiTrap0B       proc
@@ -2925,7 +2919,7 @@ _KiTrap0B       endp
 ;--
         ASSUME  DS:NOTHING, SS:NOTHING, ES:NOTHING
 
-        ENTER_DR_ASSIST kitc_a, kitc_t, NoAbiosAssist
+        ENTER_DR_ASSIST kitc_a, kitc_t
 align dword
         public  _KiTrap0C
 _KiTrap0C       proc
@@ -3087,7 +3081,7 @@ Ktd_ExceptionHandler:
 ; raise bugcheck if prevmode=kernel
         stdCall   _KeBugCheck, <KMODE_EXCEPTION_NOT_HANDLED>
 
-        ENTER_DR_ASSIST kitd_a, kitd_t, NoAbiosAssist
+        ENTER_DR_ASSIST kitd_a, kitd_t
 align dword
         public  _KiTrap0D
 _KiTrap0D       proc
@@ -3113,12 +3107,6 @@ _KiTrap0D       proc
 ; Before handling kernel mode trap0d, we need to do some checks to make
 ; sure the kernel mode code is the one to blame.
 ;
-
-if FAST_BOP or FAST_V86_TRAP
-
-        cmp     byte ptr PCR[PcVdmAlert], 0      ; See Kt0eVdmAlert
-        jne     Kt0eVdmAlert
-endif
 
 ;
 ; Check if the exception is caused by the handler trying to examine offending
@@ -3451,18 +3439,12 @@ _KiTrap0D       endp
 ;--
 
         ASSUME  DS:NOTHING, SS:NOTHING, ES:NOTHING
-        ENTER_DR_ASSIST kite_a, kite_t, NoAbiosAssist
+        ENTER_DR_ASSIST kite_a, kite_t
 align dword
         public  _KiTrap0E
 _KiTrap0E       proc
 
         ENTER_TRAP      kite_a, kite_t
-
-if FAST_V86_TRAP or FAST_BOP
-
-        cmp     byte ptr PCR[PcVdmAlert], 0
-        jne     Kt0eVdmAlert
-endif
 
         VERIFY_BASE_TRAP_FRAME
 
@@ -3653,54 +3635,6 @@ Kt0e12b:
         mov     eax, 0ffh               ; OldIrql = -1
         jmp     short Kt0e12a
 
-if FAST_BOP or FAST_V86_TRAP
-
-Kt0eVdmAlert:
-        ; If a page fault occured while we are in VDM alert mode (processing
-        ; v86 trap without building trap frame), we will restore all the
-        ; registers and return to its recovery routine which is stored in
-        ; the TsSegGs of original trap frame.
-        ;
-        mov     eax, PCR[PcVdmAlert]
-        mov     byte ptr PCR[PcVdmAlert], 0
-
-IF FAST_V86_TRAP
-        cmp     al, 0Dh
-        jne     short @f
-
-        mov     eax, offset FLAT:V86TrapDRecovery
-        jmp     short KtvaExit
-
-@@:
-        cmp     al, 10h
-        jne     short @f
-
-        mov     eax, offset FLAT:V86Trap10Recovery
-        jmp     short KtvaExit
-
-@@:
-ENDIF   ; FAST_V86_TRAP
-
-IF FAST_BOP
-        cmp     al, 6
-        jne     short @f
-
-        mov     eax, offset FLAT:V86Trap6Recovery
-        jmp     short KtvaExit
-
-@@:
-ENDIF   ; FAST_BOP
-
-        mov     eax, [ebp].TsEip
-KtvaExit:
-        mov     [ebp].TsEip, eax
-        mov     esp,ebp                 ; (esp) -> trap frame
-        jmp     _KiExceptionExit        ; join common code
-
-if DBG
-@@:     int 3
-endif
-ENDIF   ; FAST_BOP OR FAST_V86_TRAP
 _KiTrap0E       endp
 
         page ,132
@@ -3724,7 +3658,7 @@ _KiTrap0E       endp
 ;--
         ASSUME  DS:NOTHING, SS:NOTHING, ES:NOTHING
 
-        ENTER_DR_ASSIST kitf_a, kitf_t, NoAbiosAssist
+        ENTER_DR_ASSIST kitf_a, kitf_t
 align dword
         public  _KiTrap0F
 _KiTrap0F       proc
@@ -3765,8 +3699,7 @@ _KiTrap0F       endp
 ;--
         ASSUME  DS:NOTHING, SS:NOTHING, ES:NOTHING
 
-        ENTER_DR_ASSIST kit10_a, kit10_t, NoAbiosAssist
-
+        ENTER_DR_ASSIST kit10_a, kit10_t
 align dword
         public  _KiTrap10
 _KiTrap10       proc
@@ -3821,7 +3754,7 @@ _KiTrap10       endp
 ;--
         ASSUME  DS:NOTHING, SS:NOTHING, ES:NOTHING
 
-        ENTER_DR_ASSIST kit11_a, kit11_t, NoAbiosAssist
+        ENTER_DR_ASSIST kit11_a, kit11_t
 align dword
         public  _KiTrap11
 _KiTrap11       proc

@@ -53,7 +53,6 @@ include callconv.inc
         extrn   _KiTrap02:PROC
         EXTRNP  _HalDisplayString,1,IMPORT
         EXTRNP  _HalProcessorIdle,0,IMPORT
-        EXTRNP  _KiInitializeAbios,1
         EXTRNP  _KiInitializeMachineType
         EXTRNP  _KeGetCurrentIrql,0,IMPORT
         EXTRNP  _KeBugCheck, 1
@@ -157,14 +156,6 @@ _KiDoubleFaultTSS label byte
         public  _KiNMITSS
 _KiNMITSS label byte
         db      MINIMUM_TSS_SIZE dup(0)
-
-;
-; Abios specific definitions
-;
-
-        public  _KiCommonDataArea, _KiAbiosPresent
-_KiCommonDataArea       dd      0
-_KiAbiosPresent         dd      0
 
 _DATA   ends
 
@@ -525,13 +516,6 @@ endif
 ; processor count to enable kernel debugger.
 ;
         stdCall   _HalInitializeProcessor, <dword ptr KissPbNumber>
-
-;
-; Initialize ABIOS data structure if present.
-; Note, the KiInitializeAbios MUST be called after the KeLoaderBlock is
-; initialized.
-;
-        stdCall   _KiInitializeAbios, <dword ptr KissPbNumber>
 
         inc     _KeNumberProcessors         ; One more processor now active
 

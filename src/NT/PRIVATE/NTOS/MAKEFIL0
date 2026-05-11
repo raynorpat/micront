@@ -32,8 +32,7 @@ PRIVATEINCS=inc\ntosdef.h                   \
             inc\arc.h                       \
             inc\ke.h                        \
             inc\ex.h                        \
-            inc\ps.h                        \
-            inc\v86emul.h
+            inc\ps.h
 
 NTDDK_DEPENDS = $(SDKINC)\crt\excpt.h       \
                 $(SDKINC)\ntdef.h           \
@@ -123,7 +122,6 @@ NTMINIPORT_DEPENDS =                        \
                 $(SDKINC)\ntioapi.h         \
                 $(NTOSINC)\ke.h             \
                 $(NTOSINC)\hal.h            \
-                $(NTOSINC)\v86emul.h        \
                 $(NTOSINC)\pci.h            \
                 $(SDKINC)\ntconfig.h
 

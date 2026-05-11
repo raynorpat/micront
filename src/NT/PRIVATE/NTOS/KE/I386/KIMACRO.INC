@@ -148,15 +148,15 @@ endm
 
 ;++
 ;
-;   ENTER_DR_ASSIST     EnterLabel, ExitLabel, NoAbiosAssist, NoV86Assist
+;   ENTER_DR_ASSIST     EnterLabel, ExitLabel
 ;
 ;   Macro Description:
 ;
-;       Jumped to by ENTER_ macros to deal with DR register work,
-;       abios work and v86 work.  The main purpose of this macro is
-;       that interrupt/trap/systemCall EnterMacros can jump here to
-;       deal with some special cases such that most of the times the
-;       main ENTER_ execution flow can proceed without being branched.
+;       Jumped to by ENTER_ macros to deal with DR register work.
+;       MicroNT: stock NT also dispatched ABIOS 16->32 stack remap and
+;       V86 segment shuffles here, but ABIOS is gone and V86 is
+;       unreachable from ring 3 (EFLAGS_USER_SANITIZE strips VM), so
+;       only the DR-save path survives.
 ;
 ;       If (previousmode == usermode) {
 ;           save DR* in trapframe
@@ -168,29 +168,19 @@ endm
 ;       ExitLabel - label to branch to when done
 ;
 ;   Entry-conditions:
-;     Dr work:
 ;       DebugActive == TRUE
 ;       (esi)->Thread object
 ;       (esp)->base of trap frame
 ;       (ebp)->base of trap frame
 ;
-;     Abios work:
-;     v86 work:
-;
 ;   Exit-conditions:
-;     Dr work:
 ;       Interrupts match input state (this routine doesn't change IEF)
 ;       (esp)->base of trap frame
 ;       (ebp)->base of trap frame
 ;       Preserves entry eax, edx
-;     Abios work:
-;     v86 work:
-;
-;   BUGBUG - The name of the macro should be changed to ENTER_ASSIST
 ;--
 
-ENTER_DR_ASSIST macro   EnterLabel, ExitLabel, NoAbiosAssist, NoV86Assist, V86R
-        local   a,b
+ENTER_DR_ASSIST macro   EnterLabel, ExitLabel
 
         public  Dr_&EnterLabel
 align 4
@@ -199,9 +189,12 @@ Dr_&EnterLabel:
 ;
 ; Test if we came from user-mode.  If not, do nothing.
 ;
-
-        test    dword ptr [ebp]+TsEFlags,EFLAGS_V86_MASK
-        jnz     short a
+; MicroNT: stock NT also tested EFLAGS.VM here to route V86 traps onto
+; the DR-save path, and emitted Abios_/V86_ entry helpers below.  V86
+; mode is unreachable now (EFLAGS_USER_SANITIZE strips bit 17 in
+; KeContextToKframes), and ABIOS is gone — both the EFLAGS.VM shortcut
+; and the Abios_/V86_ helpers are dead.
+;
 
         test    dword ptr [ebp]+TsSegCs,MODE_MASK
         jz      Dr_&ExitLabel          ; called from kmode, go continue
@@ -215,7 +208,7 @@ Dr_&EnterLabel:
 ; ebx, edi is saved and ecx is don't-care.
 ;
 
-a:      mov     ebx,dr0
+        mov     ebx,dr0
         mov     ecx,dr1
         mov     edi,dr2
         mov     [ebp]+TsDr0,ebx
@@ -246,66 +239,7 @@ a:      mov     ebx,dr0
         mov     dr6,ebx
         mov     dr7,ecx
 
-ifnb <V86R>
-        test    dword ptr [ebp]+TsEFlags,EFLAGS_V86_MASK
-        jz      short b
-        jmp     Dr_&V86R
-endif
-b:
         jmp     Dr_&ExitLabel
-
-
-ifb <NoAbiosAssist>
-
-        public  Abios_&EnterLabel
-align 4
-Abios_&EnterLabel:
-
-;
-;   INTERRUPT_STACK16_TO_STACK32
-;
-;       This macro remaps current 32bit stack to 16bit stack at interrupt
-;       time.
-;
-;   Arguments:
-;
-;       (esp)->trap frame.
-;       (eax)->Entry Esp.
-;
-
-        mov     eax, [esp].TsErrCode    ; (eax) = Entry Esp
-        mov     ecx, KGDT_R0_DATA
-        mov     edx, esp
-        shl     eax, 16
-        add     edx, fs:[PcstackLimit]
-        mov     [esp].TsErrCode, eax
-        mov     ss, cx
-        mov     esp, edx                ; Interrupts are off
-        mov     ebp, edx
-        jmp     Abios_&ExitLabel
-
-endif   ; NoAbiosAssist
-
-ifb <NoV86Assist>
-
-        public  V86_&EnterLabel
-align 4
-V86_&EnterLabel:
-
-;
-;   Move the V86 segment registers to the correct place in the frame
-;
-        mov     eax,dword ptr [ebp].TsV86Fs
-        mov     ebx,dword ptr [ebp].TsV86Gs
-        mov     ecx,dword ptr [ebp].TsV86Es
-        mov     edx,dword ptr [ebp].TsV86Ds
-        mov     [ebp].TsSegFs,ax
-        mov     [ebp].TsSegGs,bx
-        mov     [ebp].TsSegEs,cx
-        mov     [ebp].TsSegDs,dx
-        jmp     V86_&ExitLabel
-
-endif   ; NoV86Assist
 
         endm
 
@@ -486,9 +420,6 @@ if DBG
         mov     dword ptr [esp]+TsPreviousPreviousMode, -1 ; ThPreviousMode not pushed on interrupt
 endif
 
-        test    dword ptr [esp].TsEflags,EFLAGS_V86_MASK
-        jnz     V86_&AssistLabel
-
         cmp     word ptr [esp]+TsSegCs, KGDT_R0_CODE
         jz      short @f
 
@@ -497,7 +428,6 @@ endif
         mov     [esp]+TsSegEs, es
         mov     [esp]+TsSegGs, gs
 
-V86_&TargetLabel:
         mov     ebx,KGDT_R0_PCR
         mov     eax,KGDT_R3_DATA OR RPL_MASK
         mov     fs, bx
@@ -516,17 +446,9 @@ ifnb <PassParm>
 endif
 
 ;
-; Remap ABIOS 16 bit stack to 32 bit stack, if necessary.
-;
-
-        cmp     esp, 10000h
-        jb      Abios_&AssistLabel
-
-        mov     dword ptr [esp].TsErrCode, 0 ; Indicate no remapping.
-Abios_&TargetLabel:
-
-;
-; end of Abios stack checking
+; MicroNT: stock NT had an ABIOS stack-remap and a V86-segment shuffle
+; here.  ABIOS is gone and V86 is unreachable from ring 3, so neither
+; branch survives.  The TsErrCode "no remap" sentinel is also gone.
 ;
 
         cld
@@ -596,23 +518,6 @@ ENTER_TRAP macro    AssistLabel, TargetLabel
 ;   Fill in parts of frame we care about
 ;
 
-if DBG
-
-ifndef  _KiAbiosException
-    EXTRNP   _KiAbiosException
-endif
-
-;
-; The code here check if the exception occurred in ring 0
-; ABIOS code. If yes, this is a fatal condition.  We will
-; put out message and bugcheck.
-;
-
-        cmp     esp, 10000h             ; Is the trap in abios?
-        jb      _KiAbiosException       ; if b, yes, switch stack and bugcheck.
-
-endif ; DBG
-
         mov     word ptr [esp+2], 0 ; Clear upper word of ErrorCode
 
         push    ebp                 ; Save the non-volatile registers
@@ -648,10 +553,6 @@ endif
         mov     es,ax
 
         mov     ebp,esp
-        test    dword ptr [esp].TsEflags,EFLAGS_V86_MASK
-        jnz     V86_&AssistLabel
-
-V86_&TargetLabel:
 
         cld
         SET_DEBUG_DATA
@@ -707,9 +608,8 @@ Dr_&TargetLabel:
 ?RestoreAll = 1
 
 EXIT_ALL macro  NoRestoreSegs, NoRestoreVolatiles, NoPreviousMode
-local   a, b, f, x
-local   Abios_ExitHelp, Abios_ExitHelp_Target1, Abios_ExitHelp_Target2
-local   Dr_ExitHelp, Dr_ExitHelp_Target, V86_ExitHelp, V86_ExitHelp_Target
+local   a, b, f
+local   Dr_ExitHelp, Dr_ExitHelp_Target
 local   Db_NotATrapFrame, Db_A, Db_NotValidEntry, NonFlatPm_Target
 
 ;
@@ -795,9 +695,6 @@ endif
 
 Dr_ExitHelp_Target:
 
-        test    dword ptr [esp].TsEflags,EFLAGS_V86_MASK
-        jnz     V86_ExitHelp
-
         test    word ptr [esp]+TsSegCs,FRAME_EDITED
         jz      b                           ; Edited frame pop out.
 
@@ -837,7 +734,6 @@ NonFlatPm_Target:
         lea     esp, [ebp]+TsSegFs
         pop     fs
 @@:
-V86_ExitHelp_Target:
 
         lea     esp, [ebp]+TsEdi            ; Skip PreMode, ExceptList and fs
 
@@ -846,23 +742,7 @@ V86_ExitHelp_Target:
         pop     ebx
         pop     ebp
 
-;
-; Esp MUST point to the Error Code on the stack.  Because we use it to
-; store the entering esp.
-;
-
-        cmp     word ptr [esp+8], 80h ; check for abios code segment?
-        ja      Abios_ExitHelp
-
-Abios_ExitHelp_Target1:
-
         add     esp, 4              ; remove error code from trap frame
-
-Abios_ExitHelp_Target2:
-
-;
-; End of ABIOS stack check
-;
 
         iretd                       ; return
 
@@ -891,13 +771,10 @@ endif
 align dword
 Dr_ExitHelp:
 
-        test    dword ptr [ebp]+TsEFlags,EFLAGS_V86_MASK
-        jnz     short x
-
         test    dword ptr [ebp]+TsSegCs,MODE_MASK
         jz      Dr_ExitHelp_Target
 
-x:      mov     esi,[ebp]+TsDr0
+        mov     esi,[ebp]+TsDr0
         mov     edi,[ebp]+TsDr1
         mov     ebx,[ebp]+TsDr2
         mov     dr0,esi
@@ -911,51 +788,6 @@ x:      mov     esi,[ebp]+TsDr0
         mov     dr7,ebx
 
         jmp     Dr_ExitHelp_Target
-
-align dword
-Abios_ExitHelp:
-
-;
-;   INTERRUPT_STACK32_TO_STACK16
-;
-;       This macro remaps current 32bit stack to 16bit stack at interrupt
-;       time.
-;
-;   Arguments:
-;
-;       (esp)->TsEip.
-;
-;
-; BUGBUG shielint We should check if there is any other H/W interrupt
-;        pending.  If yes, don't switch back to 16 bit stack.  This way
-;        we can get better performance.
-; BUGBUG It appears Error code is not a good place to store the 16-bit
-;        stack pointer.  We should change it.
-;
-
-        cmp     word ptr [esp+2], 0     ; (esp+2) = Low word of error code
-        jz      short Abios_ExitHelp_Target1
-        cmp     word ptr [esp], 0       ; (esp) = High word of error code
-        jnz     short Abios_ExitHelp_Target1
-
-        shr     dword ptr [esp], 16
-        mov     word ptr [esp + 2], KGDT_STACK16
-        lss     sp, dword ptr [esp]
-        movzx   esp, sp
-        jmp     short Abios_ExitHelp_Target2
-
-;
-;   Restore volatiles for V86 mode, and move seg regs
-;
-
-align dword
-V86_ExitHelp:
-
-        add     esp,TsEdx
-        pop     edx
-        pop     ecx
-        pop     eax
-        jmp     V86_ExitHelp_Target
 
 ;
 if ?RestoreAll eq 0

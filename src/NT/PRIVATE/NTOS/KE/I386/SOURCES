@@ -1,6 +1,4 @@
 i386_SOURCES=..\i386\mpipi.c      \
-             ..\i386\abiosa.asm   \
-             ..\i386\abiosc.c     \
              ..\i386\allproc.c    \
              ..\i386\apcuser.c    \
              ..\i386\clockint.asm \
