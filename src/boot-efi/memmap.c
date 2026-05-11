@@ -68,6 +68,29 @@ EFI_STATUS memmap_capture(UINTN *out_map_key) {
     return EFI_SUCCESS;
 }
 
+EFI_STATUS memmap_refresh_key(UINTN *out_map_key) {
+    /* Re-call GetMemoryMap into the buffer memmap_capture already
+     * allocated. No AllocatePool here, so the new MapKey is current
+     * with respect to whatever firmware-side allocation invalidated
+     * the previous one. UEFI 2.10 §7.4.2 "ExitBootServices()" mandates
+     * this retry pattern for the EFI_INVALID_PARAMETER case. */
+    if (g_map == NULL) return EFI_NOT_READY;
+
+    UINTN  size    = g_map_bytes;
+    UINTN  map_key = 0;
+    UINTN  ds      = 0;
+    UINT32 dv      = 0;
+    EFI_STATUS status = uefi_call_wrapper(BS->GetMemoryMap, 5,
+                                          &size, g_map, &map_key, &ds, &dv);
+    if (EFI_ERROR(status)) return status;
+
+    g_map_bytes = size;
+    g_desc_size = ds;
+    g_desc_ver  = dv;
+    if (out_map_key) *out_map_key = map_key;
+    return EFI_SUCCESS;
+}
+
 /* memmap_dump / memmap_dump_registry were verbose diagnostic helpers
  * used during UEFI bring-up. Removed in the Print() refactor — the per-
  * descriptor dump was ~35 lines of noise on a 128 MB guest and every

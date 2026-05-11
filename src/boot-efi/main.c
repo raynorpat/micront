@@ -403,10 +403,27 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
     }
 
     /* --------------------------------------------------------------------
-     * Point of no return. UEFI services will be gone after this call. */
+     * Point of no return. UEFI services will be gone after this call.
+     *
+     * Retry loop: UEFI 2.10 §7.4.2 mandates that on EFI_INVALID_PARAMETER
+     * (stale map_key) the caller refresh the memory map and retry.  OVMF's
+     * UEFI IDE driver on q35 (PIIX3-IDE bridge) has been observed allocating
+     * between our memmap_capture and this call — locally and on most other
+     * disk shapes the race never closes, but on CI's q35+ide it triggered
+     * deterministically after our kernel binary shrank by ~7 pages and
+     * shifted the allocator pattern.  memmap_refresh_key() reuses the
+     * already-allocated buffer, so it doesn't itself invalidate the key it
+     * returns.  Three attempts is generous; one retry is what the spec
+     * implies should suffice. */
     {
-        EFI_STATUS s = uefi_call_wrapper(BS->ExitBootServices, 2,
-                                         ImageHandle, map_key);
+        EFI_STATUS s = EFI_LOAD_ERROR;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            s = uefi_call_wrapper(BS->ExitBootServices, 2,
+                                  ImageHandle, map_key);
+            if (!EFI_ERROR(s)) break;
+            if (s != EFI_INVALID_PARAMETER) break;  /* non-key error: give up */
+            if (memmap_refresh_key(&map_key) != EFI_SUCCESS) break;
+        }
         if (EFI_ERROR(s)) {
             BXLOG(L"ExitBootServices failed: 0x%lx", (UINT64)s);
             goto halt;
