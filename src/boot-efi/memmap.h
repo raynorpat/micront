@@ -21,6 +21,14 @@
  * returns the MapKey the caller must pass to ExitBootServices. */
 EFI_STATUS memmap_capture(UINTN *out_map_key);
 
+/* Refresh the MapKey in place using the buffer already allocated by
+ * memmap_capture. Does NOT call AllocatePool, so it does NOT itself
+ * invalidate the key it returns — safe to call between a failed
+ * ExitBootServices (INVALID_PARAMETER == stale key) and the retry.
+ * Returns EFI_SUCCESS when the captured buffer was large enough,
+ * EFI_BUFFER_TOO_SMALL otherwise (caller should give up and halt). */
+EFI_STATUS memmap_refresh_key(UINTN *out_map_key);
+
 /*
  * NT memory descriptor emitted from translate. This mirrors the fields of
  * MEMORY_ALLOCATION_DESCRIPTOR but without the NT LIST_ENTRY — loaderblock
