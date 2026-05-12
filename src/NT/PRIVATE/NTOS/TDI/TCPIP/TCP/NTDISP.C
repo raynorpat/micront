@@ -2308,10 +2308,19 @@ Notes:
         MmUnlockPages(mdlAddress);
         IoFreeMdl(mdlAddress);
 
-        if (NT_SUCCESS(status)) {
-        	//
-        	// Copy the returned context to the input buffer.
-        	//
+        //
+        // Copy the returned Context cursor + bytes-written back to
+        // user space.  STATUS_BUFFER_OVERFLOW is a WARNING-severity
+        // status (top bit set → NT_SUCCESS=false) but the underlying
+        // handler treats it as "more data available, here's the
+        // resume cursor."  The original guard was just NT_SUCCESS,
+        // which dropped the cursor on overflow and broke paginated
+        // walks of the route / address / ARP tables.  Include the
+        // overflow path explicitly so the caller can continue
+        // iteration AND see how many bytes the kernel wrote.  Hard
+        // errors (STATUS_INVALID_PARAMETER etc) still skip the copy.
+        //
+        if (NT_SUCCESS(status) || status == STATUS_BUFFER_OVERFLOW) {
         	try {
 
                 RtlCopyMemory(

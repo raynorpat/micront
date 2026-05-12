@@ -160,3 +160,69 @@ t.test("ipsi_outnoroutes does not grow for local UDP", function()
          tonumber(before.ipsi_outnoroutes),
          "outnoroutes unchanged")
 end)
+
+-- ------------------------------------------------------------------
+-- Tier 3 — route-mutator wiring.  Exercises the new add_route /
+-- del_route surface against the kernel's IPSetInfo validation path
+-- (IP/INFO.C:391-496).  The validation rejects NULL / loopback /
+-- classD / classE nexthops before any NTE lookup, so these tests
+-- work on a selftest environment that has only a loopback NTE.
+--
+-- The "real" roundtrip (add a route, observe via routes(h), delete,
+-- observe gone) requires a non-loopback NIC and is deferred to the
+-- DHCP-plan tests where we have a virtual NIC to drive.
+-- ------------------------------------------------------------------
+
+t.test("add_route with NULL nexthop is refused", function()
+    local h = ensure_open()
+    local st = info.add_route(h, {
+        dest     = 0x0A000000,   -- 10.0.0.0
+        mask     = 0xFF000000,   -- /8
+        nexthop  = 0,            -- NULL_IP_ADDR — kernel rejects
+        if_index = 1,
+        metric   = 1,
+    })
+    t.eq(st, info.TDI_INVALID_PARAMETER,
+        "NULL nexthop returns TDI_INVALID_PARAMETER")
+end)
+
+t.test("add_route with loopback nexthop is refused", function()
+    local h = ensure_open()
+    local st = info.add_route(h, {
+        dest     = 0x0A000000,
+        mask     = 0xFF000000,
+        nexthop  = 0x7F000001,   -- 127.0.0.1 — IP_LOOPBACK → refused
+        if_index = 1,
+        metric   = 1,
+    })
+    t.eq(st, info.TDI_INVALID_PARAMETER,
+        "loopback nexthop returns TDI_INVALID_PARAMETER")
+end)
+
+t.test("del_route validation path matches add_route", function()
+    -- del_route forces ire_type = IRE_TYPE_INVALID but goes through
+    -- the SAME validation block (INFO.C:407-440 runs before the
+    -- add/delete fork at line 478).  So a bad-nexthop delete is
+    -- refused with the same status — confirms del_route's wire
+    -- path is actually reaching IPSetInfo and isn't silently
+    -- short-circuited somewhere.
+    local h = ensure_open()
+    local st = info.del_route(h, {
+        dest     = 0x0A000000,
+        mask     = 0xFF000000,
+        nexthop  = 0,
+        if_index = 1,
+    })
+    t.eq(st, info.TDI_INVALID_PARAMETER,
+        "del_route with bad nexthop returns TDI_INVALID_PARAMETER")
+end)
+
+t.test("routes(h) returns a non-empty table", function()
+    -- Sanity check on the walker — proves the test environment has
+    -- at least a loopback route, so our route-table observations
+    -- aren't reading from an uninitialised stack.
+    local h = ensure_open()
+    local rs = info.routes(h)
+    t.ok(#rs > 0,
+        string.format("routes(h) has %d entries", #rs))
+end)
