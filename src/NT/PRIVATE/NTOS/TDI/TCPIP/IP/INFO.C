@@ -245,7 +245,9 @@ IPQueryInfo(TDIObjectID *ID, PNDIS_BUFFER Buffer, uint *Size, void *Context)
 						AddrEntry->iae_index = CurrentNTE->nte_if->if_index;
 						AddrEntry->iae_bcastaddr =
 							*(int *)&(CurrentNTE->nte_if->if_bcast) & 1;
-						AddrEntry->iae_reasmsize = 0xffff;
+						/* ipAdEntReasmMaxSize (RFC 2011): 0 reports "no
+						   reassembly support" — matches our stripped state. */
+						AddrEntry->iae_reasmsize = 0;
 						AddrEntry->iae_context = CurrentNTE->nte_context;
 						Buffer = CopyToNdis(Buffer, (uchar *)AddrEntry,
 							sizeof(IPAddrEntry), &Offset);

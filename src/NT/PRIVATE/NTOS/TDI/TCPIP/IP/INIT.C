@@ -27,7 +27,8 @@
 
 #define NUM_IP_NONHDR_BUFFERS  50
 
-#define DEFAULT_RA_TIMEOUT 60
+/* DEFAULT_RA_TIMEOUT — stripped with IP reassembly (was the in-flight
+   reassembly TTL in seconds; no longer meaningful). */
 
 #define DEFAULT_ICMP_BUFFERS 5
 
@@ -54,7 +55,7 @@ extern uint	IGMPInit(void);
 extern void ICMPTimer(NetTableEntry *);
 extern IP_STATUS SendICMPErr(IPAddr, IPHeader UNALIGNED *, uchar, uchar, ulong);
 extern void TDUserRcv(void *, PNDIS_PACKET, NDIS_STATUS, uint);
-extern void FreeRH(ReassemblyHeader *);
+/* extern void FreeRH(ReassemblyHeader *); — stripped with IP reassembly */
 extern PNDIS_PACKET	GrowIPPacketList(void);
 extern PNDIS_BUFFER	FreeIPPacket(PNDIS_PACKET Packet);
 
@@ -70,8 +71,7 @@ extern	NetTableEntry	*LoopNTE;
 
 NetTableEntry	*NetTableList;		// List of NTEs.
 int     NumNTE;                     // Number of NTEs.
-uchar   RATimeout;                  // Number of seconds to time out a
-									// reassembly.
+/* uchar RATimeout — stripped with IP reassembly */
 ushort	NextNTEContext;				// Next NTE context to use.
 
 #if 0
@@ -806,45 +806,16 @@ void
 IPTimeout(CTEEvent *Timer, void *Context)
 {
     NetTableEntry       *NTE = STRUCT_OF(NetTableEntry, Timer, nte_timer);
-    CTELockHandle       NTEHandle;
-    ReassemblyHeader    *PrevRH, *CurrentRH, *TempList = (ReassemblyHeader *)NULL;
 
     ICMPTimer(NTE);
 	IGMPTimer(NTE);
-    if (Context) {
-        CTEGetLock(&NTE->nte_lock, &NTEHandle);
-        PrevRH = STRUCT_OF(ReassemblyHeader, &NTE->nte_ralist, rh_next);
-        CurrentRH = PrevRH->rh_next;
-        while (CurrentRH) {
-            if (--CurrentRH->rh_ttl == 0) {             // This guy timed out.
-                PrevRH->rh_next = CurrentRH->rh_next;   // Take him out.
-                CurrentRH->rh_next = TempList;          // And save him for later.
-                TempList = CurrentRH;
-                IPSInfo.ipsi_reasmfails++;
-            } else
-                PrevRH = CurrentRH;
 
-            CurrentRH = PrevRH->rh_next;
-        }
-
-        // We've run the list. If we need to free anything, do it now. This may
-        // include sending an ICMP message.
-        CTEFreeLock(&NTE->nte_lock, NTEHandle);
-        while (TempList) {
-            CurrentRH = TempList;
-            TempList = CurrentRH->rh_next;
-            // If this wasn't sent to a bcast address and we already have the first fragment,
-            // send a time exceeded message.
-            if (CurrentRH->rh_headersize != 0)
-                SendICMPErr(NTE->nte_addr, (IPHeader *)CurrentRH->rh_header, ICMP_TIME_EXCEED,
-                    TTL_IN_REASSEM, 0);
-            FreeRH(CurrentRH);
-        }
-
-        CTEStartTimer(&NTE->nte_timer, IP_TIMEOUT, IPTimeout, NULL);
-    } else
-        CTEStartTimer(&NTE->nte_timer, IP_TIMEOUT, IPTimeout, NTE);
-
+    // Reassembly-timeout block stripped with IP reassembly per
+    // IPSTACK-HARDENING.md.  Restart the periodic timer; Context==NTE
+    // for normal repeating fires, Context==NULL on the first call after
+    // (formerly) reaping reassembly state.
+    CTEStartTimer(&NTE->nte_timer, IP_TIMEOUT, IPTimeout,
+                  Context ? (void *)NULL : (void *)NTE);
 }
 
 //* IPSetNTEAddr - Set the IP address of an NTE.
@@ -1040,7 +1011,6 @@ InitNTE(NetTableEntry *NTE)
 	Interface		*IF;
 	NetTableEntry	*PrevNTE;
 
-    NTE->nte_ralist = NULL;
     NTE->nte_echolist = NULL;
 	NTE->nte_context = NextNTEContext++;
 
@@ -1731,7 +1701,7 @@ IPDelInterface(void *Context)
 	PNDIS_PACKET		Packet;
 	PNDIS_BUFFER		Buffer;
 	uchar				*TDBuffer;
-	ReassemblyHeader	*RH;
+	/* ReassemblyHeader	*RH; — stripped with IP reassembly */
 	EchoControl			*EC;
 	EchoRtn				Rtn;
 	
@@ -1766,13 +1736,8 @@ IPDelInterface(void *Context)
 			NTE->nte_flags &= ~NTE_ACTIVE;
 		    CTEStopTimer(&NTE->nte_timer);
 			
-			// Free any reassembly resources.
-			RH = NTE->nte_ralist;
-			while (RH != NULL) {
-				NTE->nte_ralist = RH->rh_next;
-				FreeRH(RH);
-				RH = NTE->nte_ralist;
-			}
+			// Reassembly resource teardown stripped with IP reassembly per
+			// IPSTACK-HARDENING.md; nte_ralist is never populated.
 			
 			// Now free any pending echo requests.
 			EC = NTE->nte_echolist;
@@ -1868,7 +1833,7 @@ IPInit()
 		return IP_INIT_FAILURE;
 	}
 
-    RATimeout = DEFAULT_RA_TIMEOUT;
+    /* RATimeout = DEFAULT_RA_TIMEOUT — stripped with IP reassembly */
 #if 0
     CTEInitLock(&PILock);
 #endif
@@ -2130,7 +2095,8 @@ IPInit()
 		IPSInfo.ipsi_forwarding = (ci->ici_gateway ? IP_FORWARDING :
 			IP_NOT_FORWARDING);
 		IPSInfo.ipsi_defaultttl = DefaultTTL;
-		IPSInfo.ipsi_reasmtimeout = DEFAULT_RA_TIMEOUT;
+		/* ipReasmTimeout (RFC 2011): 0 reports "no reassembly support". */
+		IPSInfo.ipsi_reasmtimeout = 0;
 
         // Allocate our packet pools.
         CTEInitLock(&HeaderLock);

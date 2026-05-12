@@ -68,12 +68,6 @@ extern NDIS_SPIN_LOCK PacketLogSpinLock;
 #endif
 
 //
-// Arcnet specific stuff
-//
-#define WRAPPER_ARC_BUFFERS 8
-#define WRAPPER_ARC_HEADER_SIZE 4
-
-//
 // Define constants used internally to identify regular opens from
 // query global statistics ones.
 //
@@ -777,10 +771,7 @@ Return Value:
         NdisInitialInitNeeded = FALSE;
         NdisAllocateSpinLock(&NdisMacListLock);
 
-        ArcInitializePackage();
         EthInitializePackage();
-        FddiInitializePackage();
-        TrInitializePackage();
         MiniportInitializePackage();
         NdisInitInitializePackage();
         NdisMacInitializePackage();
@@ -5535,8 +5526,7 @@ MiniportOpenAdapter(
     IN PSTRING AddressingInformation,
     IN PNDIS_MINIPORT_BLOCK Miniport,
     IN PNDIS_OPEN_BLOCK NewOpenP,
-    IN PFILE_OBJECT FileObject,
-    IN BOOLEAN UsingEncapsulation
+    IN PFILE_OBJECT FileObject
     )
 /*++
 
@@ -5640,16 +5630,6 @@ Return Value:
             FakeMac->MacCharacteristics.TransferDataHandler = NdisMTransferData;
         }
 
-        //
-        // Keep the SendHandler the same for WAN miniports
-        //
-
-        if (Miniport->MediaType == NdisMediumWan) {
-
-            FakeMac->MacCharacteristics.SendHandler =
-                (PVOID)Miniport->DriverHandle->MiniportCharacteristics.SendHandler;
-        }
-
     } else {
 
         FakeMac = Miniport->DriverHandle->FakeMac;
@@ -5689,7 +5669,6 @@ Return Value:
     NdisAllocateSpinLock(&(MiniportOpen->SpinLock));
 
     MiniportOpen->References = 1;
-    MiniportOpen->UsingEthEncapsulation = UsingEncapsulation;
     MiniportOpen->SendHandler =
                     Miniport->DriverHandle->MiniportCharacteristics.SendHandler;
     MiniportOpen->TransferDataHandler =
@@ -5724,29 +5703,13 @@ Return Value:
     // for even more speed....
     //
 
-    if (Miniport->MediaType == NdisMediumArcnet878_2) {
-
-        NewOpenP->TransferDataHandler = NdisMArcTransferData;
-
+    if ( (Miniport->MacOptions & NDIS_MAC_OPTION_TRANSFERS_NOT_PEND) != 0 ) {
+        NewOpenP->TransferDataHandler = NdisMTransferDataSync;
     } else {
-
-        if ( (Miniport->MacOptions & NDIS_MAC_OPTION_TRANSFERS_NOT_PEND) != 0 ) {
-            NewOpenP->TransferDataHandler = NdisMTransferDataSync;
-        } else {
-            NewOpenP->TransferDataHandler = NdisMTransferData;
-        }
+        NewOpenP->TransferDataHandler = NdisMTransferData;
     }
 
     NewOpenP->SendHandler = NdisMSend;
-
-    //
-    // For WAN miniports, the send handler is different
-    //
-
-    if ( Miniport->MediaType == NdisMediumWan ) {
-
-        NewOpenP->SendHandler = (PVOID)NdisMWanSend;
-    }
 
     NewOpenP->SendCompleteHandler = TmpProtP->ProtocolCharacteristics.SendCompleteHandler;
     NewOpenP->TransferDataCompleteHandler = TmpProtP->ProtocolCharacteristics.TransferDataCompleteHandler;
@@ -5770,69 +5733,17 @@ Return Value:
    *NdisBindingHandle = (NDIS_HANDLE)NewOpenP;
 
    //
-   // Insert the open into the filter package
+   // Insert the open into the filter package.  MicroNT supports
+   // Ethernet only — the registration gate in NdisInitializeWrapper
+   // rejects any miniport with MediaType != NdisMedium802_3.
    //
 
-   switch (Miniport->MediaType) {
-
-            case NdisMediumArcnet878_2:
-
-                if ( !UsingEncapsulation ) {
-
-                    FilterOpen = ArcNoteFilterOpenAdapter(
-                                     Miniport->ArcDB,
-                                     MiniportOpen,
-                                     (NDIS_HANDLE)NewOpenP,
-                                     &MiniportOpen->FilterHandle
-                                     );
-
-                    break;
-                }
-
-                //
-                // If we're using ethernet encapsulation then
-                // we simply fall through to the ethernet stuff.
-                //
-
-            case NdisMedium802_3:
-
-                FilterOpen = EthNoteFilterOpenAdapter(
-                                 Miniport->EthDB,
-                                 MiniportOpen,
-                                 (NDIS_HANDLE)NewOpenP,
-                                 &MiniportOpen->FilterHandle
-                                 );
-                break;
-
-            case NdisMedium802_5:
-
-                FilterOpen = TrNoteFilterOpenAdapter(
-                                 Miniport->TrDB,
-                                 MiniportOpen,
-                                 (NDIS_HANDLE)NewOpenP,
-                                 &MiniportOpen->FilterHandle
-                                 );
-                break;
-
-            case NdisMediumFddi:
-
-                FilterOpen = FddiNoteFilterOpenAdapter(
-                                 Miniport->FddiDB,
-                                 MiniportOpen,
-                                 (NDIS_HANDLE)NewOpenP,
-                                 &MiniportOpen->FilterHandle
-                                 );
-                break;
-
-
-            case NdisMediumWan:
-                //
-                // Bogus non-NULL value
-                //
-
-                FilterOpen = 1;
-                break;
-    }
+    FilterOpen = EthNoteFilterOpenAdapter(
+                     Miniport->EthDB,
+                     MiniportOpen,
+                     (NDIS_HANDLE)NewOpenP,
+                     &MiniportOpen->FilterHandle
+                     );
 
     //
     //  Check for an open filter failure.
@@ -5926,8 +5837,7 @@ Return Value:
                     MiniportPendingOpen->AddressingInformation,
                     MiniportPendingOpen->Miniport,
                     MiniportPendingOpen->NewOpenP,
-                    MiniportPendingOpen->FileObject,
-                    MiniportPendingOpen->UsingEncapsulation
+                    MiniportPendingOpen->FileObject
                     );
 
         //
@@ -6032,7 +5942,6 @@ Note:
     IO_STATUS_BLOCK IoStatus;
     PFILE_FULL_EA_INFORMATION OpenEa;
     ULONG OpenEaLength;
-    BOOLEAN UsingEncapsulation;
     KIRQL OldIrql;
     BOOLEAN LocalLock;
 
@@ -6187,10 +6096,10 @@ Note:
         PNDIS_MINIPORT_BLOCK Miniport = (PNDIS_MINIPORT_BLOCK)TmpAdaptP;
         ULONG i;
 
-        UsingEncapsulation = FALSE;
-
         //
-        // Select the medium to use
+        // Select the medium to use.  MicroNT supports Ethernet only —
+        // the registration gate guarantees Miniport->MediaType ==
+        // NdisMedium802_3.  Find it in the caller's array.
         //
 
         for (i = 0; i < MediumArraySize; i++){
@@ -6205,42 +6114,8 @@ Note:
 
         if (i == MediumArraySize){
 
-            //
-            // Check for ethernet encapsulation on Arcnet as
-            // a possible combination.
-            //
-            if (Miniport->MediaType == NdisMediumArcnet878_2) {
-
-                for (i = 0; i < MediumArraySize; i++){
-
-                    if (MediumArray[i] == NdisMedium802_3) {
-                        break;
-                    }
-                }
-
-                if (i == MediumArraySize) {
-
-                    *Status = NDIS_STATUS_UNSUPPORTED_MEDIA;
-                    return;
-
-                }
-
-                //
-                // encapsulated ethernet, so we add in the wrapper's
-                // ability to support (emulate) the multicast stuff
-                //
-
-                Miniport->SupportedPacketFilters |= (NDIS_PACKET_TYPE_MULTICAST |
-                                                     NDIS_PACKET_TYPE_ALL_MULTICAST);
-
-                UsingEncapsulation = TRUE;
-
-            } else {
-
-                *Status = NDIS_STATUS_UNSUPPORTED_MEDIA;
-                return;
-
-            }
+            *Status = NDIS_STATUS_UNSUPPORTED_MEDIA;
+            return;
 
         }
 
@@ -6269,8 +6144,7 @@ Note:
                         AddressingInformation,
                         Miniport,
                         NewOpenP,
-                        FileObject,
-                        UsingEncapsulation
+                        FileObject
                         );
 
         } else {
@@ -6306,7 +6180,6 @@ Note:
                 MiniportPendingOpen->Miniport = Miniport;
                 MiniportPendingOpen->NewOpenP = NewOpenP;
                 MiniportPendingOpen->FileObject = FileObject;
-                MiniportPendingOpen->UsingEncapsulation = UsingEncapsulation;
 
                 if ( Miniport->FirstPendingOpen == NULL ) {
 
@@ -11097,13 +10970,9 @@ Return Value:
 
     UINT SelectedMediumIndex;
 
-    NDIS_MEDIUM MediumArray[] = {NdisMedium802_3,
-                                 NdisMedium802_5,
-                                 NdisMediumFddi,
-                                 NdisMediumArcnet878_2,
-                                 NdisMediumWan };
+    NDIS_MEDIUM MediumArray[] = {NdisMedium802_3};
 
-    UINT MediumArraySize = 5;
+    UINT MediumArraySize = 1;
 
     //
     // Status of registry requests.
@@ -11429,10 +11298,7 @@ Return Value:
     // Miniport driver uses any of these, then the filter package
     // will reference itself, to keep the image in memory.
     //
-    ArcReferencePackage();
     EthReferencePackage();
-    FddiReferencePackage();
-    TrReferencePackage();
     MiniportReferencePackage();
     NdisMacReferencePackage();
 
@@ -11591,8 +11457,6 @@ Return Value:
             UINT PacketFilter = 0x1;
             UCHAR i;
             BOOLEAN LocalLock;
-            PARC_BUFFER_LIST Buffer;
-            PVOID DataBuffer;
 
             //
             // Initialize device.
@@ -11656,9 +11520,6 @@ Return Value:
 
             Miniport->OpenQueue = (PNDIS_M_OPEN_BLOCK)NULL;
             Miniport->EthDB = NULL;
-            Miniport->TrDB = NULL;
-            Miniport->FddiDB = NULL;
-            Miniport->ArcDB = NULL;
             Miniport->BeingRemoved = FALSE;
             Miniport->SendResourcesAvailable = 0x00FFFFFF;
             Miniport->Flags = 0; // a value that cannot be a pointer.
@@ -11694,9 +11555,10 @@ Return Value:
 
 
             //
-            // Now we do something really bogus.  We create many
-            // temporary filter databases, just in case any indications
-            // happen.
+            // Create the Ethernet filter database.  MicroNT is
+            // Ethernet-only; the post-Initialize gate rejects any
+            // miniport that reports a non-802_3 MediaType, so we
+            // do not pre-create Tr/Fddi/Arc filter packages here.
             //
 
             if (!EthCreateFilter(
@@ -11714,73 +11576,6 @@ Return Value:
                     NDIS_ERROR_CODE_OUT_OF_RESOURCES,
                     0
                     );
-                ExFreePool(Miniport->MiniportName.Buffer);
-                NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                IoDeleteDevice(TmpDeviceP);
-                NdisDereferenceDriver(WDriver);
-                goto LoopBottom;
-            }
-
-            if (!TrCreateFilter(
-                     NdisMChangeFunctionalAddress,
-                     NdisMChangeGroupAddress,
-                     NdisMChangeClass,
-                     NdisMCloseAction,
-                     CurrentLongAddress,
-                     &Miniport->Lock,
-                     &(Miniport->TrDB)
-                     )) {
-
-                NdisWriteErrorLogEntry(
-                   (NDIS_HANDLE)Miniport,
-                   NDIS_ERROR_CODE_OUT_OF_RESOURCES,
-                   0
-                   );
-                ExFreePool(Miniport->MiniportName.Buffer);
-                NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                IoDeleteDevice(TmpDeviceP);
-                NdisDereferenceDriver(WDriver);
-                goto LoopBottom;
-            }
-
-            if (!FddiCreateFilter(
-                     1,
-                     1,
-                     NdisMChangeFddiAddresses,
-                     NdisMChangeClass,
-                     NdisMCloseAction,
-                     CurrentLongAddress,
-                     CurrentShortAddress,
-                     &Miniport->Lock,
-                     &(Miniport->FddiDB)
-                     )) {
-
-                NdisWriteErrorLogEntry(
-                   (NDIS_HANDLE)Miniport,
-                   NDIS_ERROR_CODE_OUT_OF_RESOURCES,
-                   0
-                   );
-                ExFreePool(Miniport->MiniportName.Buffer);
-                NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                IoDeleteDevice(TmpDeviceP);
-                NdisDereferenceDriver(WDriver);
-                goto LoopBottom;
-            }
-
-            if (!ArcCreateFilter(
-                     Miniport,
-                     NdisMChangeClass,
-                     NdisMCloseAction,
-                     CurrentLongAddress[0],
-                     &Miniport->Lock,
-                     &(Miniport->ArcDB)
-                     )) {
-
-                NdisWriteErrorLogEntry(
-                   (NDIS_HANDLE)Miniport,
-                   NDIS_ERROR_CODE_OUT_OF_RESOURCES,
-                   0
-                   );
                 ExFreePool(Miniport->MiniportName.Buffer);
                 NdisDequeueMiniportOnDriver(Miniport, WDriver);
                 IoDeleteDevice(TmpDeviceP);
@@ -11831,6 +11626,33 @@ Return Value:
                 ASSERT(SelectedMediumIndex < MediumArraySize);
 
                 Miniport->MediaType = MediumArray[SelectedMediumIndex];
+
+                //
+                // MicroNT: NDIS supports Ethernet (NdisMedium802_3) only.
+                // Token Ring (802_5), FDDI, ARCnet, WAN, and all other
+                // media-type code paths are stripped.  Reject miniports
+                // that report any other medium so we cannot end up
+                // executing dispatch code that no longer exists.
+                //
+                if (Miniport->MediaType != NdisMedium802_3) {
+                    DbgPrint("NDIS: rejecting miniport with non-Ethernet "
+                             "MediaType=%d (MicroNT supports 802_3 only)\n",
+                             Miniport->MediaType);
+                    BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
+                    (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler)(
+                            Miniport->MiniportAdapterContext);
+                    UNLOCK_MINIPORT(Miniport, LocalLock);
+                    NdisWriteErrorLogEntry(
+                        (NDIS_HANDLE)Miniport,
+                        NDIS_ERROR_CODE_UNSUPPORTED_CONFIGURATION,
+                        1,
+                        Miniport->MediaType);
+                    ExFreePool(Miniport->MiniportName.Buffer);
+                    NdisDequeueMiniportOnDriver(Miniport, WDriver);
+                    IoDeleteDevice(TmpDeviceP);
+                    NdisDereferenceDriver(WDriver);
+                    goto LoopBottom;
+                }
 
                 KeInitializeEvent(
                     &Miniport->RequestEvent,
@@ -11960,41 +11782,12 @@ Return Value:
                 }
 
                 //
-                // Now adjust based on media type
+                // Adjust lookahead for the Ethernet header (14 bytes).
+                // MediaType is guaranteed NdisMedium802_3 by the gate above.
                 //
-
-                switch(Miniport->MediaType) {
-
-                    case NdisMedium802_3:
-
-                        Miniport->MaximumLookahead = (NDIS_M_MAX_LOOKAHEAD - 14 < MaximumLongAddresses) ?
-                                                      NDIS_M_MAX_LOOKAHEAD - 14 :
-                                                      MaximumLongAddresses;
-                        break;
-
-                    case NdisMedium802_5:
-
-                        Miniport->MaximumLookahead = (NDIS_M_MAX_LOOKAHEAD - 32 < MaximumLongAddresses) ?
-                                                      NDIS_M_MAX_LOOKAHEAD - 32 :
-                                                      MaximumLongAddresses;
-                        break;
-
-                    case NdisMediumFddi:
-                        Miniport->MaximumLookahead = (NDIS_M_MAX_LOOKAHEAD - 16 < MaximumLongAddresses) ?
-                                                      NDIS_M_MAX_LOOKAHEAD - 16 :
-                                                      MaximumLongAddresses;
-                        break;
-
-                    case NdisMediumArcnet878_2:
-                        Miniport->MaximumLookahead = (NDIS_M_MAX_LOOKAHEAD - 50 < MaximumLongAddresses) ?
-                                                      NDIS_M_MAX_LOOKAHEAD - 50 :
-                                                      MaximumLongAddresses;
-                        break;
-
-                    case NdisMediumWan:
-                        Miniport->MaximumLookahead = 1514;
-
-                }
+                Miniport->MaximumLookahead = (NDIS_M_MAX_LOOKAHEAD - 14 < MaximumLongAddresses) ?
+                                              NDIS_M_MAX_LOOKAHEAD - 14 :
+                                              MaximumLongAddresses;
 
                 Miniport->CurrentLookahead = Miniport->MaximumLookahead;
 
@@ -12115,9 +11908,6 @@ Return Value:
                 //
                 // Create filter package
                 //
-                switch(Miniport->MediaType) {
-
-                    case NdisMedium802_3:
 
                         //
                         // Query maximum MulticastAddress
@@ -12359,12 +12149,6 @@ Return Value:
 
                         EthDeleteFilter(Miniport->EthDB);
                         Miniport->EthDB = NULL;
-                        TrDeleteFilter(Miniport->TrDB);
-                        Miniport->TrDB = NULL;
-                        FddiDeleteFilter(Miniport->FddiDB);
-                        Miniport->FddiDB = NULL;
-                        ArcDeleteFilter(Miniport->ArcDB);
-                        Miniport->ArcDB = NULL;
 
                         if (!EthCreateFilter(
                                  MaximumLongAddresses,
@@ -12405,1253 +12189,6 @@ Return Value:
 
                         UNLOCK_MINIPORT(Miniport, LocalLock);
 
-                        break;
-
-                    case NdisMedium802_5:
-
-                        Miniport->MiniportRequest = &Miniport->InternalRequest;
-                        Miniport->InternalRequest.RequestType = NdisRequestQueryInformation;
-
-                        BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-                        KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
-
-                        NdisStatus =
-                        (Miniport->DriverHandle->MiniportCharacteristics.QueryInformationHandler) (
-                                Miniport->MiniportAdapterContext,
-                                OID_802_5_CURRENT_ADDRESS,
-                                &(CurrentLongAddress),
-                                sizeof(CurrentLongAddress),
-                                &BytesWritten,
-                                &BytesNeeded
-                                );
-
-                        KeLowerIrql(OldIrql);
-                        UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                        //
-                        // Fire a DPC to do anything
-                        //
-                        if ((NdisStatus == NDIS_STATUS_PENDING)  ||
-                            (NdisStatus == NDIS_STATUS_SUCCESS)) {
-
-                            Miniport->RunDpc = FALSE;
-                            NdisSetTimer(&(Miniport->DpcTimer), 1);
-
-                        }
-
-                        if (NdisStatus == NDIS_STATUS_PENDING) {
-
-                            //
-                            // The completion routine will set NdisRequestStatus.
-                            //
-
-                            TimeoutValue.QuadPart = Int32x32To64(2 * 1000, -10000);
-
-                            NtStatus = KeWaitForSingleObject(
-                                &Miniport->RequestEvent,
-                                Executive,
-                                KernelMode,
-                                TRUE,
-                                &TimeoutValue
-                                );
-
-                            if (NtStatus != STATUS_SUCCESS) {
-
-                                //
-                                // Halt the miniport driver
-                                //
-                                BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                                (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                        Miniport->MiniportAdapterContext
-                                        );
-
-                                UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                                NdisWriteErrorLogEntry(
-                                    (NDIS_HANDLE)Miniport,
-                                    NDIS_ERROR_CODE_DRIVER_FAILURE,
-                                    2,
-                                    0xFF00FF00,
-                                    0xA
-                                    );
-                                ExFreePool(Miniport->MiniportName.Buffer);
-                                NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                                IoDeleteDevice(TmpDeviceP);
-                                NdisDereferenceDriver(WDriver);
-                                goto LoopBottom;
-
-                            }
-
-                            KeResetEvent(
-                                &Miniport->RequestEvent
-                                );
-
-                            NdisStatus = Miniport->RequestStatus;
-
-                        }
-
-                        if (NdisStatus != NDIS_STATUS_SUCCESS) {
-
-                            //
-                            // Halt the miniport driver
-                            //
-                            BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                            (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                    Miniport->MiniportAdapterContext
-                                    );
-
-                            UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                            NdisWriteErrorLogEntry(
-                               (NDIS_HANDLE)Miniport,
-                               NDIS_ERROR_CODE_DRIVER_FAILURE,
-                               2,
-                               0xFF00FF00,
-                               0xB
-                               );
-                            ExFreePool(Miniport->MiniportName.Buffer);
-                            NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                            IoDeleteDevice(TmpDeviceP);
-                            NdisDereferenceDriver(WDriver);
-                            goto LoopBottom;
-                        }
-
-                        //
-                        // Now undo the bogus filter package.  We lock
-                        // the miniport so that no dpcs will get queued.
-                        //
-                        BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                        Miniport->InInitialize = TRUE;
-                        Miniport->NormalInterrupts = FALSE;
-
-                        EthDeleteFilter(Miniport->EthDB);
-                        Miniport->EthDB = NULL;
-                        TrDeleteFilter(Miniport->TrDB);
-                        Miniport->TrDB = NULL;
-                        FddiDeleteFilter(Miniport->FddiDB);
-                        Miniport->FddiDB = NULL;
-                        ArcDeleteFilter(Miniport->ArcDB);
-                        Miniport->ArcDB = NULL;
-
-                        if (!TrCreateFilter(
-                                 NdisMChangeFunctionalAddress,
-                                 NdisMChangeGroupAddress,
-                                 NdisMChangeClass,
-                                 NdisMCloseAction,
-                                 CurrentLongAddress,
-                                 &Miniport->Lock,
-                                 &Miniport->TrDB
-                                 )) {
-
-                            //
-                            // Halt the miniport driver
-                            //
-                            (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                    Miniport->MiniportAdapterContext
-                                    );
-
-                            UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                            NdisWriteErrorLogEntry(
-                               (NDIS_HANDLE)Miniport,
-                               NDIS_ERROR_CODE_OUT_OF_RESOURCES,
-                               2,
-                               0xFF00FF00,
-                               0xC
-                               );
-                            ExFreePool(Miniport->MiniportName.Buffer);
-                            NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                            IoDeleteDevice(TmpDeviceP);
-                            NdisDereferenceDriver(WDriver);
-                            goto LoopBottom;
-                        }
-
-                        Miniport->InInitialize = FALSE;
-                        CHECK_FOR_NORMAL_INTERRUPTS(Miniport);
-
-                        UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                        break;
-
-                    case NdisMediumFddi:
-
-                        //
-                        // Query maximum MulticastAddress
-                        //
-                        Miniport->MiniportRequest = &Miniport->InternalRequest;
-                        Miniport->InternalRequest.RequestType = NdisRequestQueryInformation;
-
-                        BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-                        KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
-
-                        NdisStatus =
-                        (Miniport->DriverHandle->MiniportCharacteristics.QueryInformationHandler) (
-                                Miniport->MiniportAdapterContext,
-                                OID_FDDI_LONG_MAX_LIST_SIZE,
-                                &MaximumLongAddresses,
-                                sizeof(MaximumLongAddresses),
-                                &BytesWritten,
-                                &BytesNeeded
-                                );
-
-                        KeLowerIrql(OldIrql);
-                        UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                        //
-                        // Fire a DPC to do anything
-                        //
-                        if ((NdisStatus == NDIS_STATUS_PENDING)  ||
-                            (NdisStatus == NDIS_STATUS_SUCCESS)) {
-
-                            Miniport->RunDpc = FALSE;
-                            NdisSetTimer(&(Miniport->DpcTimer), 1);
-
-                        }
-
-                        if (NdisStatus == NDIS_STATUS_PENDING) {
-
-                            //
-                            // The completion routine will set NdisRequestStatus.
-                            //
-
-                            TimeoutValue.QuadPart = Int32x32To64(2 * 1000, -10000);
-
-                            NtStatus = KeWaitForSingleObject(
-                                &Miniport->RequestEvent,
-                                Executive,
-                                KernelMode,
-                                TRUE,
-                                &TimeoutValue
-                                );
-
-                            if (NtStatus != STATUS_SUCCESS) {
-
-                                //
-                                // Halt the miniport driver
-                                //
-                                BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                                (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                        Miniport->MiniportAdapterContext
-                                        );
-
-                                UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                                NdisWriteErrorLogEntry(
-                                    (NDIS_HANDLE)Miniport,
-                                    NDIS_ERROR_CODE_DRIVER_FAILURE,
-                                    2,
-                                    0xFF00FF00,
-                                    0xD
-                                    );
-                                ExFreePool(Miniport->MiniportName.Buffer);
-                                NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                                IoDeleteDevice(TmpDeviceP);
-                                NdisDereferenceDriver(WDriver);
-                                goto LoopBottom;
-
-                            }
-
-                            KeResetEvent(
-                                &Miniport->RequestEvent
-                                );
-
-                            NdisStatus = Miniport->RequestStatus;
-
-                        }
-
-                        if (MaximumLongAddresses > NDIS_M_MAX_MULTI_LIST) {
-
-                            MaximumLongAddresses = NDIS_M_MAX_MULTI_LIST;
-
-                        }
-
-                        Miniport->MaximumLongAddresses = MaximumLongAddresses;
-
-                        if (NdisStatus != NDIS_STATUS_SUCCESS) {
-
-                            //
-                            // Halt the miniport driver
-                            //
-                            BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                            (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                    Miniport->MiniportAdapterContext
-                                    );
-
-                            UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                            NdisWriteErrorLogEntry(
-                               (NDIS_HANDLE)Miniport,
-                               NDIS_ERROR_CODE_DRIVER_FAILURE,
-                               2,
-                               0xFF00FF00,
-                               0xE
-                               );
-                            ExFreePool(Miniport->MiniportName.Buffer);
-                            NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                            IoDeleteDevice(TmpDeviceP);
-                            NdisDereferenceDriver(WDriver);
-                            goto LoopBottom;
-                        }
-
-                        //
-                        // Query maximum MulticastAddress
-                        //
-                        Miniport->MiniportRequest = &Miniport->InternalRequest;
-                        Miniport->InternalRequest.RequestType = NdisRequestQueryInformation;
-
-                        BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-                        KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
-
-                        NdisStatus =
-                        (Miniport->DriverHandle->MiniportCharacteristics.QueryInformationHandler) (
-                                Miniport->MiniportAdapterContext,
-                                OID_FDDI_SHORT_MAX_LIST_SIZE,
-                                &MaximumShortAddresses,
-                                sizeof(MaximumShortAddresses),
-                                &BytesWritten,
-                                &BytesNeeded
-                                );
-
-                        KeLowerIrql(OldIrql);
-                        UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                        //
-                        // Fire a DPC to do anything
-                        //
-                        if ((NdisStatus == NDIS_STATUS_PENDING)  ||
-                            (NdisStatus == NDIS_STATUS_SUCCESS)) {
-
-                            Miniport->RunDpc = FALSE;
-                            NdisSetTimer(&(Miniport->DpcTimer), 1);
-
-                        }
-
-                        if (NdisStatus == NDIS_STATUS_PENDING) {
-
-                            //
-                            // The completion routine will set NdisRequestStatus.
-                            //
-
-                            TimeoutValue.QuadPart = Int32x32To64(2 * 1000, -10000);
-
-                            NtStatus = KeWaitForSingleObject(
-                                &Miniport->RequestEvent,
-                                Executive,
-                                KernelMode,
-                                TRUE,
-                                &TimeoutValue
-                                );
-
-                            if (NtStatus != STATUS_SUCCESS) {
-
-                                //
-                                // Halt the miniport driver
-                                //
-                                BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                                (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                        Miniport->MiniportAdapterContext
-                                        );
-
-                                UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                                NdisWriteErrorLogEntry(
-                                    (NDIS_HANDLE)Miniport,
-                                    NDIS_ERROR_CODE_DRIVER_FAILURE,
-                                    2,
-                                    0xFF00FF00,
-                                    0xF
-                                    );
-                                ExFreePool(Miniport->MiniportName.Buffer);
-                                NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                                IoDeleteDevice(TmpDeviceP);
-                                NdisDereferenceDriver(WDriver);
-                                goto LoopBottom;
-
-                            }
-
-                            KeResetEvent(
-                                &Miniport->RequestEvent
-                                );
-
-                            NdisStatus = Miniport->RequestStatus;
-
-                        }
-
-                        if (MaximumShortAddresses > NDIS_M_MAX_MULTI_LIST) {
-
-                            MaximumShortAddresses = NDIS_M_MAX_MULTI_LIST;
-
-                        }
-
-                        Miniport->MaximumShortAddresses = MaximumShortAddresses;
-
-                        if (NdisStatus != NDIS_STATUS_SUCCESS) {
-
-                            //
-                            // Halt the miniport driver
-                            //
-                            BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                            (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                    Miniport->MiniportAdapterContext
-                                    );
-
-                            UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                            NdisWriteErrorLogEntry(
-                               (NDIS_HANDLE)Miniport,
-                               NDIS_ERROR_CODE_DRIVER_FAILURE,
-                               2,
-                               0xFF00FF00,
-                               0x10
-                               );
-                            ExFreePool(Miniport->MiniportName.Buffer);
-                            NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                            IoDeleteDevice(TmpDeviceP);
-                            NdisDereferenceDriver(WDriver);
-                            goto LoopBottom;
-                        }
-
-                        BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-                        KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
-
-                        NdisStatus =
-                        (Miniport->DriverHandle->MiniportCharacteristics.QueryInformationHandler) (
-                                Miniport->MiniportAdapterContext,
-                                OID_FDDI_LONG_CURRENT_ADDR,
-                                &(CurrentLongAddress),
-                                sizeof(CurrentLongAddress),
-                                &BytesWritten,
-                                &BytesNeeded
-                                );
-
-                        KeLowerIrql(OldIrql);
-                        UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                        //
-                        // Fire a DPC to do anything
-                        //
-                        if ((NdisStatus == NDIS_STATUS_PENDING)  ||
-                            (NdisStatus == NDIS_STATUS_SUCCESS)) {
-
-                            Miniport->RunDpc = FALSE;
-                            NdisSetTimer(&(Miniport->DpcTimer), 1);
-
-                        }
-
-                        if (NdisStatus == NDIS_STATUS_PENDING) {
-
-                            //
-                            // The completion routine will set NdisRequestStatus.
-                            //
-
-                            TimeoutValue.QuadPart = Int32x32To64(2 * 1000, -10000);
-
-                            NtStatus = KeWaitForSingleObject(
-                                &Miniport->RequestEvent,
-                                Executive,
-                                KernelMode,
-                                TRUE,
-                                &TimeoutValue
-                                );
-
-                            if (NtStatus != STATUS_SUCCESS) {
-
-                                //
-                                // Halt the miniport driver
-                                //
-                                BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                                (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                        Miniport->MiniportAdapterContext
-                                        );
-
-                                UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                                NdisWriteErrorLogEntry(
-                                    (NDIS_HANDLE)Miniport,
-                                    NDIS_ERROR_CODE_DRIVER_FAILURE,
-                                    2,
-                                    0xFF00FF00,
-                                    0x11
-                                    );
-                                ExFreePool(Miniport->MiniportName.Buffer);
-                                NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                                IoDeleteDevice(TmpDeviceP);
-                                NdisDereferenceDriver(WDriver);
-                                goto LoopBottom;
-
-                            }
-
-                            KeResetEvent(
-                                &Miniport->RequestEvent
-                                );
-
-                            NdisStatus = Miniport->RequestStatus;
-
-                        }
-
-                        if (NdisStatus != NDIS_STATUS_SUCCESS) {
-
-                            //
-                            // Halt the miniport driver
-                            //
-                            BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                            (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                    Miniport->MiniportAdapterContext
-                                    );
-
-                            UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                            NdisWriteErrorLogEntry(
-                               (NDIS_HANDLE)Miniport,
-                               NDIS_ERROR_CODE_DRIVER_FAILURE,
-                               2,
-                               0xFF00FF00,
-                               0x12
-                               );
-                            ExFreePool(Miniport->MiniportName.Buffer);
-                            NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                            IoDeleteDevice(TmpDeviceP);
-                            NdisDereferenceDriver(WDriver);
-                            goto LoopBottom;
-                        }
-
-                        Miniport->MiniportRequest = &Miniport->InternalRequest;
-                        Miniport->InternalRequest.RequestType = NdisRequestQueryInformation;
-
-                        BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-                        KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
-
-                        NdisStatus =
-                        (Miniport->DriverHandle->MiniportCharacteristics.QueryInformationHandler) (
-                                Miniport->MiniportAdapterContext,
-                                OID_FDDI_SHORT_CURRENT_ADDR,
-                                &(CurrentShortAddress),
-                                sizeof(CurrentShortAddress),
-                                &BytesWritten,
-                                &BytesNeeded
-                                );
-
-                        KeLowerIrql(OldIrql);
-                        UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                        //
-                        // Fire a DPC to do anything
-                        //
-                        if ((NdisStatus == NDIS_STATUS_PENDING)  ||
-                            (NdisStatus == NDIS_STATUS_SUCCESS)) {
-
-                            Miniport->RunDpc = FALSE;
-                            NdisSetTimer(&(Miniport->DpcTimer), 1);
-
-                        }
-
-                        if (NdisStatus == NDIS_STATUS_PENDING) {
-
-                            //
-                            // The completion routine will set NdisRequestStatus.
-                            //
-
-                            TimeoutValue.QuadPart = Int32x32To64(2 * 1000, -10000);
-
-                            NtStatus = KeWaitForSingleObject(
-                                &Miniport->RequestEvent,
-                                Executive,
-                                KernelMode,
-                                TRUE,
-                                &TimeoutValue
-                                );
-
-                            if (NtStatus != STATUS_SUCCESS) {
-
-                                //
-                                // Halt the miniport driver
-                                //
-                                BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                                (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                        Miniport->MiniportAdapterContext
-                                        );
-
-                                UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                                NdisWriteErrorLogEntry(
-                                    (NDIS_HANDLE)Miniport,
-                                    NDIS_ERROR_CODE_DRIVER_FAILURE,
-                                    2,
-                                    0xFF00FF00,
-                                    0x13
-                                    );
-                                ExFreePool(Miniport->MiniportName.Buffer);
-                                NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                                IoDeleteDevice(TmpDeviceP);
-                                NdisDereferenceDriver(WDriver);
-                                goto LoopBottom;
-
-                            }
-
-                            KeResetEvent(
-                                &Miniport->RequestEvent
-                                );
-
-                            NdisStatus = Miniport->RequestStatus;
-
-                        }
-
-                        if (NdisStatus != NDIS_STATUS_SUCCESS) {
-
-                            //
-                            // Halt the miniport driver
-                            //
-                            BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                            (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                    Miniport->MiniportAdapterContext
-                                    );
-
-                            UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                            NdisWriteErrorLogEntry(
-                               (NDIS_HANDLE)Miniport,
-                               NDIS_ERROR_CODE_DRIVER_FAILURE,
-                               2,
-                               0xFF00FF00,
-                               0x14
-                               );
-                            ExFreePool(Miniport->MiniportName.Buffer);
-                            NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                            IoDeleteDevice(TmpDeviceP);
-                            NdisDereferenceDriver(WDriver);
-                            goto LoopBottom;
-                        }
-
-                        //
-                        // Now undo the bogus filter package.  We lock
-                        // the miniport so that no dpcs will get queued.
-                        //
-                        BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                        Miniport->InInitialize = TRUE;
-                        Miniport->NormalInterrupts = FALSE;
-
-                        EthDeleteFilter(Miniport->EthDB);
-                        Miniport->EthDB = NULL;
-                        TrDeleteFilter(Miniport->TrDB);
-                        Miniport->TrDB = NULL;
-                        FddiDeleteFilter(Miniport->FddiDB);
-                        Miniport->FddiDB = NULL;
-                        ArcDeleteFilter(Miniport->ArcDB);
-                        Miniport->ArcDB = NULL;
-
-                        if (!FddiCreateFilter(
-                                 MaximumLongAddresses,
-                                 MaximumShortAddresses,
-                                 NdisMChangeFddiAddresses,
-                                 NdisMChangeClass,
-                                 NdisMCloseAction,
-                                 CurrentLongAddress,
-                                 CurrentShortAddress,
-                                 &Miniport->Lock,
-                                 &Miniport->FddiDB
-                                 )) {
-
-                            //
-                            // Halt the miniport driver
-                            //
-                            (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                    Miniport->MiniportAdapterContext
-                                    );
-
-                            UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                            NdisWriteErrorLogEntry(
-                               (NDIS_HANDLE)Miniport,
-                               NDIS_ERROR_CODE_OUT_OF_RESOURCES,
-                               2,
-                               0xFF00FF00,
-                               0x15
-                               );
-                            ExFreePool(Miniport->MiniportName.Buffer);
-                            NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                            IoDeleteDevice(TmpDeviceP);
-                            NdisDereferenceDriver(WDriver);
-                            goto LoopBottom;
-                        }
-
-                        Miniport->InInitialize = FALSE;
-                        CHECK_FOR_NORMAL_INTERRUPTS(Miniport);
-
-                        UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                        break;
-
-                    case NdisMediumArcnet878_2:
-
-                        //
-                        // In case of an encapsulated ethernet binding, we need
-                        // to return the maximum number of multicast addresses
-                        // possible.
-                        //
-
-                        Miniport->MaximumLongAddresses = NDIS_M_MAX_MULTI_LIST;
-
-                        //
-                        // Allocate Buffer pools
-                        //
-                        NdisAllocateBufferPool(&NdisStatus,
-                                               &Miniport->ArcnetBufferPool,
-                                               WRAPPER_ARC_BUFFERS
-                                              );
-
-                        if (NdisStatus != NDIS_STATUS_SUCCESS) {
-
-                            //
-                            // Halt the miniport driver
-                            //
-                            BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                            (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                    Miniport->MiniportAdapterContext
-                                    );
-
-                            UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                            NdisWriteErrorLogEntry(
-                                (NDIS_HANDLE)Miniport,
-                                NDIS_ERROR_CODE_OUT_OF_RESOURCES,
-                                2,
-                                0xFF00FF00,
-                                0x16
-                                );
-                            ExFreePool(Miniport->MiniportName.Buffer);
-                            NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                            IoDeleteDevice(TmpDeviceP);
-                            NdisDereferenceDriver(WDriver);
-                            goto LoopBottom;
-                        }
-
-                        NdisAllocateBufferPool(&NdisStatus,
-                                               &Miniport->ArcnetBufferPool,
-                                               WRAPPER_ARC_BUFFERS
-                                              );
-
-                        if (NdisStatus != NDIS_STATUS_SUCCESS) {
-
-                            //
-                            // Halt the miniport driver
-                            //
-                            BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                            (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                    Miniport->MiniportAdapterContext
-                                    );
-
-                            UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                            NdisWriteErrorLogEntry(
-                                (NDIS_HANDLE)Miniport,
-                                NDIS_ERROR_CODE_OUT_OF_RESOURCES,
-                                2,
-                                0xFF00FF00,
-                                0x17
-                                );
-                            ExFreePool(Miniport->MiniportName.Buffer);
-                            NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                            IoDeleteDevice(TmpDeviceP);
-                            NdisDereferenceDriver(WDriver);
-                            goto LoopBottom;
-                        }
-
-                        NdisAllocateMemory((PVOID)&Buffer,
-                                           sizeof(ARC_BUFFER_LIST) *
-                                              WRAPPER_ARC_BUFFERS,
-                                           0,
-                                           HighestAcceptableMax
-                                          );
-
-                        if (Buffer == NULL) {
-
-                            //
-                            // Halt the miniport driver
-                            //
-                            BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                            (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                    Miniport->MiniportAdapterContext
-                                    );
-
-                            UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                            NdisWriteErrorLogEntry(
-                                (NDIS_HANDLE)Miniport,
-                                NDIS_ERROR_CODE_OUT_OF_RESOURCES,
-                                2,
-                                0xFF00FF00,
-                                0x18
-                                );
-                            NdisFreeBufferPool(Miniport->ArcnetBufferPool);
-                            ExFreePool(Miniport->MiniportName.Buffer);
-                            NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                            IoDeleteDevice(TmpDeviceP);
-                            NdisDereferenceDriver(WDriver);
-                            goto LoopBottom;
-                        }
-
-                        NdisAllocateMemory((PVOID)&DataBuffer,
-                                           WRAPPER_ARC_HEADER_SIZE *
-                                              WRAPPER_ARC_BUFFERS,
-                                           0,
-                                           HighestAcceptableMax
-                                          );
-
-
-                        if (DataBuffer == NULL) {
-
-                            //
-                            // Halt the miniport driver
-                            //
-                            BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                            (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                    Miniport->MiniportAdapterContext
-                                    );
-
-                            UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                            NdisWriteErrorLogEntry(
-                                (NDIS_HANDLE)Miniport,
-                                NDIS_ERROR_CODE_OUT_OF_RESOURCES,
-                                2,
-                                0xFF00FF00,
-                                0x19
-                                );
-                            NdisFreeMemory(Buffer,
-                                           sizeof(ARC_BUFFER_LIST) *
-                                              WRAPPER_ARC_BUFFERS,
-                                           0
-                                          );
-                            NdisFreeBufferPool(Miniport->ArcnetBufferPool);
-                            ExFreePool(Miniport->MiniportName.Buffer);
-                            NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                            IoDeleteDevice(TmpDeviceP);
-                            NdisDereferenceDriver(WDriver);
-                            goto LoopBottom;
-                        }
-
-                        for (i = WRAPPER_ARC_BUFFERS; i != 0 ; i--) {
-
-                            Buffer->BytesLeft = Buffer->Size = WRAPPER_ARC_HEADER_SIZE;
-                            Buffer->Buffer = DataBuffer;
-                            Buffer->Next = Miniport->ArcnetFreeBufferList;
-                            Miniport->ArcnetFreeBufferList = Buffer;
-
-                            Buffer++;
-                            DataBuffer = (PVOID)(((PUCHAR)DataBuffer) +
-                                            WRAPPER_ARC_HEADER_SIZE);
-
-                        }
-
-
-                        //
-                        // Get current address
-                        //
-
-                        Miniport->MiniportRequest = &Miniport->InternalRequest;
-                        Miniport->InternalRequest.RequestType = NdisRequestQueryInformation;
-
-                        BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-                        KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
-
-                        NdisStatus =
-                        (Miniport->DriverHandle->MiniportCharacteristics.QueryInformationHandler) (
-                                Miniport->MiniportAdapterContext,
-                                OID_ARCNET_CURRENT_ADDRESS,
-                                &CurrentLongAddress[5],         // address = 00-00-00-00-00-XX
-                                1,
-                                &BytesWritten,
-                                &BytesNeeded
-                                );
-
-                        KeLowerIrql(OldIrql);
-                        UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                        //
-                        // Fire a DPC to do anything
-                        //
-                        if ((NdisStatus == NDIS_STATUS_PENDING)  ||
-                            (NdisStatus == NDIS_STATUS_SUCCESS)) {
-
-                            Miniport->RunDpc = FALSE;
-                            NdisSetTimer(&(Miniport->DpcTimer), 1);
-
-                        }
-
-                        if (NdisStatus == NDIS_STATUS_PENDING) {
-
-                            //
-                            // The completion routine will set NdisRequestStatus.
-                            //
-
-                            *((PLARGE_INTEGER )&TimeoutValue) =
-                                RtlEnlargedIntegerMultiply(2 * 1000, -10000);
-
-                            NtStatus = KeWaitForSingleObject(
-                                &Miniport->RequestEvent,
-                                Executive,
-                                KernelMode,
-                                TRUE,
-                                &TimeoutValue
-                                );
-
-                            if (NtStatus != STATUS_SUCCESS) {
-
-                                //
-                                // Halt the miniport driver
-                                //
-                                BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                                (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                        Miniport->MiniportAdapterContext
-                                        );
-
-                                UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                                NdisWriteErrorLogEntry(
-                                    (NDIS_HANDLE)Miniport,
-                                    NDIS_ERROR_CODE_DRIVER_FAILURE,
-                                    2,
-                                    0xFF00FF00,
-                                    0x1A
-                                    );
-                                NdisFreeMemory(Buffer,
-                                           sizeof(ARC_BUFFER_LIST) *
-                                              WRAPPER_ARC_BUFFERS,
-                                           0
-                                          );
-                                NdisFreeMemory(DataBuffer,
-                                           WRAPPER_ARC_HEADER_SIZE *
-                                              WRAPPER_ARC_BUFFERS,
-                                           0
-                                          );
-                                NdisFreeBufferPool(Miniport->ArcnetBufferPool);
-                                ExFreePool(Miniport->MiniportName.Buffer);
-                                NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                                IoDeleteDevice(TmpDeviceP);
-                                NdisDereferenceDriver(WDriver);
-                                goto LoopBottom;
-
-                            }
-
-                            KeResetEvent(
-                                &Miniport->RequestEvent
-                                );
-
-                            NdisStatus = Miniport->RequestStatus;
-
-                        }
-
-                        if (NdisStatus != NDIS_STATUS_SUCCESS) {
-
-                            //
-                            // Halt the miniport driver
-                            //
-                            BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                            (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                    Miniport->MiniportAdapterContext
-                                    );
-
-                            UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                            NdisWriteErrorLogEntry(
-                                (NDIS_HANDLE)Miniport,
-                                NDIS_ERROR_CODE_DRIVER_FAILURE,
-                                2,
-                                0xFF00FF00,
-                                0x1B
-                                );
-                            NdisFreeMemory(Buffer,
-                                           sizeof(ARC_BUFFER_LIST) *
-                                              WRAPPER_ARC_BUFFERS,
-                                           0
-                                          );
-                            NdisFreeMemory(DataBuffer,
-                                           WRAPPER_ARC_HEADER_SIZE *
-                                              WRAPPER_ARC_BUFFERS,
-                                           0
-                                          );
-                            ExFreePool(Miniport->MiniportName.Buffer);
-                            NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                            IoDeleteDevice(TmpDeviceP);
-                            NdisDereferenceDriver(WDriver);
-                            goto LoopBottom;
-                        }
-
-                        Miniport->ArcnetAddress = CurrentLongAddress[5];
-
-                        //
-                        // Now undo the bogus filter package.  We lock
-                        // the miniport so that no dpcs will get queued.
-                        //
-                        BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                        Miniport->InInitialize = TRUE;
-                        Miniport->NormalInterrupts = FALSE;
-
-                        EthDeleteFilter(Miniport->EthDB);
-                        Miniport->EthDB = NULL;
-                        TrDeleteFilter(Miniport->TrDB);
-                        Miniport->TrDB = NULL;
-                        FddiDeleteFilter(Miniport->FddiDB);
-                        Miniport->FddiDB = NULL;
-                        ArcDeleteFilter(Miniport->ArcDB);
-                        Miniport->ArcDB = NULL;
-
-                        if (!ArcCreateFilter(
-                                 Miniport,
-                                 NdisMChangeClass,
-                                 NdisMCloseAction,
-                                 CurrentLongAddress[5],
-                                 &Miniport->Lock,
-                                 &(Miniport->ArcDB)
-                                 )) {
-
-                            //
-                            // Halt the miniport driver
-                            //
-                            (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                    Miniport->MiniportAdapterContext
-                                    );
-
-                            UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                            NdisWriteErrorLogEntry(
-                                (NDIS_HANDLE)Miniport,
-                                NDIS_ERROR_CODE_OUT_OF_RESOURCES,
-                                2,
-                                0xFF00FF00,
-                                0x1C
-                                );
-                            NdisFreeMemory(Buffer,
-                                           sizeof(ARC_BUFFER_LIST) *
-                                              WRAPPER_ARC_BUFFERS,
-                                           0
-                                          );
-                            NdisFreeMemory(DataBuffer,
-                                           WRAPPER_ARC_HEADER_SIZE *
-                                              WRAPPER_ARC_BUFFERS,
-                                           0
-                                          );
-                            ExFreePool(Miniport->MiniportName.Buffer);
-                            NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                            IoDeleteDevice(TmpDeviceP);
-                            NdisDereferenceDriver(WDriver);
-                            goto LoopBottom;
-                        }
-
-                        // Zero all but the last one.
-
-                        CurrentLongAddress[0] = 0;
-                        CurrentLongAddress[1] = 0;
-                        CurrentLongAddress[2] = 0;
-                        CurrentLongAddress[3] = 0;
-                        CurrentLongAddress[4] = 0;
-
-                        if (!EthCreateFilter(
-                                 32,
-                                 NdisMChangeEthAddresses,
-                                 NdisMChangeClass,
-                                 NdisMCloseAction,
-                                 CurrentLongAddress,
-                                 &Miniport->Lock,
-                                 &Miniport->EthDB
-                                 )) {
-
-                            //
-                            // Halt the miniport driver
-                            //
-                            (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                    Miniport->MiniportAdapterContext
-                                    );
-
-                            UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                            NdisWriteErrorLogEntry(
-                                (NDIS_HANDLE)Miniport,
-                                NDIS_ERROR_CODE_OUT_OF_RESOURCES,
-                                2,
-                                0xFF00FF00,
-                                0x1D
-                                );
-                            NdisFreeMemory(Buffer,
-                                           sizeof(ARC_BUFFER_LIST) *
-                                              WRAPPER_ARC_BUFFERS,
-                                           0
-                                          );
-                            NdisFreeMemory(DataBuffer,
-                                           WRAPPER_ARC_HEADER_SIZE *
-                                              WRAPPER_ARC_BUFFERS,
-                                           0
-                                          );
-                            ExFreePool(Miniport->MiniportName.Buffer);
-                            NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                            IoDeleteDevice(TmpDeviceP);
-                            NdisDereferenceDriver(WDriver);
-                            goto LoopBottom;
-                        }
-
-                        Miniport->InInitialize = FALSE;
-                        CHECK_FOR_NORMAL_INTERRUPTS(Miniport);
-
-                        UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                        break;
-
-                    case NdisMediumWan:
-
-                        Miniport->MiniportRequest = &Miniport->InternalRequest;
-                        Miniport->InternalRequest.RequestType = NdisRequestQueryInformation;
-
-                        BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-                        KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
-
-                        NdisStatus =
-                        (Miniport->DriverHandle->MiniportCharacteristics.QueryInformationHandler) (
-                                Miniport->MiniportAdapterContext,
-                                OID_WAN_CURRENT_ADDRESS,
-                                &(CurrentLongAddress),
-                                sizeof(CurrentLongAddress),
-                                &BytesWritten,
-                                &BytesNeeded
-                                );
-
-                        KeLowerIrql(OldIrql);
-                        UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                        //
-                        // Fire a DPC to do anything
-                        //
-                        if ((NdisStatus == NDIS_STATUS_PENDING)  ||
-                            (NdisStatus == NDIS_STATUS_SUCCESS)) {
-
-                            Miniport->RunDpc = FALSE;
-                            NdisSetTimer(&(Miniport->DpcTimer), 1);
-
-                        }
-
-                        if (NdisStatus == NDIS_STATUS_PENDING) {
-
-                            //
-                            // The completion routine will set NdisRequestStatus.
-                            //
-
-                            TimeoutValue.QuadPart = Int32x32To64(2 * 1000, -10000);
-
-                            NtStatus = KeWaitForSingleObject(
-                                &Miniport->RequestEvent,
-                                Executive,
-                                KernelMode,
-                                TRUE,
-                                &TimeoutValue
-                                );
-
-                            if (NtStatus != STATUS_SUCCESS) {
-
-                                //
-                                // Halt the miniport driver
-                                //
-                                BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                                (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                        Miniport->MiniportAdapterContext
-                                        );
-
-                                UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                                NdisWriteErrorLogEntry(
-                                    (NDIS_HANDLE)Miniport,
-                                    NDIS_ERROR_CODE_DRIVER_FAILURE,
-                                    2,
-                                    0xFF00FF00,
-                                    0x7
-                                    );
-                                ExFreePool(Miniport->MiniportName.Buffer);
-                                NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                                IoDeleteDevice(TmpDeviceP);
-                                NdisDereferenceDriver(WDriver);
-                                goto LoopBottom;
-
-                            }
-
-                            KeResetEvent(
-                                &Miniport->RequestEvent
-                                );
-
-                            NdisStatus = Miniport->RequestStatus;
-
-                        }
-
-                        if (NdisStatus != NDIS_STATUS_SUCCESS) {
-
-                            //
-                            // Halt the miniport driver
-                            //
-                            BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                            (Miniport->DriverHandle->MiniportCharacteristics.HaltHandler) (
-                                    Miniport->MiniportAdapterContext
-                                    );
-
-                            UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                            NdisWriteErrorLogEntry(
-                                (NDIS_HANDLE)Miniport,
-                                NDIS_ERROR_CODE_DRIVER_FAILURE,
-                                2,
-                                0xFF00FF00,
-                                0x8
-                                );
-                            ExFreePool(Miniport->MiniportName.Buffer);
-                            NdisDequeueMiniportOnDriver(Miniport, WDriver);
-                            IoDeleteDevice(TmpDeviceP);
-                            NdisDereferenceDriver(WDriver);
-                            goto LoopBottom;
-                        }
-
-                        //
-                        // Now undo the bogus filter package.  We lock
-                        // the miniport so that no dpcs will get queued.
-                        //
-                        BLOCK_LOCK_MINIPORT(Miniport, LocalLock);
-
-                        Miniport->InInitialize = TRUE;
-                        Miniport->NormalInterrupts = FALSE;
-
-                        EthDeleteFilter(Miniport->EthDB);
-                        Miniport->EthDB = NULL;
-                        TrDeleteFilter(Miniport->TrDB);
-                        Miniport->TrDB = NULL;
-                        FddiDeleteFilter(Miniport->FddiDB);
-                        Miniport->FddiDB = NULL;
-                        ArcDeleteFilter(Miniport->ArcDB);
-                        Miniport->ArcDB = NULL;
-
-                        Miniport->InInitialize = FALSE;
-                        CHECK_FOR_NORMAL_INTERRUPTS(Miniport);
-
-                        UNLOCK_MINIPORT(Miniport, LocalLock);
-
-                        break;
-
-                }
 
                 //
                 // Get supported packet filters
@@ -13663,20 +12200,6 @@ Return Value:
                 //
                 if (Miniport->EthDB) {
                     Miniport->EthDB->CombinedPacketFilter = 0xFFFFFFFF;
-                }
-                if (Miniport->TrDB) {
-                    Miniport->TrDB->CombinedPacketFilter = 0xFFFFFFFF;
-                }
-                if (Miniport->FddiDB) {
-                    Miniport->FddiDB->CombinedPacketFilter = 0xFFFFFFFF;
-                }
-
-                //
-                // For WAN there is no packet filter
-                //
-
-                if (Miniport->MediaType==NdisMediumWan) {
-                    goto SkipFilter;
                 }
 
                 for (i=0; i<31; i++) {
@@ -13838,12 +12361,6 @@ Return Value:
                 if (Miniport->EthDB) {
                     Miniport->EthDB->CombinedPacketFilter = 0;
                 }
-                if (Miniport->TrDB) {
-                    Miniport->TrDB->CombinedPacketFilter = 0;
-                }
-                if (Miniport->FddiDB) {
-                    Miniport->FddiDB->CombinedPacketFilter = 0;
-                }
 
 SkipFilter:
 
@@ -13921,10 +12438,7 @@ LoopBottom:
     // Miniport driver uses any of these, then the filter package
     // will reference itself, to keep the image in memory.
     //
-    ArcDereferencePackage();
     EthDereferencePackage();
-    FddiDereferencePackage();
-    TrDereferencePackage();
     MiniportDereferencePackage();
     NdisMacDereferencePackage();
 

@@ -709,13 +709,15 @@ SendDHCPPacket(IPAddr Dest, PNDIS_PACKET Packet, PNDIS_BUFFER Buffer,
 //* IPCopyBuffer - Copy an NDIS buffer chain at a specific offset.
 //
 //  This is the IP version of the function NdisCopyBuffer, which didn't
-//  get done properly in NDIS3. We take in an NDIS buffer chain, an offset,
-//  and a length, and produce a buffer chain describing that subset of the
-//  input buffer chain.
+//  get done properly in NDIS3.  Takes an NDIS buffer chain, an offset,
+//  and a length, and produces a buffer chain describing that subset of
+//  the input buffer chain.
 //
-//  This routine is not particularly efficient. Since only IPFragment uses
-//  it currently, it might be better to just incorporate this functionality
-//  directly into IPFragment.
+//  The original comment claimed this was only used by IPFragment; that
+//  was wrong — IPTransmit also uses it to duplicate buffers when sending
+//  the same payload across multiple interfaces (broadcast / multi-NTE).
+//  Retained for the multi-net duplication path; IPFragment itself is
+//  stripped per IPSTACK-HARDENING.md.
 //
 //  Input: OriginalBuffer       - Original buffer chain to copy from.
 //          Offset              - Offset from start to dup.
@@ -781,217 +783,20 @@ IPCopyBuffer(PNDIS_BUFFER OriginalBuffer,uint Offset, uint Length)
     }
 }
 
-//** IPFragment - Fragment and send an IP datagram.
 //
-//  Called when an outgoing datagram is larger than the local MTU, and needs to be
-//  fragmented. This is a somewhat complicated operation. The caller gives us a
-//  prebuilt IP header, packet, and options. We use the header and packet on
-//  the last fragment of the send, as the passed in header already has the more
-//  fragments bit set correctly for the last fragment.
+// MicroNT: outbound IP-layer fragmentation removed per IPSTACK-HARDENING.md.
 //
-//  The basic idea is to figure out the maximum size which we can send as a multiple
-//  of 8. Then, while we can send a maximum size fragment we'll allocate a header, packet,
-//  etc. and send it. At the end we'll send the final fragment using the provided header
-//  and packet.
+// IP no longer fragments egress packets.  TCP segments at MSS; UDP / ICMP
+// callers that hand us payloads larger than the path MTU receive
+// IP_PACKET_TOO_BIG from IPTransmit and SendToNTE and are expected to
+// chunk at their own layer or fail.  No legitimate workload on a
+// single-NIC internet-exposed host should ever reach the fragmentation
+// path; if it does, that's a caller bug, not a transport need.
 //
-//  Entry:  DestIF		- Outbound interface of datagram.
-//			MTU			- MTU to use in transmitting.
-//          FirstHop    - First (or next) hop for this datagram.
-//          Packet      - Packet to be sent.
-//          Header      - Prebuilt IP header.
-//          Buffer      - Buffer chain for data to be sent.
-//          DataSize    - Size in bytes of data.
-//          Options     - Pointer to option buffer, if any.
-//          OptionSize  - Size in bytes of option buffer.
-//          SentCount   - Pointer to where to return pending send count (may be NULL).
+// Stripped: IPFragment.  See `git log -- IPXMIT.C` for the original
+// code if archaeology is needed.  (MS LANMan, 1990-1992; individual
+// attribution declined.)
 //
-//  Returns: IP_STATUS of send.
-//
-IP_STATUS
-IPFragment(Interface *DestIF, uint MTU, IPAddr FirstHop,
-	PNDIS_PACKET Packet, IPHeader *Header, PNDIS_BUFFER Buffer, uint DataSize,
-	uchar *Options, uint OptionSize, int *SentCount)
-{
-    BufferReference     *BR;                    // Buffer reference we'll use.
-    PacketContext       *PContext = (PacketContext *)Packet->ProtocolReserved;
-    PacketContext       *CurrentContext;        // Current Context in use.
-    uint                MaxSend;                // Maximum size (in bytes) we can send here.
-    uint                PendingSends = 0;       // Counter of how many pending sends we have.
-    PNDIS_BUFFER        CurrentBuffer;          // Current buffer to be sent.
-    PNDIS_PACKET        CurrentPacket;          // Current packet we're using.
-    IP_STATUS           SendStatus;             // Status of send command.
-    IPHeader            *CurrentHeader;         // Current header buffer we're using.
-    ushort              Offset = 0;             // Current offset into fragmented packet.
-	ushort				StartOffset;			// Starting offset of packet.
-	ushort				RealOffset;				// Offset of new fragment.
-    uint                FragOptSize = 0;        // Size (in bytes) of fragment options.
-    uchar               FragmentOptions[MAX_OPT_SIZE];  // Master copy of options sent for fragments.
-    uchar               Error = FALSE;          // Set if we get an error in our main loop.
-
-    MaxSend = (MTU - OptionSize) & ~7; // Determine max send size.
-
-#ifdef DEBUG
-    if (MaxSend >= DataSize)
-        DEBUGCHK;
-#endif
-
-    BR = PContext->pc_br;                       // Get the buffer reference we'll need.
-
-#ifdef DEBUG
-    if (!BR)
-        DEBUGCHK;
-#endif
-
-    if (Header->iph_offset & IP_DF_FLAG) {      // Don't fragment flag set.
-    											// Error out.
-        FreeIPPacket(Packet);
-        if (Options)
-            CTEFreeMem(Options);
-        if (SentCount == (int *)NULL)			// No sent count is to be
-        										// returned.
-            CTEFreeMem(BR);
-        IPSInfo.ipsi_fragfails++;
-        return IP_PACKET_TOO_BIG;
-    }
-
-	StartOffset = Header->iph_offset & IP_OFFSET_MASK;
-	StartOffset = net_short(StartOffset) * 8;
-
-    // If we have any options, copy the ones that need to be copied, and figure
-    // out the size of these new copied options.
-
-    if (Options != (uchar *)NULL) {             // We have options.
-        uchar           *TempOptions = Options;
-        // Copy the options into the fragment options buffer.
-        CTEMemSet(FragmentOptions, IP_OPT_EOL, MAX_OPT_SIZE);
-        while (TempOptions[IP_OPT_TYPE] != IP_OPT_EOL) {
-            if (TempOptions[IP_OPT_TYPE] & IP_OPT_COPIED) { // This option needs
-            												// to be copied.
-                uint    TempOptSize;
-
-                TempOptSize = TempOptions[IP_OPT_LENGTH];
-                CTEMemCopy(&FragmentOptions[FragOptSize], TempOptions,
-                	TempOptSize);
-                FragOptSize += TempOptSize;
-                TempOptions += TempOptSize;
-            } else {                            // A non-copied option, just
-            									// skip over it.
-                if (TempOptions[IP_OPT_TYPE] == IP_OPT_NOP)
-                    TempOptions++;
-                else
-                    TempOptions += TempOptions[IP_OPT_LENGTH];
-            }
-        }
-        // Round the copied size up to a multiple of 4.
-        FragOptSize = ((FragOptSize & 3) ? ((FragOptSize & ~3) + 4) : FragOptSize);
-    }
-
-    PContext->pc_common.pc_flags |= PACKET_FLAG_IPBUF;
-
-    // Now, while we can build maximum size fragments, do so.
-    do {
-        if ((CurrentHeader = GetIPHeader(&CurrentPacket)) == (IPHeader *)NULL) {
-            // Couldn't get a buffer. Break out, since no point in sending others.
-            Error = TRUE;
-            break;
-        }
-
-        // Copy the buffer  into a new one, if we can.
-        CurrentBuffer = IPCopyBuffer(Buffer, Offset, MaxSend);
-        if (CurrentBuffer == NULL) {        // No buffer, free resources and
-        									// break.
-            FreeIPPacket(CurrentPacket);
-            Error = TRUE;
-            break;
-        }
-
-        // Options for this send are set up when we get here, either from the
-        // entry from the loop, or from the allocation below.
-
-        // We have all the pieces we need. Put the packet together and send it.
-        CurrentContext = (PacketContext *)CurrentPacket->ProtocolReserved;
-        *CurrentContext = *PContext;
-        *CurrentHeader = *Header;
-        CurrentContext->pc_common.pc_flags &= ~PACKET_FLAG_FW;
-        CurrentHeader->iph_verlen = IP_VERSION +
-        	((OptionSize + sizeof(IPHeader)) >> 2);
-        CurrentHeader->iph_length = net_short(MaxSend+OptionSize+sizeof(IPHeader));
-		RealOffset = (StartOffset + Offset) >> 3;
-        CurrentHeader->iph_offset = net_short(RealOffset) | IP_MF_FLAG;
-
-        SendStatus = SendIPPacket(DestIF, FirstHop, CurrentPacket,
-        	CurrentBuffer, CurrentHeader, Options, OptionSize);
-        if (SendStatus == IP_PENDING)
-            PendingSends++;
-
-        IPSInfo.ipsi_fragcreates++;
-        Offset += MaxSend;
-        DataSize -= MaxSend;
-
-        // If we have any fragmented options, set up to use them next time.
-        if (FragOptSize) {
-            Options = CTEAllocMem(OptionSize = FragOptSize);
-            if (Options == (uchar *)NULL) {         // Can't get an option
-            										// buffer.
-                Error = TRUE;
-                break;
-            }
-            CTEMemCopy(Options, FragmentOptions, OptionSize);
-        } else {
-            Options = (uchar *)NULL;
-            OptionSize = 0;
-        }
-    } while (DataSize > MaxSend);
-
-    // We've sent all of the previous fragments, now send the last one. We already
-    // have the packet and header buffer, as well as options if there are any -
-    // we need to copy the appropriate data.
-    if (!Error)  {                                  // Everything went OK above.
-        CurrentBuffer = IPCopyBuffer(Buffer, Offset, DataSize);
-        if (CurrentBuffer == NULL) {                // No buffer, free resources
-        											// and stop.
-            if (Options)
-                CTEFreeMem(Options);                // Free the option buffer
-            FreeIPPacket(Packet);
-            IPSInfo.ipsi_outdiscards++;
-        } else {                                    // Everything's OK, send it.
-            Header->iph_verlen = IP_VERSION + ((OptionSize + sizeof(IPHeader)) >> 2);
-            Header->iph_length = net_short(DataSize+OptionSize+sizeof(IPHeader));
-			RealOffset = (StartOffset + Offset) >> 3;
-            Header->iph_offset = net_short(RealOffset) | 
-            	(Header->iph_offset & IP_MF_FLAG);
-            SendStatus = SendIPPacket(DestIF, FirstHop, Packet,
-            	CurrentBuffer, Header, Options, OptionSize);
-            if (SendStatus == IP_PENDING)
-                PendingSends++;
-            IPSInfo.ipsi_fragcreates++;
-            IPSInfo.ipsi_fragoks++;
-        }
-    } else  {                                   // We had some sort of error.
-    											// Free resources.
-        FreeIPPacket(Packet);
-        if (Options)
-            CTEFreeMem(Options);
-        IPSInfo.ipsi_outdiscards++;
-    }
-
-
-    // Now, figure out what error code to return and whether or not we need to
-    // free the BufferReference.
-
-    if (SentCount == (int *)NULL) {                 // No sent count is to be
-    												// returned.
-        if (!ReferenceBuffer(BR, PendingSends)) {
-            CTEFreeMem(BR);
-            return IP_SUCCESS;
-        }
-        return IP_PENDING;
-    } else
-        *SentCount += PendingSends;
-
-    return IP_PENDING;
-
-}
 
 //* UpdateRouteOption - Update a SR or RR options.
 //
@@ -1163,8 +968,8 @@ SendIPBCast(NetTableEntry *SrcNTE, IPAddr Destination, PNDIS_PACKET Packet,
     PacketContext       *PContext = (PacketContext *)Packet->ProtocolReserved;
     NetTableEntry       *TempNTE;
     uint                i, j;
-	uint				NeedFragment;		// TRUE if we think we'll need to
-											// fragment.
+	/* NeedFragment stripped with IP fragmentation — BR only needed for
+	   multi-net duplication now, gated below on NetsToSend > 1 */
     int                 Sent = 0;           // Count of how many we've sent.
     IP_STATUS           Status;
     uchar               *NewOptions;        // Options we'll use on each send.
@@ -1198,7 +1003,6 @@ SendIPBCast(NetTableEntry *SrcNTE, IPAddr Destination, PNDIS_PACKET Packet,
 	}
 
 	
-	NeedFragment = FALSE;
 	// Loop through the NTE table, making a list of interfaces and
 	// corresponding addresses to send on.
 	for (NetsToSend = 0, TempNTE = NetTableList; TempNTE != NULL;
@@ -1227,8 +1031,7 @@ SendIPBCast(NetTableEntry *SrcNTE, IPAddr Destination, PNDIS_PACKET Packet,
 				// He matches this send list element. Shrink the MSS if
 				// we need to, and then break out.
 				SendList[j].bsl_mtu = MIN(SendList[j].bsl_mtu, TempNTE->nte_mss);
-				if ((DataSize + OptionSize) > SendList[j].bsl_mtu)
-					NeedFragment = TRUE;
+				/* Pre-strip set NeedFragment here for the IPFragment path. */
 				break;
 			}
 		}
@@ -1239,8 +1042,7 @@ SendIPBCast(NetTableEntry *SrcNTE, IPAddr Destination, PNDIS_PACKET Packet,
 			SendList[j].bsl_addr = TempNTE->nte_addr;
 			SendList[j].bsl_if = TempNTE->nte_if;
 			SendList[j].bsl_mtu = TempNTE->nte_mss;
-			if ((DataSize + OptionSize) > SendList[j].bsl_mtu)
-				NeedFragment = TRUE;
+			/* Pre-strip set NeedFragment here for the IPFragment path. */
 			NetsToSend++;
 		}
 			
@@ -1251,9 +1053,9 @@ SendIPBCast(NetTableEntry *SrcNTE, IPAddr Destination, PNDIS_PACKET Packet,
 		return IP_SUCCESS;				// Nothing to send on.
 	}
 
-	// OK, we've got the list. If we've got more than one interface to send
-	// on or we need to fragment, get a BufferReference.
-	if (NetsToSend > 1 || NeedFragment) {
+	// OK, we've got the list.  If we've got more than one interface to send
+	// on, get a BufferReference so each duplicate send can refcount-release.
+	if (NetsToSend > 1) {
     	if ((BR = CTEAllocMem(sizeof(BufferReference))) ==
     		(BufferReference *)NULL) {
             CTEFreeMem(SendList);
@@ -1320,17 +1122,18 @@ SendIPBCast(NetTableEntry *SrcNTE, IPAddr Destination, PNDIS_PACKET Packet,
         UpdateOptions(NewOptions, Index, SendList[i].bsl_addr);
 
         if ((DataSize + OptionSize) > SendList[i].bsl_mtu) {// This is too big
-            // Don't need to update Sent when fragmenting, as IPFragment
-            // will update the br_refcount field itself. It will also free
-            // the option buffer.
-            Status = IPFragment(SendList[i].bsl_if, SendList[i].bsl_mtu,
-            	Destination, NewPacket, NewHeader,NewUserBuffer, DataSize,
-            	NewOptions, OptionSize, &Sent);
-
-            // IPFragment is done with the descriptor chain, so if this is
-            // a locally allocated chain free it now.
-            if (i != (NetsToSend - 1))
+            // IP-layer fragmentation removed per IPSTACK-HARDENING.md.
+            // TCP segments at MSS; UDP/ICMP callers that hand us oversized
+            // payloads should chunk at their own layer or fail.  Drop and
+            // surface IP_PACKET_TOO_BIG so the caller can react.
+            IPSInfo.ipsi_outdiscards++;
+            if (NewOptions != NULL && NewOptions != Options)
+                CTEFreeMem(NewOptions);
+            if (i != (NetsToSend - 1)) {
                 FreeIPBufferChain(NewUserBuffer);
+                FreeIPPacket(NewPacket);
+            }
+            Status = IP_PACKET_TOO_BIG;
         }
         else {
             Status = SendIPPacket(SendList[i].bsl_if, Destination, NewPacket,
@@ -1399,7 +1202,7 @@ IPTransmit(void *Context, void *SendContext, PNDIS_BUFFER Buffer, uint DataSize,
     CTELockHandle       LockHandle;
     uchar               *Options;
     uint                OptionSize;
-    BufferReference     *BR;
+    /* BufferReference     *BR; — used only by removed IPFragment path */
     RouteTableEntry     *RTE;
     uchar               DType;
 
@@ -1590,25 +1393,16 @@ IPTransmit(void *Context, void *SendContext, PNDIS_BUFFER Buffer, uint DataSize,
                 	Options, OptionSize, TRUE, NULL);
 		}
 
-        // Not a broadcast. If it needs to be fragmented, call our
-        // fragmenter to do it. The fragmentation routine needs a
-        // BufferReference structure, so we'll need one of those first.
+        // Not a broadcast.  IP-layer fragmentation removed per
+        // IPSTACK-HARDENING.md — a payload exceeding the path MTU is a
+        // caller bug.  Drop and surface IP_PACKET_TOO_BIG.  (Pre-strip
+        // this called IPFragment + allocated a BufferReference.)
         if ((DataSize + OptionSize) > MTU) {
-            BR = CTEAllocMem(sizeof(BufferReference));
-            if (BR == (BufferReference *)NULL) {
-                // Couldn't get a BufferReference
-                if (Options)
-                    CTEFreeMem(Options);
-                FreeIPPacket(Packet);
-                IPSInfo.ipsi_outdiscards++;
-                return IP_NO_RESOURCES;
-            }
-            BR->br_buffer = Buffer;
-            BR->br_refcount = 0;
-            CTEInitLock(&BR->br_lock);
-            pc->pc_br = BR;
-            return IPFragment(DestIF, MTU, FirstHop, Packet, IPH, Buffer,
-            	DataSize, Options, OptionSize, (int *)NULL);
+            if (Options)
+                CTEFreeMem(Options);
+            FreeIPPacket(Packet);
+            IPSInfo.ipsi_outdiscards++;
+            return IP_PACKET_TOO_BIG;
         }
 
         // If we've reached here, we aren't sending a broadcast and don't need to

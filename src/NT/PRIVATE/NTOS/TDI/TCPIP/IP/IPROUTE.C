@@ -2587,26 +2587,15 @@ TransmitFWPacket(PNDIS_PACKET Packet, uint DataLength)
         if ((DataLength + (uint)FC->fc_optlength) <= FC->fc_mtu)
             Status = SendIPPacket(FC->fc_if,  FC->fc_nexthop, Packet, Buffer,
             	FC->fc_hbuff, FC->fc_options, (uint)FC->fc_optlength);
-        else {                          // Need to fragment this.
-            BufferReference     *BR = CTEAllocMem(sizeof(BufferReference));
-
-            if (BR == (BufferReference *)NULL) {        // Couldn't get a BufferReference
-                FWSendComplete(Packet, Buffer);
-                return;
-            }
-            BR->br_buffer = Buffer;
-            BR->br_refcount = 0;
-            CTEInitLock(&BR->br_lock);
-            FC->fc_pc.pc_br = BR;
-            Status = IPFragment(FC->fc_if, FC->fc_mtu, FC->fc_nexthop, Packet,
-            	FC->fc_hbuff, Buffer, DataLength, FC->fc_options,
-            	(uint)FC->fc_optlength, (int *)NULL);
-
-            if (Status == IP_PACKET_TOO_BIG)            // Couldn't fragment.
-                // For MTU discovery pass MTU back here.
-                SendICMPErr(FC->fc_srcnte->nte_addr, FC->fc_hbuff,
-                	ICMP_DEST_UNREACH, FRAG_NEEDED, 0);
-
+        else {                          // Forwarded packet too big to send.
+            // IP-layer fragmentation removed per IPSTACK-HARDENING.md.
+            // Forwarding itself is disabled by invariant I1; this code
+            // is doubly dead.  If it ever fires, send ICMP frag-needed
+            // for PMTUD-on-forwarder semantics so the original sender
+            // gets MTU feedback.
+            Status = IP_PACKET_TOO_BIG;
+            SendICMPErr(FC->fc_srcnte->nte_addr, FC->fc_hbuff,
+                ICMP_DEST_UNREACH, FRAG_NEEDED, 0);
         }
     } else
         Status = SendIPBCast(FC->fc_srcnte, FC->fc_nexthop, Packet, FC->fc_hbuff,

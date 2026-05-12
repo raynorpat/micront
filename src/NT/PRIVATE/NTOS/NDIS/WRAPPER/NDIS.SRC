@@ -4,8 +4,6 @@ NAME NDIS.SYS
 DESCRIPTION 'NDIS.SYS'
 
 EXPORTS
-    ArcFilterDprIndicateReceive
-    ArcFilterDprIndicateReceiveComplete
     EthChangeFilterAddresses
     EthCreateFilter
     EthDeleteFilter
@@ -20,24 +18,6 @@ EXPORTS
     EthQueryGlobalFilterAddresses
     EthQueryOpenFilterAddresses
     EthShouldAddressLoopBack
-    FddiChangeFilterLongAddresses
-    FddiChangeFilterShortAddresses
-    FddiCreateFilter
-    FddiDeleteFilter
-    FddiDeleteFilterOpenAdapter
-    FddiFilterAdjust
-    FddiFilterDprIndicateReceive
-    FddiFilterDprIndicateReceiveComplete
-    FddiFilterIndicateReceive
-    FddiFilterIndicateReceiveComplete
-    FddiNoteFilterOpenAdapter
-    FddiNumberOfOpenFilterLongAddresses
-    FddiNumberOfOpenFilterShortAddresses
-    FddiQueryGlobalFilterLongAddresses
-    FddiQueryGlobalFilterShortAddresses
-    FddiQueryOpenFilterLongAddresses
-    FddiQueryOpenFilterShortAddresses
-    FddiShouldAddressLoopBack
     NdisAllocateBuffer
     NdisAllocateBufferPool
     NdisAllocateDmaChannel
@@ -152,19 +132,6 @@ EXPORTS
     NdisMFreeSharedMemory
     NdisMRegisterDmaChannel
     NdisMDeregisterDmaChannel
-
-    TrChangeFunctionalAddress
-    TrChangeGroupAddress
-    TrCreateFilter
-    TrDeleteFilter
-    TrDeleteFilterOpenAdapter
-    TrFilterAdjust
-    TrFilterDprIndicateReceive
-    TrFilterDprIndicateReceiveComplete
-    TrFilterIndicateReceive
-    TrFilterIndicateReceiveComplete
-    TrNoteFilterOpenAdapter
-    TrShouldAddressLoopBack
 
     NdisMWanSendComplete
     NdisMWanIndicateReceive

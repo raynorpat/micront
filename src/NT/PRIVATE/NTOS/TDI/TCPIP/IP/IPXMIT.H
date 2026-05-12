@@ -8,16 +8,12 @@
 //
 // This file contains all of the definitions for the transmit code visible
 // to modules outside IPXMIT.C
-extern IP_STATUS	SendIPPacket(Interface *IF, IPAddr FirstHop, 
-									PNDIS_PACKET Packet, PNDIS_BUFFER Buffer, 
+extern IP_STATUS	SendIPPacket(Interface *IF, IPAddr FirstHop,
+									PNDIS_PACKET Packet, PNDIS_BUFFER Buffer,
 									IPHeader *Header, uchar *Options,
 									uint OptionSize);
-extern IP_STATUS	IPFragment(Interface *DestIF, uint MTU, 
-									IPAddr FirstHop, PNDIS_PACKET Packet, 
-									IPHeader *Header, PNDIS_BUFFER Buffer, 
-									uint DataSize, uchar *Options, 
-									uint OptionSize, int *SentCount);
-extern uchar		UpdateOptions(uchar *Options, OptIndex *Index, 
+/* IPFragment extern stripped with IP fragmentation per IPSTACK-HARDENING.md */
+extern uchar		UpdateOptions(uchar *Options, OptIndex *Index,
 									IPAddr Address);
 extern IP_STATUS	SendIPBCast(NetTableEntry *SrcNTE, IPAddr Destination, 
 									PNDIS_PACKET Packet, IPHeader *IPH, 

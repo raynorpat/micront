@@ -1,7 +1,4 @@
-#include <afilter.h>
 #include <efilter.h>
-#include <tfilter.h>
-#include <ffilter.h>
 
 #define NDIS_M_MAX_MULTI_LIST 32
 #define NDIS_M_MAX_LOOKAHEAD 526
@@ -258,24 +255,14 @@ struct _NDIS_MINIPORT_BLOCK {
     NDIS_TIMER WakeUpDpcTimer;
 
     //
-    // Holds media specific information
+    // Holds media specific information (Ethernet only).
     //
     PETH_FILTER EthDB;
-    PTR_FILTER TrDB;
-    PFDDI_FILTER FddiDB;
-    PARC_FILTER ArcDB;
     NDIS_MEDIUM MediaType;
 
-    UCHAR TrResetRing;
-    UCHAR ArcnetAddress;
-    BOOLEAN ArcnetBroadcastSet;
     BOOLEAN SendCompleteCalled;
-
-    PUCHAR ArcnetDataBuffer;
-
-    NDIS_HANDLE ArcnetBufferPool;
-    PARC_BUFFER_LIST ArcnetFreeBufferList;
-    PARC_BUFFER_LIST ArcnetUsedBufferList;
+    /* TrDB / FddiDB / ArcDB / TrResetRing / Arcnet* fields stripped — gate
+       at NdisMRegisterMiniport rejects non-Ethernet media types. */
 
     //
     // Resource information
@@ -346,10 +333,9 @@ struct _NDIS_MINIPORT_BLOCK {
     ULONG SupportedPacketFilters;
     BOOLEAN NeedToUpdateEthAddresses;
     BOOLEAN NeedToUpdatePacketFilter;
-    BOOLEAN NeedToUpdateFunctionalAddress;
-    BOOLEAN NeedToUpdateGroupAddress;
-    BOOLEAN NeedToUpdateFddiLongAddresses;
-    BOOLEAN NeedToUpdateFddiShortAddresses;
+    /* NeedToUpdateFunctionalAddress / NeedToUpdateGroupAddress (TR) and
+       NeedToUpdateFddi{Long,Short}Addresses (FDDI) stripped — gate at
+       registration rejects non-Ethernet media types. */
     BOOLEAN RunDoRequests;
     BOOLEAN ProcessOddDeferredStuff;
     UCHAR MulticastBuffer[NDIS_M_MAX_MULTI_LIST][6];
@@ -488,38 +474,8 @@ NdisMCloseAction(
     IN NDIS_HANDLE MacBindingHandle
     );
 
-NDIS_STATUS
-NdisMChangeFunctionalAddress(
-    IN TR_FUNCTIONAL_ADDRESS OldFunctionalAddress,
-    IN TR_FUNCTIONAL_ADDRESS NewFunctionalAddress,
-    IN NDIS_HANDLE MacBindingHandle,
-    IN PNDIS_REQUEST NdisRequest,
-    IN BOOLEAN Set
-    );
-
-NDIS_STATUS
-NdisMChangeGroupAddress(
-    IN TR_FUNCTIONAL_ADDRESS OldGroupAddress,
-    IN TR_FUNCTIONAL_ADDRESS NewGroupAddress,
-    IN NDIS_HANDLE MacBindingHandle,
-    IN PNDIS_REQUEST NdisRequest,
-    IN BOOLEAN Set
-    );
-
-NDIS_STATUS
-NdisMChangeFddiAddresses(
-    IN UINT oldLongAddressCount,
-    IN CHAR oldLongAddresses[][6],
-    IN UINT newLongAddressCount,
-    IN CHAR newLongAddresses[][6],
-    IN UINT oldShortAddressCount,
-    IN CHAR oldShortAddresses[][2],
-    IN UINT newShortAddressCount,
-    IN CHAR newShortAddresses[][2],
-    IN NDIS_HANDLE MacBindingHandle,
-    IN PNDIS_REQUEST NdisRequest,
-    IN BOOLEAN Set
-    );
+/* NdisMChangeFunctionalAddress / NdisMChangeGroupAddress (Token Ring) and
+   NdisMChangeFddiAddresses (FDDI) protos stripped — MicroNT is Ethernet-only. */
 
 NDIS_STATUS
 NdisMSend(
@@ -537,15 +493,7 @@ NdisMTransferData(
     OUT PUINT BytesTransferred
     );
 
-NDIS_STATUS
-NdisMArcTransferData(
-    IN NDIS_HANDLE NdisBindingHandle,
-    IN NDIS_HANDLE MacReceiveContext,
-    IN UINT ByteOffset,
-    IN UINT BytesToTransfer,
-    IN OUT PNDIS_PACKET Packet,
-    OUT PUINT BytesTransferred
-    );
+/* NdisMArcTransferData (ARCnet) proto stripped — Ethernet-only. */
 
 NDIS_STATUS
 NdisMReset(
@@ -1012,75 +960,8 @@ NdisMTrIndicateReceive(
         );                                                         \
 }
 
-/*++
-
-VOID
-NdisMFddiIndicateReceive(
-    IN NDIS_HANDLE MiniportAdapterHandle,
-    IN NDIS_HANDLE MiniportReceiveContext,
-    IN PVOID HeaderBuffer,
-    IN UINT HeaderBufferSize,
-    IN PVOID LookaheadBuffer,
-    IN UINT LookaheadBufferSize,
-    IN UINT PacketSize
-    )
-
---*/
-
-#define NdisMFddiIndicateReceive( _H, _C, _B, _SZ, _L, _LSZ, _PSZ ) \
-{                                                                  \
-    PNDIS_MINIPORT_BLOCK _M_ = (PNDIS_MINIPORT_BLOCK)(_H);         \
-    PUCHAR _HB = (_B);                                             \
-                                                                   \
-    ASSERT(MINIPORT_LOCK_ACQUIRED(_M_));                           \
-                                                                   \
-    FddiFilterDprIndicateReceive(                                  \
-            _M_->FddiDB,                                           \
-            _C,                                                    \
-            _HB + 1,                                               \
-            ((_HB[0] & 0x40) ? FDDI_LENGTH_OF_LONG_ADDRESS         \
-                             : FDDI_LENGTH_OF_SHORT_ADDRESS),      \
-            _HB,                                                   \
-            _SZ,                                                   \
-            _L,                                                    \
-            _LSZ,                                                  \
-            _PSZ                                                   \
-            );                                                     \
-}
-
-/*++
-
-VOID
-NdisMArcIndicateReceive(
-    IN NDIS_HANDLE MiniportAdapterHandle,
-    IN PUCHAR pRawHeader,           // Pointer to Arcnet frame header
-    IN PUCHAR pData,                // Pointer to data portion of Arcnet frame
-    IN UINT Length                  // Data Length
-    )
-
---*/
-#define NdisMArcIndicateReceive( _H, _HD, _D, _SZ)                 \
-{                                                                  \
-    PNDIS_MINIPORT_BLOCK _M_ = (PNDIS_MINIPORT_BLOCK)(_H);              \
-    ASSERT(MINIPORT_LOCK_ACQUIRED(_M_));                              \
-    ArcFilterDprIndicateReceive(                                   \
-        _M_->ArcDB,                                                 \
-        _HD,                                                       \
-        _D,                                                        \
-        _SZ                                                        \
-        );                                                         \
-}
-
-//
-// Used only internally by the wrapper and filter package.
-//
-VOID
-NdisMArcIndicateEthEncapsulatedReceive(
-    IN PNDIS_MINIPORT_BLOCK Miniport,
-    IN PVOID HeaderBuffer,
-    IN PVOID DataBuffer,
-    IN UINT Length
-    );
+/* NdisMFddiIndicateReceive / NdisMArcIndicateReceive macros and the
+   NdisMArcIndicateEthEncapsulatedReceive proto stripped — Ethernet-only. */
 
 
 
@@ -1101,58 +982,8 @@ NdisMEthIndicateReceiveComplete(
     EthFilterDprIndicateReceiveComplete(_M_->EthDB);                \
 }
 
-/*++
-
-VOID
-NdisMTrIndicateReceiveComplete(
-    IN NDIS_HANDLE MiniportAdapterHandle
-    );
-
---*/
-
-#define NdisMTrIndicateReceiveComplete( _H )                       \
-{                                                                  \
-    PNDIS_MINIPORT_BLOCK _M_ = (PNDIS_MINIPORT_BLOCK)_H;                \
-    ASSERT(MINIPORT_LOCK_ACQUIRED(_M_));                              \
-    TrFilterDprIndicateReceiveComplete(_M_->TrDB);                  \
-}
-
-/*++
-
-VOID
-NdisMFddiIndicateReceiveComplete(
-    IN NDIS_HANDLE MiniportAdapterHandle
-    );
-
---*/
-
-#define NdisMFddiIndicateReceiveComplete( _H )                     \
-{                                                                  \
-    PNDIS_MINIPORT_BLOCK _M_ = (PNDIS_MINIPORT_BLOCK)_H;                \
-    ASSERT(MINIPORT_LOCK_ACQUIRED(_M_));                              \
-    FddiFilterDprIndicateReceiveComplete(_M_->FddiDB);              \
-}
-
-/*++
-
-VOID
-NdisMArcIndicateReceiveComplete(
-    IN NDIS_HANDLE MiniportAdapterHandle
-    );
-
---*/
-
-#define NdisMArcIndicateReceiveComplete( _H )                       \
-{                                                                   \
-    PNDIS_MINIPORT_BLOCK _M_ = (PNDIS_MINIPORT_BLOCK)_H;            \
-    ASSERT(MINIPORT_LOCK_ACQUIRED(_M_));                            \
-                                                                    \
-    if ( _M_->EthDB ) {                                             \
-        EthFilterDprIndicateReceiveComplete(_M_->EthDB);            \
-    }                                                               \
-                                                                    \
-    ArcFilterDprIndicateReceiveComplete(_M_->ArcDB);                \
-}
+/* NdisMTrIndicateReceiveComplete / NdisMFddiIndicateReceiveComplete /
+   NdisMArcIndicateReceiveComplete macros stripped — Ethernet-only. */
 
 EXPORT
 VOID

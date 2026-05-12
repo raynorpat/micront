@@ -749,8 +749,7 @@ ICMPRcv(NetTableEntry *NTE, IPAddr Dest, IPAddr Src, IPAddr LocalAddr, IPRcvBuf 
     RcvBuf->ipr_buffer += sizeof(ICMPHeader);
     RcvBuf->ipr_size -= sizeof(ICMPHeader);
 
-    // Set up the data pointer for most requests, i.e. those that take less
-    // than MIN_FIRST_SIZE data.
+    // Set up the data pointer for most requests.
 	
     if (Size -= sizeof(ICMPHeader))
         Data = (void *)(Header + 1);

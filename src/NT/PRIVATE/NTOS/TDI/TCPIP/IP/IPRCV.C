@@ -20,7 +20,7 @@
 
 extern IP_STATUS SendICMPErr(IPAddr, IPHeader UNALIGNED *, uchar, uchar, ulong);
 
-extern	uchar RATimeout;
+/* extern uchar RATimeout — stripped with IP reassembly */
 extern	NDIS_HANDLE BufferPool;
 #if 0
 EXTERNAL_LOCK(PILock)
@@ -113,41 +113,23 @@ IPRcvComplete(void)
 #endif
 
 }
-//* FindRH - Look up a reassembly header on an NTE.
 //
-//	A utility function to look up a reassembly header. We assume the lock on the NTE
-//	is taken when we are called. If we find a matching RH we'll take the lock on it.
-//	We also return the predeccessor of the RH, for use in insertion or deletion.
+// MicroNT: IP-layer fragment reassembly removed per IPSTACK-HARDENING.md.
 //
-//	Input:	PrevRH			- Place to return pointer to previous RH
-//			NTE				- NTE to be searched.
-//			Dest			- Destination IP address
-//			Src				- Src IP address
-//			ID				- ID of RH
-//			Protocol		- Protocol of RH
+// Inbound fragments are dropped at the dispatch hook in IPRcv (counter
+// bumped, packet released).  TCP segments at MSS; UDP / ICMP applications
+// that hand down oversized payloads either chunk themselves or fail.  No
+// legitimate workload on a single-NIC internet-exposed host has cause to
+// deliver fragmented packets here, and the reassembly code had a
+// well-known history of memory-corruption / single-packet-kill bugs
+// across the late-1990s SP-era (Teardrop, Bonk, NewTear, Ping of Death;
+// findings H-001..H-005 in IPSTACK-HARDENING.md).
 //
-//	Returns: Pointer to RH, or NULL if none.
+// Stripped: FindRH, FreeRH, ReassembleFragment, RATDComplete, IPReassemble.
+// See `git log -- src/NT/PRIVATE/NTOS/TDI/TCPIP/IP/IPRCV.C` for the
+// original code if archaeology is needed.  (MS LANMan, 1990-1992;
+// individual attribution declined.)
 //
-ReassemblyHeader *
-FindRH(ReassemblyHeader **PrevRH, NetTableEntry *NTE, IPAddr Dest, IPAddr Src, ushort Id,
-	uchar Protocol)
-{
-	ReassemblyHeader		*TempPrev, *Current;
-
-	TempPrev = STRUCT_OF(ReassemblyHeader, &NTE->nte_ralist, rh_next);
-	Current = NTE->nte_ralist;
-	while (Current != (ReassemblyHeader *)NULL) {
-		if (Current->rh_dest == Dest && Current->rh_src == Src && Current->rh_id == Id &&
-			Current->rh_protocol == Protocol)
-			break;
-		TempPrev = Current;
-		Current = Current->rh_next;
-	}
-	
-	*PrevRH = TempPrev;
-	return Current;			
-
-}
 
 //* ParseRcvdOptions - Validate incoming options.
 //
@@ -302,398 +284,8 @@ DeliverToUser(NetTableEntry *SrcNTE, NetTableEntry *DestNTE,
 					
 }
 
-//*	FreeRH	- Free a reassembly header.
-//
-//	Called when we need to free a reassembly header, either because of a timeout or because
-//	we're done with it.
-//
-//	Input:	RH		- RH to be freed.
-//
-//	Returns: Nothing.
-//
-void
-FreeRH(ReassemblyHeader *RH)
-{
-	RABufDesc	*RBD, *TempRBD;
-
-	RBD = RH->rh_rbd;
-	while (RBD != NULL) {
-		TempRBD = RBD;
-		RBD = (RABufDesc *)RBD->rbd_buf.ipr_next;
-		CTEFreeMem(TempRBD);
-	}
-	CTEFreeMem(RH);
-
-}
-
-//* ReassembleFragment - Put a fragment into the reassembly list.
-//
-//	This routine is called once we've put a fragment into the proper buffer. We look for
-//	a reassembly header for the fragment. If we don't find one, we create one. Otherwise
-//	we search the reassembly list, and insert the datagram in it's proper place.
-//
-//	Input:	NTE				- NTE to reassemble on.
-//			SrcNTE			- NTE datagram arrived on.
-//			NewRBD			- New RBD to be inserted.
-//			IPH				- Pointer to header of datagram.
-//			HeaderSize		- Size in bytes of header.
-//			DestType		- Type of destination address.
-//
-//	Returns: Nothing.
-//
-void
-ReassembleFragment(NetTableEntry *NTE, NetTableEntry *SrcNTE, RABufDesc *NewRBD,
-	IPHeader UNALIGNED *IPH, uint HeaderSize, uchar DestType)
-{
-	CTELockHandle		NTEHandle;		// Lock handle used for NTE
-	ReassemblyHeader	*RH, *PrevRH;	// Current and previous reassembly headers.
-	RABufDesc			*PrevRBD;		// Previous RBD in reassembly header list.
-	RABufDesc			*CurrentRBD;
-	ushort				DataLength = (ushort)NewRBD->rbd_buf.ipr_size, DataOffset;
-	ushort				Offset;			// Offset of this fragment.
-	ushort				NewOffset;		// Offset we'll copy from after checking RBD list.
-	ushort				NewEnd;			// End offset of fragment, after trimming (if any).
-	
-	// If this is a broadcast, go ahead and forward it now.
-	if (IS_BCAST_DEST(DestType))
-		IPForward(SrcNTE, IPH, HeaderSize, NewRBD->rbd_buf.ipr_buffer,
-			NewRBD->rbd_buf.ipr_size, NULL, 0, DestType);
-
-
-	// We've got the buffer we need. Now get the reassembly header, if there is one. If
-	// there isn't, create one.
-	CTEGetLockAtDPC(&NTE->nte_lock, &NTEHandle);
-	RH = FindRH(&PrevRH, NTE, IPH->iph_dest, IPH->iph_src, IPH->iph_id, IPH->iph_protocol);
-	if (RH == (ReassemblyHeader *)NULL) {	// Didn't find one, so create one.
-		ReassemblyHeader	*NewRH;
-
-		CTEFreeLockFromDPC(&NTE->nte_lock, NTEHandle);
-		RH = CTEAllocMem(sizeof(ReassemblyHeader));
-		if (RH == (ReassemblyHeader *)NULL) { 	// Couldn't get a buffer.
-			IPSInfo.ipsi_reasmfails++;
-			CTEFreeMem(NewRBD);
-			return;
-		}
-		
-		CTEGetLockAtDPC(&NTE->nte_lock, &NTEHandle);
-		// Need to look it up again - it could have changed during above call.
-		NewRH = FindRH(&PrevRH, NTE, IPH->iph_dest, IPH->iph_src, IPH->iph_id, IPH->iph_protocol);
-		if (NewRH != (ReassemblyHeader *)NULL) {
-			CTEFreeMem(RH);
-			RH = NewRH;
-		} else {
-			
-			RH->rh_next = PrevRH->rh_next;
-			PrevRH->rh_next = RH;
-
-
-			// Initialize our new reassembly header.
-			RH->rh_dest = IPH->iph_dest;
-			RH->rh_src = IPH->iph_src;
-			RH->rh_id = IPH->iph_id;
-			RH->rh_protocol = IPH->iph_protocol;
-			RH->rh_ttl = RATimeout;
-			RH->rh_datasize = 0xffff;			// Default datasize to maximum.
-			RH->rh_rbd = (RABufDesc *)NULL;		// And nothing on chain.
-			RH->rh_datarcvd = 0;				// Haven't received any data yet.
-			RH->rh_headersize = 0;
-
-		}
-	}
-		
-	// When we reach here RH points to the reassembly header we want to use.
-	// and we hold locks on the NTE and the RH. If this is the first fragment we'll save
-	// the options and header information here.
-		
-	Offset = IPH->iph_offset & IP_OFFSET_MASK;
-	Offset = net_short(Offset) * 8;
-
-	if (Offset == 0) {						// First fragment.
-		RH->rh_headersize = HeaderSize;
-		CTEMemCopy(RH->rh_header, IPH, HeaderSize + 8);
-	}
-
-	// If this is the last fragment, update the amount of data we expect to received.		
-	if (!(IPH->iph_offset & IP_MF_FLAG))
-		RH->rh_datasize = Offset + DataLength; 		
-		
-	// Update the TTL value with the maximum of the current TTL and the incoming
-	// TTL (+1, to deal with rounding errors).
-	RH->rh_ttl = MAX(RH->rh_ttl, MIN(254, IPH->iph_ttl) + 1);
-
-	// Now we need to see where in the RBD list to put this.
-	//
-	// The idea is to go through the list of RBDs one at a time. The RBD currently
-	// being examined is CurrentRBD. If the start offset of the new fragment is less
-	// than (i.e. in front of) the offset of CurrentRBD, we need to insert the NewRBD
-	// in front of the CurrentRBD. If this is the case we need to check and see if the
-	// end of the new fragment overlaps some or all of the fragment described by
-	// CurrentRBD, and possibly subsequent fragment. If it overlaps part of a fragment
-	// we'll adjust our end down to be in front of the existing fragment. If it overlaps
-	// all of the fragment we'll free the old fragment.
-	//
-	// If the new fragment does not start in front of the current fragment we'll check
-	// to see if it starts somewhere in the middle of the current fragment. If this
-	// isn't the case, we move on the the next fragment. If this is the case, we check
-	// to see if the current fragment completely covers the new fragment. If not we
-	// move our start up and continue with the next fragment.
-	
-	NewOffset = Offset;
-	NewEnd = Offset + DataLength - 1;
-	PrevRBD = STRUCT_OF(RABufDesc, STRUCT_OF(IPRcvBuf, &RH->rh_rbd, ipr_next), rbd_buf);
-	CurrentRBD = RH->rh_rbd;
-	for (; CurrentRBD != NULL; PrevRBD = CurrentRBD, CurrentRBD = (RABufDesc *)CurrentRBD->rbd_buf.ipr_next) {
-				
-		// See if it starts in front of this fragment.
-		if (NewOffset < CurrentRBD->rbd_start) { 	
-			// It does start in front. Check to see if there's any overlap.
-					
-			if (NewEnd < CurrentRBD->rbd_start)
-				break;							// No overlap, so get out.
-			else {
-				// It does overlap. While we have overlap, walk down the list
-				// looking for RBDs we overlap completely. If we find one, put it
-				// on our deletion list. If we have overlap but not complete overlap,
-				// move our end down if front of the fragment we overlap.
-				do {
-					if (NewEnd > CurrentRBD->rbd_end) {	// This overlaps completely.
-						RABufDesc	*TempRBD;
-
-						RH->rh_datarcvd -= CurrentRBD->rbd_buf.ipr_size;
-						TempRBD = CurrentRBD;
-						CurrentRBD = (RABufDesc *)CurrentRBD->rbd_buf.ipr_next;
-						CTEFreeMem(TempRBD);
-					} else						// Only partial ovelap.
-						NewEnd = CurrentRBD->rbd_start - 1;
-								// Update of NewEnd will force us out of loop.
-						
-				} while (CurrentRBD != NULL && NewEnd >= CurrentRBD->rbd_start);
-				break;
-			}
-		} else {
-			// This fragment doesn't go in front of the current RBD. See if it is
-			// entirely beyond the end of the current fragment. If it is, just
-			// continue. Otherwise see if the current fragment completely subsumes
-			// us. If it does, get out, otherwise update our start offset and
-			// continue.
-
-			if (NewOffset > CurrentRBD->rbd_end)
-				continue;					// No overlap at all.
-			else {
-				if (NewEnd <= CurrentRBD->rbd_end) {
-					// The current fragment overlaps the new fragment totally. Set
-					// our offsets so that we'll skip the copy below.
-					NewEnd = NewOffset - 1;
-					break;
-				} else 					// Only partial overlap.
-					NewOffset = CurrentRBD->rbd_end + 1;
-			}
-		}
-	}		// End of for loop.
-
-	// Adjust the length and offset fields in the new RBD.
-	DataLength = NewEnd - NewOffset + 1;
-	DataOffset = NewOffset - Offset;
-	// Link him in chain.
-	NewRBD->rbd_buf.ipr_size = (uint)DataLength;
-	NewRBD->rbd_end = NewEnd;
-	NewRBD->rbd_start = NewOffset;
-	RH->rh_datarcvd += DataLength;
-	NewRBD->rbd_buf.ipr_buffer += DataOffset;
-	NewRBD->rbd_buf.ipr_next = (IPRcvBuf *)CurrentRBD;
-	PrevRBD->rbd_buf.ipr_next = &NewRBD->rbd_buf;
-
-	// If we've received all the data, deliver it to the user.
-	if (RH->rh_datarcvd == RH->rh_datasize) {	// We have it all.
-		IPOptInfo	OptInfo;
-		IPHeader	*Header;
-		IPRcvBuf	*FirstBuf;
-
-		PrevRH->rh_next = RH->rh_next;
-		CTEFreeLockFromDPC(&NTE->nte_lock, NTEHandle);
-		Header = (IPHeader *)RH->rh_header;
-		OptInfo.ioi_ttl = Header->iph_ttl;
-		OptInfo.ioi_tos = Header->iph_tos;
-		OptInfo.ioi_flags = 0;			// Flags must be 0 - DF can't be set, this was reassembled.
-		
-		if (RH->rh_headersize != sizeof(IPHeader)) {	// We had options.
-			OptInfo.ioi_options = (uchar *)(Header + 1);
-			OptInfo.ioi_optlength = RH->rh_headersize - sizeof(IPHeader);
-		} else {
-			OptInfo.ioi_options = (uchar *)NULL;
-			OptInfo.ioi_optlength = 0;
-		}
-
-		// Make sure that the first buffer contains enough data.
-		FirstBuf = (IPRcvBuf *)RH->rh_rbd;
-		while (FirstBuf->ipr_size < MIN_FIRST_SIZE) {
-			IPRcvBuf	*NextBuf = FirstBuf->ipr_next;
-			uint		CopyLength;
-
-			if (NextBuf == NULL)
-				break;
-					
-			CopyLength = MIN(MIN_FIRST_SIZE - FirstBuf->ipr_size,
-				NextBuf->ipr_size);
-			CTEMemCopy(FirstBuf->ipr_buffer + FirstBuf->ipr_size,
-				NextBuf->ipr_buffer, CopyLength);
-			FirstBuf->ipr_size += CopyLength;
-			NextBuf->ipr_buffer += CopyLength;
-			NextBuf->ipr_size -= CopyLength;
-			if (NextBuf->ipr_size == 0) {
-				FirstBuf->ipr_next = NextBuf->ipr_next;
-				CTEFreeMem(NextBuf);
-			}
-		}
-
-		IPSInfo.ipsi_reasmoks++;
-		DeliverToUser(SrcNTE, NTE, Header, FirstBuf, RH->rh_datasize, &OptInfo, DestType);
-		FreeRH(RH);
-	} else
-		CTEFreeLockFromDPC(&NTE->nte_lock, NTEHandle);
-
-
-}
-
-//* RATDComplete - Completion routing for a reassembly transfer data.
-//
-//	This is the completion handle for TDs invoked because we are reassembling a fragment.
-//
-//	Input:	NetContext	- Pointer to the net table entry on which we received this.
-//			Packet		- Packet we received into.
-//			Status		- Final status of copy.
-//			DataSize 	- Size in bytes of data transferred.
-//
-//	Returns: Nothing
-//
-void
-RATDComplete(void *NetContext, PNDIS_PACKET Packet, NDIS_STATUS Status, uint DataSize)
-{
-	NetTableEntry	*NTE = (NetTableEntry *)NetContext;
-	Interface		*SrcIF;
-	TDContext		*Context = (TDContext *)Packet->ProtocolReserved;
-	CTELockHandle	Handle;
-	PNDIS_BUFFER	Buffer;
-
-	if (Status == NDIS_STATUS_SUCCESS) {
-		Context->tdc_rbd->rbd_buf.ipr_size = DataSize;
-		ReassembleFragment(Context->tdc_nte, NTE, Context->tdc_rbd,
-			(IPHeader *)Context->tdc_header, Context->tdc_hlength, Context->tdc_dtype);
-	}
-
-	NdisUnchainBufferAtFront(Packet, &Buffer);
-	NdisFreeBuffer(Buffer);
-	Context->tdc_common.pc_flags &= ~PACKET_FLAG_RA;	
-	SrcIF = NTE->nte_if;
-	CTEGetLockAtDPC(&SrcIF->if_lock, &Handle);
-	
-	Context->tdc_common.pc_link = SrcIF->if_tdpacket;
-	SrcIF->if_tdpacket = Packet;
-	CTEFreeLockFromDPC(&SrcIF->if_lock, Handle);
-
-	return;
-
-}
-												
-//* IPReassemble - Reassemble an incoming datagram.
-//
-//	Called when we receive an incoming fragment. The first thing we do is get a buffer
-//	to put the fragment in. If we can't we'll exit. Then we copy the data, either via
-//	transfer data or directly if it all fits.
-//
-//	Input:	SrcNTE 			- Pointer to NTE that received the datagram.
-//			NTE				- Pointer to NTE on which to reassemble.
-//			IPH				- Pointer to header of packet.
-//			HeaderSize		- Size in bytes of header.
-//			Data			- Pointer to data part of fragment.
-//			BufferLength	- Length in bytes of user data available in the buffer.
-//			DataLength		- Length in bytes of the (upper-layer) data.
-//			DestType		- Type of destination
-//			LContext1, LContext2 - Link layer context values.
-//
-//	Returns: Nothing.	 			
-//
-void
-IPReassemble(NetTableEntry *SrcNTE, NetTableEntry *NTE, IPHeader UNALIGNED *IPH,
-    uint HeaderSize,
-	uchar *Data, uint BufferLength, uint DataLength, uchar DestType, NDIS_HANDLE LContext1,
-	uint LContext2)
-{
-	Interface			*RcvIF;
-	PNDIS_PACKET		TDPacket; 		// NDIS packet used for TD.
-	TDContext			*TDC = (TDContext *)NULL; 			// Transfer data context.
-	NDIS_STATUS			Status;
-	PNDIS_BUFFER		Buffer;
-	RABufDesc			*NewRBD;		// Pointer to new RBD to hold arriving fragment.
-	CTELockHandle		Handle;
-	uint				AllocSize;
-	
-	IPSInfo.ipsi_reasmreqds++;
-
-	// First, get a new RBD to hold the arriving fragment. If we can't, then just skip
-	// the rest. The RBD has the buffer implicitly at the end of it. The buffer for the
-	// first fragment must be at least MIN_FIRST_SIZE bytes.
-	if ((IPH->iph_offset & IP_OFFSET_MASK) == 0)
-		AllocSize = MAX(MIN_FIRST_SIZE, DataLength);
-	else
-		AllocSize = DataLength;
-
-	NewRBD = CTEAllocMem(sizeof(RABufDesc) + AllocSize);
-
-	if (NewRBD != (RABufDesc *)NULL) {
-
-		NewRBD->rbd_buf.ipr_buffer = (uchar *)(NewRBD + 1);
-		NewRBD->rbd_buf.ipr_size = DataLength;
-		NewRBD->rbd_buf.ipr_owner = IPR_OWNER_IP;
-
-		// Copy the data into the buffer. If we need to call transfer data do so now.
-		if (DataLength > BufferLength) {	// Need to call transfer data.
-			NdisAllocateBuffer(&Status, &Buffer, BufferPool, NewRBD + 1, DataLength);
-			if (Status != NDIS_STATUS_SUCCESS) {
-				IPSInfo.ipsi_reasmfails++;
-				CTEFreeMem(NewRBD);
-				return;
-			}
-
-			// Now get a packet for transferring the frame.
-			RcvIF = SrcNTE->nte_if;
-			CTEGetLockAtDPC(&RcvIF->if_lock, &Handle);
-			TDPacket = RcvIF->if_tdpacket;
-				
-			if (TDPacket != (PNDIS_PACKET)NULL) {
-					
-				TDC = (TDContext *)TDPacket->ProtocolReserved;
-				RcvIF->if_tdpacket = TDC->tdc_common.pc_link;
-				CTEFreeLockFromDPC(&RcvIF->if_lock, Handle);
-
-				TDC->tdc_common.pc_flags |= PACKET_FLAG_RA;
-				TDC->tdc_nte = NTE;
-				TDC->tdc_dtype = DestType;
-				TDC->tdc_hlength = (uchar)HeaderSize;
-				TDC->tdc_rbd = NewRBD;
-				CTEMemCopy(TDC->tdc_header, IPH, HeaderSize + 8);
-				NdisChainBufferAtFront(TDPacket, Buffer);
-				Status = (*(RcvIF->if_transfer))(RcvIF->if_lcontext,  LContext1, LContext2,
-					HeaderSize, DataLength, TDPacket, &DataLength);
-				if (Status != NDIS_STATUS_PENDING)
-					RATDComplete(SrcNTE, TDPacket, Status, DataLength);
-				else
-					return;
-			} else {		// Couldn't get a TD packet.
-				CTEFreeLockFromDPC(&RcvIF->if_lock, Handle);
-				CTEFreeMem(NewRBD);
-				IPSInfo.ipsi_reasmfails++;
-				return;
-			}
-		} else {			// It all fits, copy it.
-			CTEMemCopy(NewRBD + 1, Data, DataLength);
-			ReassembleFragment(NTE, SrcNTE, NewRBD, IPH, HeaderSize, DestType);
-		}
-	} else
-		IPSInfo.ipsi_reasmfails++;
-
-	return;
-}
+// FreeRH, ReassembleFragment, RATDComplete, IPReassemble — stripped.
+// See comment above (formerly FindRH).
 
 		
 	
@@ -917,8 +509,8 @@ IPRcv(void *MyContext, void *Data, uint DataSize, uint TotalSize, NDIS_HANDLE LC
 						}
 					}
 	
-					// No options. See if it's a fragment. If it is, call our
-					// reassembly handler.
+					// No options.  See if it's a fragment — if it is, drop it
+					// (IP-layer reassembly removed per IPSTACK-HARDENING.md).
 					if ((IPH->iph_offset & ~(IP_DF_FLAG | IP_RSVD_FLAG)) == 0) {
 							
 						// We don't have a fragment. If the data all fits,
@@ -1000,10 +592,13 @@ IPRcv(void *MyContext, void *Data, uint DataSize, uint TotalSize, NDIS_HANDLE LC
 						}
 						return;
 					} else {
-						// This is a fragment. Reassemble it.
-						IPReassemble(NTE, DestNTE, IPH, HeaderLength, Data,
-							DataSize, IPDataLength, DestType, LContext1,
-							LContext2);
+						// Fragment received. IP-layer reassembly is removed
+						// per IPSTACK-HARDENING.md — drop and count.  The
+						// ipsi_reasmreqds field is repurposed as "fragments
+						// dropped at receive" since the reassembly path no
+						// longer exists; SNMP observers see the same
+						// MIB-II OID with a slightly different semantic.
+						IPSInfo.ipsi_reasmreqds++;
 						return;
 					}
 	
@@ -1043,14 +638,12 @@ IPTDComplete(void *MyContext, PNDIS_PACKET Packet, NDIS_STATUS Status, uint Byte
 {
 	TDContext		*TDC = (TDContext *)Packet->ProtocolReserved;
 
-	if (!(TDC->tdc_common.pc_flags & PACKET_FLAG_FW))
-		if (!(TDC->tdc_common.pc_flags & PACKET_FLAG_RA))
-			TDUserRcv(MyContext, Packet, Status, BytesCopied);
-		else
-			RATDComplete(MyContext, Packet, Status, BytesCopied);
-	else
+	// PACKET_FLAG_RA branch removed with IP reassembly — no caller ever
+	// sets that flag now.  Forwarding (PACKET_FLAG_FW) vs regular user
+	// receive remain.
+	if (TDC->tdc_common.pc_flags & PACKET_FLAG_FW)
 		SendFWPacket(Packet, Status, BytesCopied);
-
-
+	else
+		TDUserRcv(MyContext, Packet, Status, BytesCopied);
 }
 

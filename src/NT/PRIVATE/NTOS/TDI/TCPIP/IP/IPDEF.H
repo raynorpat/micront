@@ -122,7 +122,7 @@ struct NetTableEntry {
 	ushort				nte_context;	// Context passed to upper layers.
 	void				*nte_pnpcontext; // PNP context.
 	DEFINE_LOCK_STRUCTURE(nte_lock)
-	struct ReassemblyHeader *nte_ralist;		// Reassembly list.
+	/* struct ReassemblyHeader *nte_ralist — stripped with IP reassembly */
 	struct EchoControl	*nte_echolist;	// List of pending echo control blocks.
     CTETimer            nte_timer;	// Timer for this net.
 	ushort				nte_mss;
@@ -152,7 +152,7 @@ typedef struct BufferReference BufferReference;
 // Definitions of flags in pc_flags field
 #define	PACKET_FLAG_OPTIONS		1		// Set if packet has an options buffer.
 #define	PACKET_FLAG_IPBUF		2		// Set if packet is composed of IP buffers.
-#define	PACKET_FLAG_RA			4		// Set if packet is being used for reassembly.
+/* PACKET_FLAG_RA — stripped with IP reassembly */
 #define	PACKET_FLAG_FW			8		// Set if packet is a forwarding packet.
 #define	PACKET_FLAG_IPHDR		0x10	// Packet uses an IP hdr buffer.
 
@@ -162,7 +162,7 @@ struct TDContext {
 	struct PCCommon	tdc_common;
 	void			*tdc_buffer;			// Pointer to buffer containing data.
 	NetTableEntry	*tdc_nte;				// NTE to receive this on.
-	struct RABufDesc *tdc_rbd;				// Pointer to RBD, if any.
+	/* struct RABufDesc *tdc_rbd — stripped with IP reassembly */
 	uchar			tdc_dtype;				// Destination type of original address.
 	uchar			tdc_hlength;			// Length in bytes of header.
 	uchar			tdc_pad[2];
@@ -206,33 +206,11 @@ typedef struct Interface Interface;
 
 #define IF_FLAGS_P2P    1           // Point to point interface
 
-// Structure of a reassembly buffer descriptor. Each RBD describes a fragment of the total
-// datagram
-struct RABufDesc {
-	IPRcvBuf	rbd_buf;			// IP receive buffer for this fragment.
-	ushort		rbd_start;			// Offset of first byte of this fragment.
-	ushort		rbd_end;			// Offset of last byte of this fragment.
-}; /* RABufDesc */
-
-typedef struct RABufDesc RABufDesc;
-
-// Reassembly header. The includes the information needed for the lookup, as well as space
-// for the received header and a chain of reassembly buffer descriptors.
-struct ReassemblyHeader {
-	struct ReassemblyHeader	*rh_next;				// Next header in chain.
-	IPAddr			rh_dest;						// Destination address of fragment.
-	IPAddr			rh_src;							// Source address of fragment.
-	ushort			rh_id;							// ID of datagram.
-	uchar			rh_protocol;					// Protocol of datagram.
-	uchar			rh_ttl;							// Remaining time of datagram.
-	RABufDesc		*rh_rbd;						// Chain of RBDs for this datagram.
-	ushort			rh_datasize;					// Total size of data.
-	ushort			rh_datarcvd;					// Amount of data received so far.
-	uint			rh_headersize;					// Size in bytes of header.
-	uchar			rh_header[MAX_HDR_SIZE+8];		// Saved IP header of first fragment.
-}; /* ReassemblyHeader */
-
-typedef struct ReassemblyHeader ReassemblyHeader;
+/*
+ * struct RABufDesc and struct ReassemblyHeader stripped with IP reassembly
+ * per IPSTACK-HARDENING.md.  Were used by the reassembly path
+ * (FindRH/ReassembleFragment) which is gone.
+ */
 
 // ICMP type and code definitions
 #define	IP_DEST_UNREACH_BASE	IP_DEST_NET_UNREACHABLE

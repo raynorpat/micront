@@ -41,10 +41,7 @@ SOURCES=           \
         miniport.c \
         wrapper.c  \
         minisub.c  \
-        afilter.c  \
         efilter.c  \
-        tfilter.c  \
-        ffilter.c  \
         ndis.rc
 
 DLLDEF=obj\*\ndis.def

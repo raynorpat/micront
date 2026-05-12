@@ -198,15 +198,6 @@ HaltOneMiniport(
     );
 
 VOID
-MiniportArcCopyFromBufferToPacket(
-    IN PCHAR Buffer,
-    IN UINT BytesToCopy,
-    IN PNDIS_PACKET Packet,
-    IN UINT Offset,
-    OUT PUINT BytesCopied
-    );
-
-VOID
 NdisInitReferencePackage(VOID);
 
 VOID
@@ -284,10 +275,6 @@ typedef struct _NDIS_PACKET_RESERVED {
                 );                                                                      \
     }                                                                                   \
 }
-
-
-#define ARC_PACKET_IS_ENCAPSULATED(Packet) \
-        ( PNDIS_RESERVED_FROM_PNDIS_PACKET(Packet)->Open->UsingEthEncapsulation )
 
 
 #if DBG
@@ -594,16 +581,6 @@ MiniportDereferencePackage(VOID)
 //
 
 VOID
-MiniportArcCopyFromBufferToPacket(
-    IN PCHAR Buffer,
-    IN UINT BytesToCopy,
-    IN PNDIS_PACKET Packet,
-    IN UINT Offset,
-    OUT PUINT BytesCopied
-    );
-
-
-VOID
 NdisMTimerDpc(
     PKDPC Dpc,
     PVOID Context,
@@ -680,9 +657,6 @@ NdisMKillOpen(
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text(PAGENDSM, NdisMReadDmaCounter)
 #pragma alloc_text(PAGENDSM, NdisMCancelTimer)
-#pragma alloc_text(PAGENDSM, MiniportArcCopyFromBufferToPacket)
-#pragma alloc_text(PAGENDSM, NdisMArcTransferData)
-#pragma alloc_text(PAGENDSM, NdisMArcIndicateEthEncapsulatedReceive)
 #pragma alloc_text(PAGENDSM, HaltOneMiniport)
 #pragma alloc_text(PAGENDSM, NdisMDeregisterDmaChannel)
 #pragma alloc_text(PAGENDSM, NdisMRegisterDmaChannel)
@@ -731,9 +705,6 @@ NdisMKillOpen(
 #pragma alloc_text(PAGENDSM, NdisDereferenceMiniport)
 #pragma alloc_text(PAGENDSM, NdisDereferenceDriver)
 #pragma alloc_text(PAGENDSM, NdisMQueryOidList)
-#pragma alloc_text(PAGENDSM, NdisMChangeFddiAddresses)
-#pragma alloc_text(PAGENDSM, NdisMChangeGroupAddress)
-#pragma alloc_text(PAGENDSM, NdisMChangeFunctionalAddress)
 #pragma alloc_text(PAGENDSM, NdisMCloseAction)
 #pragma alloc_text(PAGENDSM, FinishClose)
 #pragma alloc_text(PAGENDSM, NdisMChangeClass)
@@ -822,56 +793,14 @@ Return Value:
     LOCK_MINIPORT(Miniport, LocalLock);
 
     //
-    // Remove us from the filter package
+    // Remove us from the filter package (Ethernet-only — MicroNT supports
+    // only NdisMedium802_3; ARCnet / Token Ring / FDDI arms stripped).
     //
-    switch (Miniport->MediaType) {
-
-        case NdisMediumArcnet878_2:
-
-            if ( !MiniportOpen->UsingEthEncapsulation ) {
-
-                Status = ArcDeleteFilterOpenAdapter(
-                             Miniport->ArcDB,
-                             MiniportOpen->FilterHandle,
-                             NULL
-                             );
-
-                break;
-            }
-
-            //
-            //  If we're using encapsulation then we
-            //  didn't open an arcnet filter but rather
-            //  an ethernet filter.
-            //
-
-        case NdisMedium802_3:
-
-            Status = EthDeleteFilterOpenAdapter(
-                             Miniport->EthDB,
-                             MiniportOpen->FilterHandle,
-                             NULL
-                             );
-            break;
-
-        case NdisMedium802_5:
-
-            Status = TrDeleteFilterOpenAdapter(
-                             Miniport->TrDB,
-                             MiniportOpen->FilterHandle,
-                             NULL
-                             );
-            break;
-
-        case NdisMediumFddi:
-
-            Status = FddiDeleteFilterOpenAdapter(
-                             Miniport->FddiDB,
-                             MiniportOpen->FilterHandle,
-                             NULL
-                             );
-            break;
-    }
+    Status = EthDeleteFilterOpenAdapter(
+                     Miniport->EthDB,
+                     MiniportOpen->FilterHandle,
+                     NULL
+                     );
 
     if (Status != NDIS_STATUS_CLOSING_INDICATING) {
 
@@ -1001,31 +930,8 @@ Return Value:
 
     LOUD_DEBUG(DbgPrint("NdisM: Enter ChangeEthAddresses\n");)
 
-    if ((Open->MiniportHandle->MediaType == NdisMediumArcnet878_2) &&
-        (Open->UsingEthEncapsulation)) {
-
-        if (NewAddressCount > 0) {
-
-            //
-            // Turn on broadcast acceptance.
-            //
-            Open->MiniportHandle->ArcnetBroadcastSet = TRUE;
-
-        } else {
-
-            //
-            // Unset the broadcast filter.
-            //
-            Open->MiniportHandle->ArcnetBroadcastSet = FALSE;
-
-        }
-
-        Open->MiniportHandle->NeedToUpdatePacketFilter = TRUE;
-        Open->MiniportHandle->RunDoRequests = TRUE;
-        Open->MiniportHandle->ProcessOddDeferredStuff = TRUE;
-
-        return(NDIS_STATUS_SUCCESS);
-    }
+    /* ARCnet ethernet-encapsulation branch stripped; gate at registration
+       guarantees MediaType == NdisMedium802_3 here. */
 
     //
     // Queue a call to fix this up.
@@ -1203,194 +1109,6 @@ Return Value:
 
 }
 
-
-NDIS_STATUS
-NdisMChangeFunctionalAddress(
-    IN TR_FUNCTIONAL_ADDRESS OldFunctionalAddress,
-    IN TR_FUNCTIONAL_ADDRESS NewFunctionalAddress,
-    IN NDIS_HANDLE MacBindingHandle,
-    IN PNDIS_REQUEST NdisRequest,
-    IN BOOLEAN Set
-    )
-
-
-/*++
-
-Routine Description:
-
-    Action routine that will get called when an address is added to
-    the filter that wasn't referenced by any other open binding.
-
-    NOTE: This routine assumes that it is called with the lock
-    acquired.
-
-Arguments:
-
-    OldFunctionalAddress - The previous functional address.
-
-    NewFunctionalAddress - The new functional address.
-
-    MacBindingHandle - The context value returned by the driver when the
-    adapter was opened.  In reality, it is a pointer to W_OPEN_BLOCK.
-
-    NdisRequest - A pointer to the Request that submitted the set command.
-
-    Set - If true the change resulted from a set, otherwise the
-    change resulted from a open closing.
-
-Return Value:
-
-    None.
-
-
---*/
-
-{
-    PNDIS_M_OPEN_BLOCK Open = PNDIS_M_OPEN_FROM_BINDING_HANDLE(MacBindingHandle);
-
-    LOUD_DEBUG(DbgPrint("NdisM: Enter change functional\n");)
-
-    //
-    // Queue a call to fix this up.
-    //
-    Open->MiniportHandle->NeedToUpdateFunctionalAddress = TRUE;
-    Open->MiniportHandle->RunDoRequests = TRUE;
-    Open->MiniportHandle->ProcessOddDeferredStuff = TRUE;
-
-    LOUD_DEBUG(DbgPrint("NdisM: Exit change functional\n");)
-
-    return(NDIS_STATUS_SUCCESS);
-}
-
-
-NDIS_STATUS
-NdisMChangeGroupAddress(
-    IN TR_FUNCTIONAL_ADDRESS OldGroupAddress,
-    IN TR_FUNCTIONAL_ADDRESS NewGroupAddress,
-    IN NDIS_HANDLE MacBindingHandle,
-    IN PNDIS_REQUEST NdisRequest,
-    IN BOOLEAN Set
-    )
-
-/*++
-
-Routine Description:
-
-    Action routine that will get called when a group address is to
-    be changed.
-
-    NOTE: This routine assumes that it is called with the lock
-    acquired.
-
-Arguments:
-
-    OldGroupAddress - The previous group address.
-
-    NewGroupAddress - The new group address.
-
-    MacBindingHandle - The context value returned by the driver when the
-    adapter was opened.  In reality, it is a pointer to W_OPEN_BLOCK.
-
-    NdisRequest - A pointer to the Request that submitted the set command.
-
-    Set - If true the change resulted from a set, otherwise the
-    change resulted from a open closing.
-
-Return Value:
-
-    None.
-
-
---*/
-
-{
-    PNDIS_M_OPEN_BLOCK Open = PNDIS_M_OPEN_FROM_BINDING_HANDLE(MacBindingHandle);
-
-    LOUD_DEBUG(DbgPrint("NdisM: Enter change group\n");)
-
-    //
-    // Queue a call to fix this up.
-    //
-    Open->MiniportHandle->NeedToUpdateGroupAddress = TRUE;
-    Open->MiniportHandle->RunDoRequests = TRUE;
-    Open->MiniportHandle->ProcessOddDeferredStuff = TRUE;
-
-    LOUD_DEBUG(DbgPrint("NdisM: Exit change group\n");)
-
-    return(NDIS_STATUS_SUCCESS);
-
-}
-
-
-NDIS_STATUS
-NdisMChangeFddiAddresses(
-    IN UINT oldLongAddressCount,
-    IN CHAR oldLongAddresses[][FDDI_LENGTH_OF_LONG_ADDRESS],
-    IN UINT newLongAddressCount,
-    IN CHAR newLongAddresses[][FDDI_LENGTH_OF_LONG_ADDRESS],
-    IN UINT oldShortAddressCount,
-    IN CHAR oldShortAddresses[][FDDI_LENGTH_OF_SHORT_ADDRESS],
-    IN UINT newShortAddressCount,
-    IN CHAR newShortAddresses[][FDDI_LENGTH_OF_SHORT_ADDRESS],
-    IN NDIS_HANDLE MacBindingHandle,
-    IN PNDIS_REQUEST NdisRequest,
-    IN BOOLEAN Set
-    )
-
-/*++
-
-Routine Description:
-
-   Action routine that will get called when the multicast address
-   list has changed.
-
-   NOTE: This routine assumes that it is called with the lock
-   acquired.
-
-Arguments:
-
-   oldAddressCount - The number of addresses in oldAddresses.
-
-   oldAddresses - The old multicast address list.
-
-   newAddressCount - The number of addresses in newAddresses.
-
-   newAddresses - The new multicast address list.
-
-   macBindingHandle - The context value returned by the driver when the
-   adapter was opened.  In reality, it is a pointer to W_OPEN_BLOCK.
-
-   requestHandle - A value supplied by the NDIS interface that the driver
-   must use when completing this request.
-
-   Set - If true the change resulted from a set, otherwise the
-   change resulted from a open closing.
-
-Return Value:
-
-   None.
-
-
---*/
-
-{
-    PNDIS_M_OPEN_BLOCK Open = PNDIS_M_OPEN_FROM_BINDING_HANDLE(MacBindingHandle);
-
-    LOUD_DEBUG(DbgPrint("NdisM: Enter change fddi addresses\n");)
-
-    //
-    // Queue a call to fix this up.
-    //
-    Open->MiniportHandle->NeedToUpdateFddiLongAddresses = TRUE;
-    Open->MiniportHandle->NeedToUpdateFddiShortAddresses = TRUE;
-    Open->MiniportHandle->RunDoRequests = TRUE;
-    Open->MiniportHandle->ProcessOddDeferredStuff = TRUE;
-
-    LOUD_DEBUG(DbgPrint("NdisM: Exit change fddi addresses\n");)
-
-    return(NDIS_STATUS_SUCCESS);
-
-}
 
 //
 // IRP handlers established on behalf of NDIS devices by
@@ -1765,17 +1483,6 @@ Return Value:
             EthDeleteFilter(Miniport->EthDB);
         }
 
-        if (Miniport->TrDB) {
-            TrDeleteFilter(Miniport->TrDB);
-        }
-
-        if (Miniport->FddiDB) {
-            FddiDeleteFilter(Miniport->FddiDB);
-        }
-
-        if (Miniport->ArcDB) {
-            ArcDeleteFilter(Miniport->ArcDB);
-        }
         NdisDequeueMiniportOnDriver(Miniport, Miniport->DriverHandle);
         NdisDereferenceDriver(Miniport->DriverHandle);
         IoUnregisterShutdownNotification(Miniport->DeviceObject);
@@ -2506,38 +2213,10 @@ Return Value:
             Miniport->NeedToUpdatePacketFilter = FALSE;
 
             //
-            // Get information needed
+            // Get information needed (Ethernet-only — non-802_3 arms
+            // stripped, see comment near top of file).
             //
-            switch (Miniport->MediaType) {
-
-                case NdisMedium802_3:
-
-                    PacketFilter = ETH_QUERY_FILTER_CLASSES(Miniport->EthDB);
-                    break;
-
-                case NdisMedium802_5:
-
-                    PacketFilter = TR_QUERY_FILTER_CLASSES(Miniport->TrDB);
-                    break;
-
-                case NdisMediumFddi:
-
-                    PacketFilter = FDDI_QUERY_FILTER_CLASSES(Miniport->FddiDB);
-                    break;
-
-                case NdisMediumArcnet878_2:
-
-                    PacketFilter = ARC_QUERY_FILTER_CLASSES(Miniport->ArcDB);
-                    PacketFilter |= ETH_QUERY_FILTER_CLASSES(Miniport->EthDB);
-
-                    if ( Miniport->ArcnetBroadcastSet ||
-                         (PacketFilter & NDIS_PACKET_TYPE_MULTICAST) ) {
-
-                        PacketFilter &= ~NDIS_PACKET_TYPE_MULTICAST;
-                        PacketFilter |= NDIS_PACKET_TYPE_BROADCAST;
-                    }
-                    break;
-            }
+            PacketFilter = ETH_QUERY_FILTER_CLASSES(Miniport->EthDB);
 
             NdisMoveMemory(
                     Miniport->MulticastBuffer,
@@ -2584,249 +2263,10 @@ Return Value:
 
         }
 
-        if (Miniport->NeedToUpdateFunctionalAddress) {
-            UINT FunctionalAddress;
-
-            DoneSomething = TRUE;
-            //
-            // This is an internal update that is needed.
-            //
-
-            Miniport->MiniportRequest = &(Miniport->InternalRequest);
-            Miniport->NeedToUpdateFunctionalAddress = FALSE;
-
-            //
-            // Get information needed
-            //
-            FunctionalAddress = TR_QUERY_FILTER_ADDRESSES(Miniport->TrDB);
-            FunctionalAddress = BYTE_SWAP_ULONG(FunctionalAddress);
-            NdisMoveMemory(Miniport->MulticastBuffer,
-                           &FunctionalAddress,
-                           sizeof(FunctionalAddress)
-                          );
-
-            //
-            // Submit Request
-            //
-            LOUD_DEBUG(DbgPrint("NdisM: Updating functional address\n");)
-
-            Miniport->InternalRequest.RequestType = NdisRequestSetInformation;
-
-            Status =
-            (Miniport->DriverHandle->MiniportCharacteristics.SetInformationHandler)(
-                           Miniport->MiniportAdapterContext,
-                           OID_802_5_CURRENT_FUNCTIONAL,
-                           Miniport->MulticastBuffer,
-                           sizeof(FunctionalAddress),
-                           &Miniport->InternalRequest.DATA.SET_INFORMATION.BytesRead,
-                           &Miniport->InternalRequest.DATA.SET_INFORMATION.BytesNeeded
-                           );
-
-            if ((Status == NDIS_STATUS_PENDING) && (Miniport->MiniportRequest)) {
-
-                //
-                // Still outstanding
-                //
-                LOUD_DEBUG(DbgPrint("NdisM: Exit do requests\n");)
-
-                Miniport->RunDoRequests = FALSE;
-
-                return;
-
-            }
-
-            if (Status != NDIS_STATUS_PENDING) {
-                NdisMSetInformationComplete(
-                    (NDIS_HANDLE)Miniport,
-                    Status
-                    );
-            }
-
-        }
-
-        if (Miniport->NeedToUpdateGroupAddress) {
-            UINT GroupAddress;
-
-            DoneSomething = TRUE;
-            //
-            // This is an internal update that is needed.
-            //
-
-            Miniport->MiniportRequest = &(Miniport->InternalRequest);
-            Miniport->NeedToUpdateGroupAddress = FALSE;
-
-            //
-            // Get information needed
-            //
-            GroupAddress = TR_QUERY_FILTER_GROUP(Miniport->TrDB);
-            GroupAddress = BYTE_SWAP_ULONG(GroupAddress);
-            NdisMoveMemory(Miniport->MulticastBuffer,
-                           &GroupAddress,
-                           sizeof(GroupAddress)
-                          );
-
-            //
-            // Submit Request
-            //
-            LOUD_DEBUG(DbgPrint("NdisM: Updating group address\n");)
-
-            Miniport->InternalRequest.RequestType = NdisRequestSetInformation;
-
-            Status =
-            (Miniport->DriverHandle->MiniportCharacteristics.SetInformationHandler)(
-                           Miniport->MiniportAdapterContext,
-                           OID_802_5_CURRENT_GROUP,
-                           Miniport->MulticastBuffer,
-                           sizeof(GroupAddress),
-                           &Miniport->InternalRequest.DATA.SET_INFORMATION.BytesRead,
-                           &Miniport->InternalRequest.DATA.SET_INFORMATION.BytesNeeded
-                           );
-
-            if ((Status == NDIS_STATUS_PENDING) && (Miniport->MiniportRequest)) {
-
-                //
-                // Still outstanding
-                //
-                LOUD_DEBUG(DbgPrint("NdisM: Exit do requests\n");)
-
-                Miniport->RunDoRequests = FALSE;
-
-                return;
-
-            }
-
-            if (Status != NDIS_STATUS_PENDING) {
-                NdisMSetInformationComplete(
-                    (NDIS_HANDLE)Miniport,
-                    Status
-                    );
-            }
-
-        }
-
-        if (Miniport->NeedToUpdateFddiLongAddresses) {
-            UINT NumberOfAddresses;
-
-            DoneSomething = TRUE;
-            //
-            // This is an internal update that is needed.
-            //
-
-            Miniport->MiniportRequest = &(Miniport->InternalRequest);
-            Miniport->NeedToUpdateFddiLongAddresses = FALSE;
-
-            //
-            // Get information needed
-            //
-
-            FddiQueryGlobalFilterLongAddresses(
-                &Status,
-                Miniport->FddiDB,
-                NDIS_M_MAX_MULTI_LIST * FDDI_LENGTH_OF_LONG_ADDRESS,
-                &NumberOfAddresses,
-                (PVOID)Miniport->MulticastBuffer
-                );
-
-            //
-            // Submit Request
-            //
-            LOUD_DEBUG(DbgPrint("NdisM: Updating fddi long addresses\n");)
-
-            Miniport->InternalRequest.RequestType = NdisRequestSetInformation;
-
-            Status =
-            (Miniport->DriverHandle->MiniportCharacteristics.SetInformationHandler)(
-                           Miniport->MiniportAdapterContext,
-                           OID_FDDI_LONG_MULTICAST_LIST,
-                           Miniport->MulticastBuffer,
-                           NumberOfAddresses * FDDI_LENGTH_OF_LONG_ADDRESS,
-                           &Miniport->InternalRequest.DATA.SET_INFORMATION.BytesRead,
-                           &Miniport->InternalRequest.DATA.SET_INFORMATION.BytesNeeded
-                           );
-
-            if ((Status == NDIS_STATUS_PENDING) && (Miniport->MiniportRequest)) {
-
-                //
-                // Still outstanding
-                //
-                LOUD_DEBUG(DbgPrint("NdisM: Exit do requests\n");)
-
-                Miniport->RunDoRequests = FALSE;
-
-                return;
-
-            }
-
-            if (Status != NDIS_STATUS_PENDING) {
-                NdisMSetInformationComplete(
-                    (NDIS_HANDLE)Miniport,
-                    Status
-                    );
-            }
-
-        }
-
-        if (Miniport->NeedToUpdateFddiShortAddresses) {
-            UINT NumberOfAddresses;
-
-            DoneSomething = TRUE;
-            //
-            // This is an internal update that is needed.
-            //
-
-            Miniport->MiniportRequest = &(Miniport->InternalRequest);
-            Miniport->NeedToUpdateFddiShortAddresses = FALSE;
-
-            //
-            // Get information needed
-            //
-
-            FddiQueryGlobalFilterShortAddresses(
-                &Status,
-                Miniport->FddiDB,
-                NDIS_M_MAX_MULTI_LIST * FDDI_LENGTH_OF_SHORT_ADDRESS,
-                &NumberOfAddresses,
-                (PVOID)Miniport->MulticastBuffer
-                );
-
-            //
-            // Submit Request
-            //
-            LOUD_DEBUG(DbgPrint("NdisM: Updating fddi short addresses\n");)
-
-            Miniport->InternalRequest.RequestType = NdisRequestSetInformation;
-
-            Status =
-            (Miniport->DriverHandle->MiniportCharacteristics.SetInformationHandler)(
-                           Miniport->MiniportAdapterContext,
-                           OID_FDDI_SHORT_MULTICAST_LIST,
-                           Miniport->MulticastBuffer,
-                           NumberOfAddresses * FDDI_LENGTH_OF_SHORT_ADDRESS,
-                           &Miniport->InternalRequest.DATA.SET_INFORMATION.BytesRead,
-                           &Miniport->InternalRequest.DATA.SET_INFORMATION.BytesNeeded
-                           );
-
-            if ((Status == NDIS_STATUS_PENDING) && (Miniport->MiniportRequest)) {
-
-                //
-                // Still outstanding
-                //
-                LOUD_DEBUG(DbgPrint("NdisM: Exit do requests\n");)
-
-                Miniport->RunDoRequests = FALSE;
-
-                return;
-
-            }
-
-            if (Status != NDIS_STATUS_PENDING) {
-                NdisMSetInformationComplete(
-                    (NDIS_HANDLE)Miniport,
-                    Status
-                    );
-            }
-
-        }
+        /* TR NeedToUpdateFunctionalAddress / NeedToUpdateGroupAddress and
+           FDDI NeedToUpdate{Long,Short}Addresses blocks stripped — gate at
+           NdisMRegisterMiniport guarantees MediaType == 802_3, those
+           Need*Update flags are never set under Ethernet. */
 
         if ( Miniport->FirstPendingRequest != NULL ) {
 
@@ -2882,87 +2322,22 @@ Return Value:
                 switch (NdisRequest->DATA.QUERY_INFORMATION.Oid) {
 
                 case OID_GEN_SUPPORTED_LIST:
-
-                    //
-                    // On arcnet we need to either return the 878.2 or
-                    // ethernet supported list, depending on whether
-                    // we're using encapsulation or not.
-                    //
-
-                    if ( Miniport->MediaType == NdisMediumArcnet878_2 &&
-                         Reserved->Open->UsingEthEncapsulation ) {
-
-                        DoMove = FALSE;
-
-                        Status = ArcConvertOidListToEthernet(Miniport, NdisRequest);
-
-                    } else {
-
-                        goto SubmitToMiniportDriver;
-                    }
-                    break;
+                    /* ARCnet ethernet-encapsulation branch stripped — gate
+                       at registration ensures MediaType == 802_3. */
+                    goto SubmitToMiniportDriver;
 
                 case OID_GEN_CURRENT_PACKET_FILTER:
-
-                    switch (Miniport->MediaType) {
-                        case NdisMedium802_3:
-                            PacketFilter = ETH_QUERY_PACKET_FILTER(
-                                                   Miniport->EthDB,
-                                                   Reserved->Open->FilterHandle
-                                                  );
-                            break;
-                        case NdisMedium802_5:
-                            PacketFilter = TR_QUERY_PACKET_FILTER(
-                                                   Miniport->TrDB,
-                                                   Reserved->Open->FilterHandle
-                                                  );
-                            break;
-                        case NdisMediumFddi:
-                            PacketFilter = FDDI_QUERY_PACKET_FILTER(
-                                                   Miniport->FddiDB,
-                                                   Reserved->Open->FilterHandle
-                                                  );
-                            break;
-                        case NdisMediumArcnet878_2:
-
-                            if (Reserved->Open->UsingEthEncapsulation) {
-
-                                PacketFilter = ETH_QUERY_PACKET_FILTER(
-                                                   Miniport->EthDB,
-                                                   Reserved->Open->FilterHandle
-                                                  );
-                            } else {
-
-                                PacketFilter = ARC_QUERY_PACKET_FILTER(
-                                                   Miniport->ArcDB,
-                                                   Reserved->Open->FilterHandle
-                                                  );
-                            }
-                            break;
-                    }
+                    PacketFilter = ETH_QUERY_PACKET_FILTER(
+                                           Miniport->EthDB,
+                                           Reserved->Open->FilterHandle
+                                          );
                     GenericULong = (ULONG)(PacketFilter);
                     break;
 
                 case OID_GEN_MEDIA_IN_USE:
                 case OID_GEN_MEDIA_SUPPORTED:
-
-                    if (Miniport->MediaType == NdisMediumArcnet878_2) {
-
-                        if (Reserved->Open->UsingEthEncapsulation) {
-
-                            GenericULong = (ULONG)(NdisMedium802_3);
-
-                        } else {
-
-                            GenericULong = (ULONG)(NdisMediumArcnet878_2);
-
-                        }
-
-                    } else {
-
-                        GenericULong = (ULONG)(Miniport->MediaType);
-
-                    }
+                    /* MediaType is always NdisMedium802_3 under MicroNT. */
+                    GenericULong = (ULONG)(Miniport->MediaType);
                     MoveBytes = sizeof(NDIS_MEDIUM);
                     break;
 
@@ -3003,131 +2378,12 @@ Return Value:
                     GenericULong = Miniport->MaximumLongAddresses;
                     break;
 
-                case OID_802_5_CURRENT_FUNCTIONAL:
-                    GenericULong = TR_QUERY_FILTER_BINDING_ADDRESS(
-                                       Miniport->TrDB,
-                                       Reserved->Open->FilterHandle
-                                       );
-                    GenericULong = BYTE_SWAP_ULONG(GenericULong);
-                    break;
-
-                case OID_802_5_CURRENT_GROUP:
-                    GenericULong = TR_QUERY_FILTER_GROUP(
-                                       Miniport->TrDB
-                                       );
-                    GenericULong = BYTE_SWAP_ULONG(GenericULong);
-                    break;
-
-                case OID_FDDI_LONG_MULTICAST_LIST:
-                    FddiQueryOpenFilterLongAddresses(
-                        &Status,
-                        Miniport->FddiDB,
-                        Reserved->Open->FilterHandle,
-                        NdisRequest->DATA.QUERY_INFORMATION.InformationBufferLength,
-                        &MulticastAddresses,
-                        (PVOID)NdisRequest->DATA.QUERY_INFORMATION.InformationBuffer
-                        );
-
-                    MoveSource = (PVOID)NdisRequest->DATA.QUERY_INFORMATION.InformationBuffer;
-                    MoveBytes = FDDI_LENGTH_OF_LONG_ADDRESS *
-                            FddiNumberOfOpenFilterLongAddresses(
-                                Miniport->FddiDB,
-                                Reserved->Open->FilterHandle);
-                    break;
-
-                case OID_FDDI_LONG_MAX_LIST_SIZE:
-                    GenericULong = Miniport->MaximumLongAddresses;
-                    break;
-
-                case OID_FDDI_SHORT_MULTICAST_LIST:
-                    FddiQueryOpenFilterShortAddresses(
-                        &Status,
-                        Miniport->FddiDB,
-                        Reserved->Open->FilterHandle,
-                        NdisRequest->DATA.QUERY_INFORMATION.InformationBufferLength,
-                        &MulticastAddresses,
-                        (PVOID)NdisRequest->DATA.QUERY_INFORMATION.InformationBuffer
-                        );
-
-                    MoveSource = (PVOID)NdisRequest->DATA.QUERY_INFORMATION.InformationBuffer;
-                    MoveBytes = FDDI_LENGTH_OF_SHORT_ADDRESS *
-                            FddiNumberOfOpenFilterShortAddresses(
-                                Miniport->FddiDB,
-                                Reserved->Open->FilterHandle);
-                    break;
-
-                case OID_FDDI_SHORT_MAX_LIST_SIZE:
-                    GenericULong = Miniport->MaximumShortAddresses;
-                    break;
-
-                //
-                //
-                // Start interceptions for running an ethernet
-                // protocol on top of an arcnet mini-port.
-                //
-                //
-                case OID_GEN_MAXIMUM_FRAME_SIZE:
-
-                    if (Miniport->MediaType == NdisMediumArcnet878_2) {
-
-                        if (Reserved->Open->UsingEthEncapsulation) {
-
-                            //
-                            // 504 - 14 (ethernet header) == 490.
-                            //
-
-                            GenericULong = ARC_MAX_FRAME_SIZE - 14;
-
-                            break;
-                        }
-                    }
-                    goto SubmitToMiniportDriver;
-
-                case OID_GEN_MAXIMUM_TOTAL_SIZE:
-
-                    if (Miniport->MediaType == NdisMediumArcnet878_2) {
-
-                        if (Reserved->Open->UsingEthEncapsulation) {
-
-                            GenericULong = ARC_MAX_FRAME_SIZE;
-
-                            break;
-                        }
-                    }
-                    goto SubmitToMiniportDriver;
-
-                case OID_802_3_PERMANENT_ADDRESS:
-                case OID_802_3_CURRENT_ADDRESS:
-
-                    if ( Miniport->MediaType == NdisMediumArcnet878_2 ) {
-
-                        if (Reserved->Open->UsingEthEncapsulation) {
-
-                            //
-                            // The following stuff makes the copy code
-                            // below copy the source address into the
-                            // the users request buffer.
-                            //
-
-                            MoveSource = Address;
-                            MoveBytes = ETH_LENGTH_OF_ADDRESS;
-
-                            //
-                            //  Arcnet-to-ethernet conversion.
-                            //
-
-                            NdisZeroMemory(
-                                Address,
-                                ETH_LENGTH_OF_ADDRESS
-                                );
-
-                            Address[5] = Miniport->ArcnetAddress;
-
-                            break;
-                        }
-                    }
-
-                    goto SubmitToMiniportDriver;
+                /* OID_802_5_* and OID_FDDI_* OIDs unsupported under
+                   MicroNT (Ethernet-only); previous TR / FDDI branches
+                   stripped.  ARCnet ethernet-encapsulation branches in
+                   OID_GEN_MAXIMUM_FRAME_SIZE / OID_GEN_MAXIMUM_TOTAL_SIZE
+                   / OID_802_3_PERMANENT_ADDRESS / OID_802_3_CURRENT_ADDRESS
+                   also stripped; those OIDs now flow to default. */
 
                 default:
 
@@ -3212,22 +2468,7 @@ SubmitToMiniportDriver:
                 switch (NdisRequest->DATA.QUERY_INFORMATION.Oid) {
 
                 case OID_GEN_CURRENT_PACKET_FILTER:
-
-                    switch (Miniport->MediaType) {
-                        case NdisMedium802_3:
-                            PacketFilter = ETH_QUERY_FILTER_CLASSES(Miniport->EthDB);
-                            break;
-                        case NdisMedium802_5:
-                            PacketFilter = TR_QUERY_FILTER_CLASSES(Miniport->TrDB);
-                            break;
-                        case NdisMediumFddi:
-                            PacketFilter = FDDI_QUERY_FILTER_CLASSES(Miniport->FddiDB);
-                            break;
-                        case NdisMediumArcnet878_2:
-                            PacketFilter = ARC_QUERY_FILTER_CLASSES(Miniport->ArcDB);
-                            PacketFilter |= ETH_QUERY_FILTER_CLASSES(Miniport->EthDB);
-                            break;
-                    }
+                    PacketFilter = ETH_QUERY_FILTER_CLASSES(Miniport->EthDB);
                     GenericULong = (ULONG)(PacketFilter);
                     break;
 
@@ -3263,51 +2504,9 @@ SubmitToMiniportDriver:
                     GenericULong = Miniport->MaximumLongAddresses;
                     break;
 
-                case OID_802_5_CURRENT_FUNCTIONAL:
-                    GenericULong = TR_QUERY_FILTER_ADDRESSES(
-                                       Miniport->TrDB
-                                       );
-                    GenericULong = BYTE_SWAP_ULONG(GenericULong);
-                    break;
-
-                case OID_802_5_CURRENT_GROUP:
-                    GenericULong = TR_QUERY_FILTER_GROUP(
-                                       Miniport->TrDB
-                                       );
-                    GenericULong = BYTE_SWAP_ULONG(GenericULong);
-                    break;
-
-                case OID_FDDI_LONG_MULTICAST_LIST:
-                    FddiQueryGlobalFilterLongAddresses(
-                        &Status,
-                        Miniport->FddiDB,
-                        NdisRequest->DATA.QUERY_INFORMATION.InformationBufferLength,
-                        &MulticastAddresses,
-                        (PVOID)NdisRequest->DATA.QUERY_INFORMATION.InformationBuffer);
-
-                    MoveSource = (PVOID)NdisRequest->DATA.QUERY_INFORMATION.InformationBuffer;
-                    MoveBytes = FDDI_LENGTH_OF_LONG_ADDRESS * MulticastAddresses;
-                    break;
-
-                case OID_FDDI_LONG_MAX_LIST_SIZE:
-                    GenericULong = Miniport->MaximumLongAddresses;
-                    break;
-
-                case OID_FDDI_SHORT_MULTICAST_LIST:
-                    FddiQueryGlobalFilterShortAddresses(
-                        &Status,
-                        Miniport->FddiDB,
-                        NdisRequest->DATA.QUERY_INFORMATION.InformationBufferLength,
-                        &MulticastAddresses,
-                        (PVOID)NdisRequest->DATA.QUERY_INFORMATION.InformationBuffer);
-
-                    MoveSource = (PVOID)NdisRequest->DATA.QUERY_INFORMATION.InformationBuffer;
-                    MoveBytes = FDDI_LENGTH_OF_SHORT_ADDRESS * MulticastAddresses;
-                    break;
-
-                case OID_FDDI_SHORT_MAX_LIST_SIZE:
-                    GenericULong = Miniport->MaximumShortAddresses;
-                    break;
+                /* OID_802_5_* (Token Ring) and OID_FDDI_* OIDs stripped —
+                   MicroNT supports only NdisMedium802_3, so they fall to
+                   the default handler. */
 
                 default:
 
@@ -3409,69 +2608,14 @@ SubmitToMiniportDriver:
                         break;
                     }
 
-                    switch (Miniport->MediaType) {
-                        case NdisMedium802_3:
-                            Status = EthFilterAdjust(
-                                         Miniport->EthDB,
-                                         Reserved->Open->FilterHandle,
-                                         (PNDIS_REQUEST)NdisRequest,
-                                         PacketFilter,
-                                         TRUE
-                                         );
-
-                            NdisRequest->DATA.SET_INFORMATION.BytesRead = 4;
-                            break;
-
-                        case NdisMedium802_5:
-                            Status = TrFilterAdjust(
-                                         Miniport->TrDB,
-                                         Reserved->Open->FilterHandle,
-                                         (PNDIS_REQUEST)NdisRequest,
-                                         PacketFilter,
-                                         TRUE
-                                         );
-
-                            NdisRequest->DATA.SET_INFORMATION.BytesRead = 4;
-                            break;
-
-                        case NdisMediumFddi:
-                            Status = FddiFilterAdjust(
-                                         Miniport->FddiDB,
-                                         Reserved->Open->FilterHandle,
-                                         (PNDIS_REQUEST)NdisRequest,
-                                         PacketFilter,
-                                         TRUE
-                                         );
-
-                            NdisRequest->DATA.SET_INFORMATION.BytesRead = 4;
-                            break;
-
-                        case NdisMediumArcnet878_2:
-
-                            if (Reserved->Open->UsingEthEncapsulation) {
-
-                                Status = EthFilterAdjust(
-                                             Miniport->EthDB,
-                                             Reserved->Open->FilterHandle,
-                                             (PNDIS_REQUEST)NdisRequest,
-                                             PacketFilter,
-                                             TRUE
-                                             );
-
-                            } else {
-
-                                Status = ArcFilterAdjust(
-                                             Miniport->ArcDB,
-                                             Reserved->Open->FilterHandle,
-                                             (PNDIS_REQUEST)NdisRequest,
-                                             PacketFilter,
-                                             TRUE
-                                             );
-                            }
-
-                            NdisRequest->DATA.SET_INFORMATION.BytesRead = 4;
-                            break;
-                    }
+                    Status = EthFilterAdjust(
+                                 Miniport->EthDB,
+                                 Reserved->Open->FilterHandle,
+                                 (PNDIS_REQUEST)NdisRequest,
+                                 PacketFilter,
+                                 TRUE
+                                 );
+                    NdisRequest->DATA.SET_INFORMATION.BytesRead = 4;
                     break;
 
                 case OID_GEN_CURRENT_LOOKAHEAD:
@@ -3543,9 +2687,7 @@ SubmitToMiniportDriver:
 
                     }
 
-                    if ((Miniport->MediaType != NdisMedium802_3) &&
-                        !((Miniport->MediaType == NdisMediumArcnet878_2) &&
-                          (Reserved->Open->UsingEthEncapsulation))) {
+                    if (Miniport->MediaType != NdisMedium802_3) {
                         Status = NDIS_STATUS_NOT_SUPPORTED;
                         break;
                     }
@@ -3564,122 +2706,6 @@ SubmitToMiniportDriver:
                                  TRUE
                                  );
 
-                    NdisRequest->DATA.SET_INFORMATION.BytesRead =
-                         NdisRequest->DATA.SET_INFORMATION.InformationBufferLength;
-                    break;
-
-                case OID_802_5_CURRENT_FUNCTIONAL:
-                    if (Miniport->MediaType != NdisMedium802_5) {
-                        Status = NDIS_STATUS_NOT_SUPPORTED;
-                        break;
-                    }
-
-                    if (NdisRequest->DATA.SET_INFORMATION.InformationBufferLength
-                         != 4) {
-                        Status = NDIS_STATUS_INVALID_LENGTH;
-                        NdisRequest->DATA.SET_INFORMATION.BytesRead = 0;
-                        NdisRequest->DATA.SET_INFORMATION.BytesNeeded = 0;
-                        break;
-                    }
-
-                    Status = TrChangeFunctionalAddress(
-                                 Reserved->Open->MiniportHandle->TrDB,
-                                 Reserved->Open->FilterHandle,
-                                 NdisRequest,
-                                 (PUCHAR)(NdisRequest->DATA.SET_INFORMATION.InformationBuffer),
-                                 TRUE
-                                 );
-                    break;
-
-                case OID_802_5_CURRENT_GROUP:
-                    if (Miniport->MediaType != NdisMedium802_5) {
-                        Status = NDIS_STATUS_NOT_SUPPORTED;
-                        break;
-                    }
-
-                    if (NdisRequest->DATA.SET_INFORMATION.InformationBufferLength
-                         != 4) {
-                        Status = NDIS_STATUS_INVALID_LENGTH;
-                        NdisRequest->DATA.SET_INFORMATION.BytesRead = 0;
-                        NdisRequest->DATA.SET_INFORMATION.BytesNeeded = 0;
-                        break;
-                    }
-
-                    Status = TrChangeGroupAddress(
-                                 Reserved->Open->MiniportHandle->TrDB,
-                                 Reserved->Open->FilterHandle,
-                                 NdisRequest,
-                                 (PUCHAR)(NdisRequest->DATA.SET_INFORMATION.InformationBuffer),
-                                 TRUE
-                                 );
-                    break;
-
-                case OID_FDDI_LONG_MULTICAST_LIST:
-                    if (Miniport->MediaType != NdisMediumFddi) {
-                        Status = NDIS_STATUS_NOT_SUPPORTED;
-                        break;
-                    }
-
-                    if (NdisRequest->DATA.SET_INFORMATION.InformationBufferLength
-                          % FDDI_LENGTH_OF_LONG_ADDRESS != 0) {
-
-                        //
-                        // The data must be a multiple of the Ethernet
-                        // address size.
-                        //
-
-                        Status = NDIS_STATUS_INVALID_DATA;
-                        break;
-
-                    }
-
-                    //
-                    // Now call the filter package to set up the addresses.
-                    //
-                    Status = FddiChangeFilterLongAddresses(
-                                 Miniport->FddiDB,
-                                 Reserved->Open->FilterHandle,
-                                 (PNDIS_REQUEST)NdisRequest,
-                                 NdisRequest->DATA.SET_INFORMATION.InformationBufferLength
-                                      / FDDI_LENGTH_OF_LONG_ADDRESS,
-                                 NdisRequest->DATA.SET_INFORMATION.InformationBuffer,
-                                 TRUE
-                                 );
-                    NdisRequest->DATA.SET_INFORMATION.BytesRead =
-                         NdisRequest->DATA.SET_INFORMATION.InformationBufferLength;
-                    break;
-
-                case OID_FDDI_SHORT_MULTICAST_LIST:
-                    if (Miniport->MediaType != NdisMediumFddi) {
-                        Status = NDIS_STATUS_NOT_SUPPORTED;
-                        break;
-                    }
-
-                    if (NdisRequest->DATA.SET_INFORMATION.InformationBufferLength
-                          % FDDI_LENGTH_OF_SHORT_ADDRESS != 0) {
-
-                        //
-                        // The data must be a multiple of the Ethernet
-                        // address size.
-                        //
-
-                        Status = NDIS_STATUS_INVALID_DATA;
-                        break;
-
-                    }
-
-                    //
-                    // Now call the filter package to set up the addresses.
-                    //
-                    Status = FddiChangeFilterShortAddresses(
-                                 Miniport->FddiDB,
-                                 Reserved->Open->FilterHandle,
-                                 (PNDIS_REQUEST)NdisRequest,
-                                 NdisRequest->DATA.SET_INFORMATION.InformationBufferLength
-                                      / FDDI_LENGTH_OF_SHORT_ADDRESS,
-                                 NdisRequest->DATA.SET_INFORMATION.InformationBuffer,
-                                 TRUE
-                                 );
                     NdisRequest->DATA.SET_INFORMATION.BytesRead =
                          NdisRequest->DATA.SET_INFORMATION.InformationBufferLength;
                     break;
@@ -3751,10 +2777,6 @@ SubmitToMiniportDriver:
 
     if ((Miniport->NeedToUpdateEthAddresses ||
          Miniport->NeedToUpdatePacketFilter ||
-         Miniport->NeedToUpdateFunctionalAddress ||
-         Miniport->NeedToUpdateGroupAddress ||
-         Miniport->NeedToUpdateFddiLongAddresses ||
-         Miniport->NeedToUpdateFddiShortAddresses ||
          (Miniport->FirstPendingRequest != NULL))
         &&
         (Miniport->MiniportRequest == NULL)) {
@@ -3827,233 +2849,27 @@ Return Value:
 
     BufferAddress = MmGetSystemAddressForMdl(FirstBuffer);
 
-    switch (Miniport->MediaType) {
-
-    case NdisMedium802_3:
-
-        if (Miniport->MacOptions & NDIS_MAC_OPTION_NO_LOOPBACK) {
-
-            //
-            // If the card does not do loopback, then we check if
-            // we need to send it to ourselves, then if that is the
-            // case we also check for it being self-directed (if
-            // EthShouldAddressLoopBack returns FALSE then it
-            // can't be self-directed).
-            //
-
-            Loopback = EthShouldAddressLoopBack(
-                             Miniport->EthDB,
-                             BufferAddress
-                             );
-
-            if (!Loopback) {
-                return FALSE;
-            }
-
-        } else {
-
-            //
-            // The card does loopback. The only frames we need to
-            // special-case are self-directed ones. If it turns out
-            // below that the packet is self-directed, we change
-            // Loopback to TRUE.
-            //
-
-            Loopback = FALSE;
-
+    /* Ethernet-only loopback dispatch — TR / FDDI / ARCnet arms stripped. */
+    if (Miniport->MacOptions & NDIS_MAC_OPTION_NO_LOOPBACK) {
+        Loopback = EthShouldAddressLoopBack(
+                         Miniport->EthDB,
+                         BufferAddress
+                         );
+        if (!Loopback) {
+            return FALSE;
         }
-
-        //
-        // See if it is self-directed. We only get to this point
-        // if the card does not do loopback and Loopback is TRUE,
-        // *or* the card does do loopback (in which case Loopback
-        // is FALSE -- we set it to TRUE if it is self-directed
-        // so the comparison on line 4002 is simpler).
-        //
-
-        if ((*(ULONG UNALIGNED *)&BufferAddress[2] ==
-             *(ULONG UNALIGNED *)&Miniport->EthDB->AdapterAddress[2]) &&
-            (*(USHORT UNALIGNED *)&BufferAddress[0] ==
-             *(USHORT UNALIGNED *)&Miniport->EthDB->AdapterAddress[0])) {
-
-            SelfDirected = TRUE;
-            Loopback = TRUE;
-
-        } else {
-
-            SelfDirected = FALSE;
-
-        }
-
-        break;
-
-    case NdisMedium802_5:
-
-        if (Miniport->MacOptions & NDIS_MAC_OPTION_NO_LOOPBACK) {
-
-            Loopback = TrShouldAddressLoopBack(
-                             Miniport->TrDB,
-                             BufferAddress + 2,     // Skip FC & AC bytes.
-                             BufferAddress + 8      // Destination address.
-                             );
-
-            if (!Loopback) {
-                return FALSE;
-            }
-
-        } else {
-
-            Loopback = FALSE;
-
-        }
-
-        //
-        // See if it is self-directed.
-        //
-
-        if ((*(ULONG UNALIGNED *)&BufferAddress[4] ==
-             *(ULONG UNALIGNED *)&Miniport->TrDB->AdapterAddress[2]) &&
-            (*(USHORT UNALIGNED *)&BufferAddress[2] ==
-             *(USHORT UNALIGNED *)&Miniport->TrDB->AdapterAddress[0])) {
-
-            SelfDirected = TRUE;
-            Loopback = TRUE;
-
-        } else {
-
-            SelfDirected = FALSE;
-
-        }
-
-        break;
-
-    case NdisMediumFddi:
-
-        AddressLength = (BufferAddress[0] & 0x40)? FDDI_LENGTH_OF_LONG_ADDRESS:
-                                                   FDDI_LENGTH_OF_SHORT_ADDRESS;
-
-        if (Miniport->MacOptions & NDIS_MAC_OPTION_NO_LOOPBACK) {
-
-            Loopback = FddiShouldAddressLoopBack(
-                             Miniport->FddiDB,
-                             BufferAddress + 1,     // Skip FC byte to dest address.
-                             AddressLength
-                             );
-
-            if (!Loopback) {
-                return FALSE;
-            }
-
-        } else {
-
-            Loopback = FALSE;
-
-        }
-
-        //
-        // See if it is self-directed.
-        //
-
-        if (AddressLength == FDDI_LENGTH_OF_LONG_ADDRESS) {
-
-            FDDI_COMPARE_NETWORK_ADDRESSES_EQ(Miniport->FddiDB->AdapterLongAddress,
-                                           BufferAddress + 1,
-                                           FDDI_LENGTH_OF_LONG_ADDRESS,
-                                           &FddiAddressCheck
-                                          );
-
-        } else {
-
-            FDDI_COMPARE_NETWORK_ADDRESSES_EQ(Miniport->FddiDB->AdapterShortAddress,
-                                           BufferAddress + 1,
-                                           FDDI_LENGTH_OF_SHORT_ADDRESS,
-                                           &FddiAddressCheck
-                                          );
-
-        }
-
-        //
-        // FddiAddressCheck is 0 is they are equal.
-        //
-
-        if (FddiAddressCheck == 0) {
-
-            SelfDirected = TRUE;
-            Loopback = TRUE;
-
-        } else {
-
-            SelfDirected = FALSE;
-
-        }
-
-        break;
-
-    case NdisMediumArcnet878_2:
-
-        if ( ARC_PACKET_IS_ENCAPSULATED(Packet) ) {
-
-            if (Miniport->MacOptions & NDIS_MAC_OPTION_NO_LOOPBACK) {
-
-                Loopback = EthShouldAddressLoopBack(
-                                 Miniport->EthDB,
-                                 BufferAddress
-                                 );
-
-                if (!Loopback) {
-                    return FALSE;
-                }
-
-            } else {
-
-                Loopback = FALSE;
-
-            }
-
-            //
-            // See if it is self-directed.
-            //
-
-            if ((*(ULONG UNALIGNED *)&BufferAddress[2] ==
-                 *(ULONG UNALIGNED *)&Miniport->EthDB->AdapterAddress[2]) &&
-                (*(USHORT UNALIGNED *)&BufferAddress[0] ==
-                 *(USHORT UNALIGNED *)&Miniport->EthDB->AdapterAddress[0])) {
-
-                SelfDirected = TRUE;
-                Loopback = TRUE;
-
-            } else {
-
-                SelfDirected = FALSE;
-
-            }
-
-        } else {
-
-            if (Miniport->MacOptions & NDIS_MAC_OPTION_NO_LOOPBACK) {
-
-                Loopback = ((BufferAddress[0] == BufferAddress[1]) ||
-                           ((BufferAddress[1] == 0x00) &&
-                           (ARC_QUERY_FILTER_CLASSES(Miniport->ArcDB) |
-                           NDIS_PACKET_TYPE_BROADCAST)));
-
-            } else {
-
-                Loopback = FALSE;
-
-            }
-
-            if (BufferAddress[0] == BufferAddress[1]) {
-                SelfDirected = TRUE;
-                Loopback = TRUE;
-            } else {
-                SelfDirected = FALSE;
-            }
-
-        }
-
-        break;
-
+    } else {
+        Loopback = FALSE;
+    }
+
+    if ((*(ULONG UNALIGNED *)&BufferAddress[2] ==
+         *(ULONG UNALIGNED *)&Miniport->EthDB->AdapterAddress[2]) &&
+        (*(USHORT UNALIGNED *)&BufferAddress[0] ==
+         *(USHORT UNALIGNED *)&Miniport->EthDB->AdapterAddress[0])) {
+        SelfDirected = TRUE;
+        Loopback = TRUE;
+    } else {
+        SelfDirected = FALSE;
     }
 
     if (Loopback) {
@@ -4082,26 +2898,8 @@ Return Value:
 
             UINT BytesToCopy;
 
-            switch( Miniport->MediaType ) {
-
-                case NdisMedium802_3:
-                case NdisMedium802_5:
-
-                    BytesToCopy = 14;
-                    break;
-
-                case NdisMediumFddi:
-
-                    BytesToCopy = 1 + (2 * AddressLength);
-                    break;
-
-                case NdisMediumArcnet878_2:
-
-                    BytesToCopy = 3;
-                    break;
-            }
-
-            BytesToCopy += Miniport->CurrentLookahead;
+            BytesToCopy = 14 + Miniport->CurrentLookahead;
+            /* Ethernet-only: header is 14 bytes; TR/FDDI/Arc arms stripped. */
 
             BufferAddress = Miniport->LookaheadBuffer;
 
@@ -4128,14 +2926,9 @@ Return Value:
             // that could want it.
             //
 
-            switch (Miniport->MediaType) {
-
-            case NdisMedium802_3:
-
-                //
-                //  NOTE: Code re-use for 878.2 (arcnet) encapsulated
-                //        ethernet packets.
-                //
+            /* Ethernet-only loopback indication — TR / FDDI arms stripped;
+               ARCnet branch (with its own multi-frame split logic) stripped. */
+            {
 
 EthIndicateLoopbackFullPacket:
 
@@ -4155,192 +2948,8 @@ EthIndicateLoopbackFullPacket:
                 EthFilterDprIndicateReceiveComplete(
                     Miniport->EthDB
                     );
-
-                break;
-
-            case NdisMedium802_5:
-
-                Miniport->LoopbackPacketHeaderSize = 14;
-
-                TrFilterDprIndicateReceive(
-                    Miniport->TrDB,
-                    Packet,
-                    BufferAddress,
-                    14,
-                    ((PUCHAR)BufferAddress) + 14,
-                    BufferLength - 14,
-                    Length - 14
-                    );
-
-                TrFilterDprIndicateReceiveComplete(
-                    Miniport->TrDB
-                    );
-
-                break;
-
-            case NdisMediumFddi:
-
-                Miniport->LoopbackPacketHeaderSize = 1+(2*AddressLength);
-
-                FddiFilterDprIndicateReceive(
-                    Miniport->FddiDB,
-                    Packet,
-                    ((PCHAR)BufferAddress) + 1,
-                    AddressLength,
-                    BufferAddress,
-                    Miniport->LoopbackPacketHeaderSize,
-                    ((PUCHAR)BufferAddress) + Miniport->LoopbackPacketHeaderSize,
-                    BufferLength - Miniport->LoopbackPacketHeaderSize,
-                    Length - Miniport->LoopbackPacketHeaderSize
-                    );
-
-                FddiFilterDprIndicateReceiveComplete(
-                    Miniport->FddiDB
-                    );
-
-                break;
-
-            case NdisMediumArcnet878_2:
-
-                if ( ARC_PACKET_IS_ENCAPSULATED(Packet) ) {
-
-                    goto EthIndicateLoopbackFullPacket;
-
-                } else {
-
-                    PUCHAR PlaceInBuffer;
-                    PUCHAR ArcDataBuffer;
-                    UINT ArcDataLength;
-                    UINT PacketDataOffset;
-                    UCHAR FrameCount;
-                    UCHAR i;
-                    UINT IndicateDataLength;
-                    //
-                    // Calculate how many frames we will need.
-                    //
-
-                    ArcDataLength = Length - 3;
-                    PacketDataOffset = 3;
-
-                    FrameCount = (UCHAR) (ArcDataLength / ARC_MAX_FRAME_SIZE);
-
-                    if ( (ArcDataLength % ARC_MAX_FRAME_SIZE) != 0) {
-
-                        FrameCount++;
-                    }
-
-                    for (i = 0; i < FrameCount; ++i) {
-
-                        PlaceInBuffer = Miniport->LookaheadBuffer;
-
-                        //
-                        // Point data buffer to start of 'data'
-                        //
-
-                        ArcDataBuffer = Miniport->LookaheadBuffer + 2;
-
-                        //
-                        // Copy Header (SrcId/DestId/ProtId)
-                        //
-
-                        MiniportCopyFromPacketToBuffer(
-                                Packet,
-                                0,
-                                3,
-                                PlaceInBuffer,
-                                &BufferLength
-                                );
-
-                        PlaceInBuffer += 3;
-
-                        //
-                        // Put in split flag
-                        //
-
-                        if ( FrameCount > 1 ) {
-
-                            //
-                            // Multi-frame indication...
-                            //
-
-                            if ( i == 0 ) {
-
-                                //
-                                // first frame
-                                //
-
-                                // *PlaceInBuffer = ( (FrameCount - 2) * 2 ) + 1;
-
-                                *PlaceInBuffer = 2 * FrameCount - 3;
-                            } else {
-
-                                //
-                                // Subsequent frame
-                                //
-                                *PlaceInBuffer = ( i * 2 );
-                            }
-
-                        } else {
-
-                            //
-                            // Only frame in the indication
-                            //
-
-                            *PlaceInBuffer = 0;
-                        }
-
-                        //
-                        // Skip split flag
-                        //
-
-                        PlaceInBuffer++;
-
-                        //
-                        // Put in packet number.
-                        //
-
-                        *PlaceInBuffer++ = 0;
-                        *PlaceInBuffer++ = 0;
-
-                        //
-                        // Copy data
-                        //
-
-                        if ( ArcDataLength > ARC_MAX_FRAME_SIZE ) {
-
-                            IndicateDataLength = ARC_MAX_FRAME_SIZE;
-                        } else {
-
-                            IndicateDataLength = ArcDataLength;
-                        }
-
-                        MiniportCopyFromPacketToBuffer(
-                                Packet,
-                                PacketDataOffset,
-                                IndicateDataLength,
-                                PlaceInBuffer,
-                                &BufferLength
-                                );
-
-                        ArcFilterDprIndicateReceive(
-                                Miniport->ArcDB,
-                                Miniport->LookaheadBuffer,
-                                ArcDataBuffer,
-                                IndicateDataLength + 4
-                                );
-
-                        ArcDataLength -= ARC_MAX_FRAME_SIZE;
-                        PacketDataOffset += ARC_MAX_FRAME_SIZE;
-                    }
-                }
-
-                ArcFilterDprIndicateReceiveComplete(
-                    Miniport->ArcDB
-                    );
-
-                break;
-
             }
+
 
         } else {
 
@@ -4354,95 +2963,25 @@ EthIndicateLoopbackFullPacket:
 
             Miniport->LoopbackPacketHeaderSize = BufferLength;
 
-            switch (Miniport->MediaType) {
-            case NdisMedium802_3:
-
-                //
-                //  NOTE: Code re-use for 878.2 (arcnet) encapsulated
-                //        ethernet packets.
-                //
+            /* Ethernet-only runt-packet loopback indication — TR / FDDI /
+               ARCnet arms stripped. */
 
 EthIndicateLoopbackRuntPacket:
 
-                EthFilterDprIndicateReceive(
-                    Miniport->EthDB,
-                    Packet,
-                    ((PCHAR)BufferAddress),
-                    BufferAddress,
-                    BufferLength,
-                    NULL,
-                    0,
-                    0
-                    );
+            EthFilterDprIndicateReceive(
+                Miniport->EthDB,
+                Packet,
+                ((PCHAR)BufferAddress),
+                BufferAddress,
+                BufferLength,
+                NULL,
+                0,
+                0
+                );
 
-                EthFilterDprIndicateReceiveComplete(
-                    Miniport->EthDB
-                    );
-
-                break;
-
-            case NdisMedium802_5:
-
-                TrFilterDprIndicateReceive(
-                    Miniport->TrDB,
-                    Packet,
-                    BufferAddress,
-                    BufferLength,
-                    NULL,
-                    0,
-                    0
-                    );
-
-                TrFilterDprIndicateReceiveComplete(
-                    Miniport->TrDB
-                    );
-
-                break;
-
-            case NdisMediumFddi:
-
-                FddiFilterDprIndicateReceive(
-                    Miniport->FddiDB,
-                    Packet,
-                    ((PCHAR)BufferAddress) + 1,
-                    0,
-                    BufferAddress,
-                    BufferLength,
-                    NULL,
-                    0,
-                    0
-                    );
-
-                FddiFilterDprIndicateReceiveComplete(
-                    Miniport->FddiDB
-                    );
-
-                break;
-
-            case NdisMediumArcnet878_2:
-
-
-                if ( ARC_PACKET_IS_ENCAPSULATED(Packet) ) {
-
-                    goto EthIndicateLoopbackRuntPacket;
-
-                } else {
-
-                    ArcFilterDprIndicateReceive(
-                            Miniport->ArcDB,
-                            BufferAddress,
-                            ((PCHAR)BufferAddress) + Miniport->LoopbackPacketHeaderSize,
-                            Length - Miniport->LoopbackPacketHeaderSize
-                            );
-
-                    ArcFilterDprIndicateReceiveComplete(
-                        Miniport->ArcDB
-                        );
-                }
-
-                break;
-
-            }
+            EthFilterDprIndicateReceiveComplete(
+                Miniport->EthDB
+                );
 
         }
 
@@ -4453,77 +2992,6 @@ EthIndicateLoopbackRuntPacket:
     return SelfDirected;
 
 }
-
-VOID
-MiniportFreeArcnetHeader(
-    IN PNDIS_MINIPORT_BLOCK Miniport,
-    IN PNDIS_PACKET Packet
-    )
-/*++
-
-Routine Description:
-
-    This function strips off the arcnet header appended to
-    ethernet encapsulated packets
-
-Arguments:
-
-    MiniportAdapterHandle - points to the adapter block.
-
-    Packet - Ndis packet.
-
-Return Value:
-
-    None.
-
---*/
-{
-    PNDIS_M_OPEN_BLOCK Open;
-    PARC_BUFFER_LIST Buffer, TmpBuffer;
-    PNDIS_BUFFER NdisBuffer;
-    PVOID BufferVa;
-    UINT Length;
-
-    Open = PNDIS_RESERVED_FROM_PNDIS_PACKET(Packet)->Open;
-
-    if ( Open->UsingEthEncapsulation ) {
-
-        NdisUnchainBufferAtFront(
-                        Packet,
-                        &NdisBuffer
-                        );
-
-        NdisQueryBuffer(NdisBuffer,
-                        (PVOID *) &BufferVa,
-                        &Length
-                        );
-
-        NdisFreeBuffer(NdisBuffer);
-
-        Buffer = Miniport->ArcnetUsedBufferList;
-
-        if (Buffer->Buffer == BufferVa) {
-
-            Miniport->ArcnetUsedBufferList = Buffer->Next;
-
-        } else {
-
-            while (Buffer->Next->Buffer != BufferVa) {
-
-                Buffer = Buffer->Next;
-            }
-
-            TmpBuffer = Buffer->Next;
-            Buffer->Next = Buffer->Next->Next;
-            Buffer = TmpBuffer;
-
-        }
-
-        Buffer->Next = Miniport->ArcnetFreeBufferList;
-        Miniport->ArcnetFreeBufferList = Buffer;
-    }
-}
-
 
 VOID
 FASTCALL
@@ -4548,14 +3016,11 @@ Return Value:
 --*/
 
 {
-    PARC_BUFFER_LIST Buffer;
-    PNDIS_BUFFER NdisBuffer, TmpBuffer;
     PNDIS_PACKET Packet, PrevPacket;
     NDIS_STATUS Status;
     PNDIS_PACKET_RESERVED Reserved;
     PNDIS_M_OPEN_BLOCK Open;
     UINT Flags;
-    PUCHAR Address;
 
     ASSERT(MINIPORT_AT_DPC_LEVEL);
     ASSERT(MINIPORT_LOCK_ACQUIRED(Miniport));
@@ -4569,14 +3034,6 @@ Return Value:
         Packet = Miniport->FirstPendingPacket;
         Reserved = PNDIS_RESERVED_FROM_PNDIS_PACKET(Packet);
         Open = Reserved->Open;
-
-        if (Miniport->MediaType == NdisMediumArcnet878_2) {
-
-            goto BuildArcnetHeader;
-
-        }
-
-DoneBuildingArcnetHeader:
 
         //
         // Remove from Queue
@@ -4637,11 +3094,6 @@ DoneBuildingArcnetHeader:
         }
 
 NoCardSend:
-
-        if (Miniport->MediaType == NdisMediumArcnet878_2) {
-
-            MiniportFreeArcnetHeader(Miniport, Packet);
-        }
 
         if (Status != NDIS_STATUS_RESOURCES) {
 
@@ -4747,75 +3199,6 @@ NoCardSend:
     LOUD_DEBUG(DbgPrint("NdisM: Exit sends\n");)
 
     return;
-
-BuildArcnetHeader:
-
-    if (Open->UsingEthEncapsulation) {
-
-        if (Miniport->ArcnetFreeBufferList == NULL) {
-
-            //
-            // Set flag
-            //
-            CLEAR_RESOURCE(Miniport, 'S');
-            return;
-
-        }
-
-        NdisQueryPacket(Packet,
-                        NULL,
-                        NULL,
-                        &TmpBuffer,
-                        NULL
-                       );
-
-        NdisQueryBuffer(TmpBuffer, &Address, &Flags);
-
-        Buffer = Miniport->ArcnetFreeBufferList;
-        Miniport->ArcnetFreeBufferList = Buffer->Next;
-
-        NdisAllocateBuffer(
-            &Status,
-            &NdisBuffer,
-            Miniport->ArcnetBufferPool,
-            Buffer->Buffer,
-            3
-            );
-
-        if (Status != NDIS_STATUS_SUCCESS) {
-
-            Buffer->Next = Miniport->ArcnetFreeBufferList;
-            Miniport->ArcnetFreeBufferList = Buffer;
-            CLEAR_RESOURCE(Miniport, 'S');
-            return;
-
-        }
-
-        Buffer->Next = Miniport->ArcnetUsedBufferList;
-        Miniport->ArcnetUsedBufferList = Buffer;
-
-        NdisChainBufferAtFront(Packet, NdisBuffer);
-
-        ((PUCHAR)Buffer->Buffer)[0] = Miniport->ArcnetAddress;
-
-        if (Address[0] & 0x01) {
-
-            //
-            // Broadcast
-            //
-            ((PUCHAR)Buffer->Buffer)[1] = 0x00;
-
-        } else {
-
-            ((PUCHAR)Buffer->Buffer)[1] = Address[5];
-
-        }
-
-        ((PUCHAR) Buffer->Buffer)[2] = 0xE8;
-
-    }
-
-    goto DoneBuildingArcnetHeader;
 }
 
 
@@ -4848,7 +3231,6 @@ Return Value:
     PNDIS_REQUEST Request;
     PNDIS_REQUEST TmpRequest;
     PNDIS_M_OPEN_BLOCK Open;
-    PNDIS_PACKET ArcnetLimitPacket;
 
     LOUD_DEBUG(DbgPrint("NdisM: Enter abort packets and pending\n");)
 
@@ -4861,7 +3243,6 @@ Return Value:
     //
 
     Packet = Miniport->FirstPacket;
-    ArcnetLimitPacket = Miniport->FirstPendingPacket;
 
     Miniport->LastMiniportPacket = NULL;
     Miniport->FirstPendingPacket = NULL;
@@ -4873,25 +3254,6 @@ Return Value:
         TmpPacket = PNDIS_RESERVED_FROM_PNDIS_PACKET(Packet)->Next;
 
         Open = PNDIS_RESERVED_FROM_PNDIS_PACKET(Packet)->Open;
-
-        //
-        // Set flag that we've reached the packets that are
-        // not on the mini-port.
-        //
-
-        if ( Packet == ArcnetLimitPacket ) {
-
-            ArcnetLimitPacket = NULL;
-        }
-
-        //
-        // Now free the arcnet header.
-        //
-
-        if ( Miniport->MediaType == NdisMediumArcnet878_2 && ArcnetLimitPacket ) {
-
-            MiniportFreeArcnetHeader(Miniport, Packet);
-        }
 
         NDIS_LOG_PACKET(Miniport, Packet, 'C');
 
@@ -5216,25 +3578,6 @@ Return Value:
                     VERY_LOUD_DEBUG(DbgPrint("NdisM: Reset completed\n");)
 
                     //
-                    // Check if we are going to have to reset the
-                    // adapter again.  This happens when we are doing
-                    // the reset because of a ring failure.
-                    //
-                    if (Miniport->TrResetRing == 1) {
-
-                        if (Status == NDIS_STATUS_SUCCESS) {
-
-                            Miniport->TrResetRing = 0;
-
-                        } else {
-
-                            Miniport->TrResetRing = NDIS_MINIPORT_TR_RESET_TIMEOUT;
-
-                        }
-
-                    }
-
-                    //
                     // Finish off reset
                     //
 
@@ -5271,28 +3614,10 @@ Return Value:
 
                     if (AddressingReset &&
                         (Status == NDIS_STATUS_SUCCESS) &&
-                        ((Miniport->EthDB != NULL) ||
-                         (Miniport->TrDB != NULL) ||
-                         (Miniport->FddiDB != NULL) ||
-                         (Miniport->ArcDB != NULL))) {
+                        (Miniport->EthDB != NULL)) {
 
                         Miniport->NeedToUpdatePacketFilter = TRUE;
-                        switch (Miniport->MediaType) {
-                        case NdisMedium802_3:
-                            Miniport->NeedToUpdateEthAddresses = TRUE;
-                            break;
-                        case NdisMedium802_5:
-                            Miniport->NeedToUpdateFunctionalAddress = TRUE;
-                            Miniport->NeedToUpdateGroupAddress = TRUE;
-                            break;
-                        case NdisMediumFddi:
-                            Miniport->NeedToUpdateFddiLongAddresses = TRUE;
-                            Miniport->NeedToUpdateFddiShortAddresses = TRUE;
-                            break;
-                        case NdisMediumArcnet878_2:
-                            break;
-                        }
-
+                        Miniport->NeedToUpdateEthAddresses = TRUE;
                         Miniport->RunDoRequests = TRUE;
 
                     }
@@ -5610,16 +3935,6 @@ Return Value:
             Miniport->Timeout = TRUE;
 
         }
-
-    }
-
-    if ((Miniport->TrResetRing == 1) && (Miniport->ResetRequested == NULL)) {
-
-        Hung = TRUE;
-
-    } else if (Miniport->TrResetRing > 1) {
-
-        Miniport->TrResetRing--;
 
     }
 
@@ -6914,21 +5229,6 @@ Return Value:
     ASSERT(MINIPORT_AT_DPC_LEVEL);
     ASSERT(MINIPORT_LOCK_ACQUIRED(Miniport));
 
-    if ((GeneralStatus == NDIS_STATUS_RING_STATUS) &&
-        (StatusBufferSize == sizeof(NDIS_STATUS))) {
-
-        Status = *((PNDIS_STATUS)StatusBuffer);
-
-        if (Status & (NDIS_RING_LOBE_WIRE_FAULT |
-                      NDIS_RING_HARD_ERROR |
-                      NDIS_RING_SIGNAL_LOSS)) {
-
-            Miniport->TrResetRing = NDIS_MINIPORT_TR_RESET_TIMEOUT;
-
-        }
-
-    }
-
     Open = Miniport->OpenQueue;
 
     while (Open != NULL) {
@@ -7100,15 +5400,6 @@ Return Value:
     Open = Reserved->Open;
 
     Miniport->Timeout = FALSE;
-
-    //
-    // If this is arcnet, then free the appended header.
-    //
-
-    if ( Miniport->MediaType == NdisMediumArcnet878_2 ) {
-
-        MiniportFreeArcnetHeader(Miniport, Packet);
-    }
 
     NDIS_LOG_PACKET(Miniport, Packet, 'C');
 
@@ -7457,10 +5748,6 @@ Return Value:
         //
         if ((Miniport->NeedToUpdateEthAddresses ||
              Miniport->NeedToUpdatePacketFilter ||
-             Miniport->NeedToUpdateFunctionalAddress ||
-             Miniport->NeedToUpdateGroupAddress ||
-             Miniport->NeedToUpdateFddiLongAddresses ||
-             Miniport->NeedToUpdateFddiShortAddresses ||
              (Miniport->FirstPendingRequest != NULL))
             &&
             (Miniport->MiniportRequest == NULL)) {
@@ -7523,25 +5810,6 @@ Return Value:
     AbortMiniportPacketsAndPending(Miniport);
 
     //
-    // Check if we are going to have to reset the
-    // adapter again.  This happens when we are doing
-    // the reset because of a ring failure.
-    //
-    if (Miniport->TrResetRing == 1) {
-
-        if (Status == NDIS_STATUS_SUCCESS) {
-
-            Miniport->TrResetRing = 0;
-
-        } else {
-
-            Miniport->TrResetRing = NDIS_MINIPORT_TR_RESET_TIMEOUT;
-
-        }
-
-    }
-
-    //
     // Indicate to Protocols the reset is complete
     //
 
@@ -7580,29 +5848,11 @@ Return Value:
 
     if (AddressingReset &&
         (Status == NDIS_STATUS_SUCCESS) &&
-        ((Miniport->EthDB != NULL) ||
-         (Miniport->TrDB != NULL) ||
-         (Miniport->FddiDB != NULL) ||
-         (Miniport->ArcDB != NULL))) {
+        (Miniport->EthDB != NULL)) {
 
 
         Miniport->NeedToUpdatePacketFilter = TRUE;
-        switch (Miniport->MediaType) {
-        case NdisMedium802_3:
-            Miniport->NeedToUpdateEthAddresses = TRUE;
-            break;
-        case NdisMedium802_5:
-            Miniport->NeedToUpdateFunctionalAddress = TRUE;
-            Miniport->NeedToUpdateGroupAddress = TRUE;
-            break;
-        case NdisMediumFddi:
-            Miniport->NeedToUpdateFddiLongAddresses = TRUE;
-            Miniport->NeedToUpdateFddiShortAddresses = TRUE;
-            break;
-        case NdisMediumArcnet878_2:
-            break;
-        }
-
+        Miniport->NeedToUpdateEthAddresses = TRUE;
         Miniport->RunDoRequests = TRUE;
         Miniport->ProcessOddDeferredStuff = TRUE;
 
@@ -8789,416 +7039,6 @@ Return Value:
     return;
 
 }
-
-//
-// Arcnet support routines
-//
-
-VOID
-NdisMArcIndicateEthEncapsulatedReceive(
-    IN PNDIS_MINIPORT_BLOCK Miniport,
-    IN PUCHAR HeaderBuffer,
-    IN PUCHAR DataBuffer,
-    IN UINT   Length
-    )
-/*++
-
-    HeaderBuffer - This is the 878.2 header.
-    DataBuffer   - This is the 802.3 header.
-    Length       - This is the length of the ethernet frame.
-
---*/
-
-{
-    ULONG MacReceiveContext[2];
-
-    //
-    //  Indicate the packet.
-    //
-
-    MacReceiveContext[0] = (ULONG) DataBuffer;
-    MacReceiveContext[1] = (ULONG) Length;
-
-    if (Length > 14) {
-
-        NdisMEthIndicateReceive(
-            (NDIS_HANDLE) Miniport,             // miniport handle.
-            (NDIS_HANDLE) MacReceiveContext,    // receive context.
-            DataBuffer,                         // ethernet header.
-            14,                                 // ethernet header length.
-            DataBuffer + 14,                    // ethernet data.
-            Length - 14,                        // ethernet data length.
-            Length - 14                         // ethernet data length.
-            );
-
-    } else {
-
-        NdisMEthIndicateReceive(
-            (NDIS_HANDLE) Miniport,             // miniport handle.
-            (NDIS_HANDLE) MacReceiveContext,    // receive context.
-            DataBuffer,                         // ethernet header.
-            Length,                             // ethernet header length.
-            NULL,                               // ethernet data.
-            0,                                  // ethernet data length.
-            0                                   // ethernet data length.
-            );
-    }
-}
-
-
-NDIS_STATUS
-NdisMArcTransferData(
-    IN NDIS_HANDLE NdisBindingHandle,
-    IN NDIS_HANDLE MacReceiveContext,
-    IN UINT ByteOffset,
-    IN UINT BytesToTransfer,
-    IN OUT PNDIS_PACKET DstPacket,
-    OUT PUINT BytesTransferred
-    )
-/*++
-
-Routine Description:
-
-    This routine handles the transfer data calls to arcnet mini-port.
-
-Arguments:
-
-    NdisBindingHandle - Pointer to open block.
-
-    MacReceiveContext - Context given for the indication
-
-    ByteOffset - Offset to start transfer at.
-
-    BytesToTransfer - Number of bytes to transfer
-
-    Packet - Packet to transfer into
-
-    BytesTransferred - the number of actual bytes copied
-
-Return values:
-
-    NDIS_STATUS_SUCCESS, if successful, else NDIS_STATUS_FAILURE.
-
---*/
-{
-    PNDIS_MINIPORT_BLOCK    Miniport;
-    PNDIS_M_OPEN_BLOCK      MiniportOpen;
-    KIRQL                   OldIrql;
-    PNDIS_PACKET            SrcPacket;
-    PNDIS_BUFFER            NdisBuffer;
-    NDIS_STATUS             Status;
-    NDIS_PACKET             TempPacket;
-
-    MiniportOpen = (PNDIS_M_OPEN_BLOCK) NdisBindingHandle;
-    Miniport     = MiniportOpen->MiniportHandle;
-    NdisBuffer   = NULL;
-
-    KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
-    ACQUIRE_SPIN_LOCK_DPC(&Miniport->Lock);
-
-    ASSERT(MINIPORT_AT_DPC_LEVEL);
-    ASSERT(MINIPORT_LOCK_ACQUIRED(Miniport));
-
-    //
-    //  If this is encapsulated ethernet then we don't currently
-    //  have the source packet from which to copy from.
-    //
-
-    if ( MiniportOpen->UsingEthEncapsulation ) {
-
-        //
-        //  If this is not loopback then we need to create a
-        //  temp NDIS_PACKET for the packet-to-packet copy.
-        //
-
-        if ( !Miniport->LoopbackPacket ) {
-
-            PUCHAR DataBuffer = (PUCHAR) ((PULONG) MacReceiveContext)[0];
-            UINT   DataLength = (UINT)   ((PULONG) MacReceiveContext)[1];
-
-            //
-            //  We'll always be in the scope of this function so we
-            //  can use local stack space rather than allocating dynamic
-            //  memory.
-            //
-
-            SrcPacket = &TempPacket;    // Use the local stack for packet store.
-
-            NdisZeroMemory(
-                    SrcPacket,
-                    sizeof(NDIS_PACKET)
-                    );
-
-            NdisAllocateBuffer(
-                    &Status,        // Status code.
-                    &NdisBuffer,    // NDIS buffer to chain onto the packet.
-                    NULL,           // On NT, this parameter is ignored.
-                    DataBuffer,     // The ethernet frame.
-                    DataLength      // The ethernet frame length.
-                    );
-
-            NdisChainBufferAtFront(SrcPacket, NdisBuffer);
-
-        } else {
-
-            SrcPacket = Miniport->LoopbackPacket;
-        }
-
-        //
-        // Skip the ethernet header.
-        //
-
-        ByteOffset += 14;
-
-    } else {
-
-        SrcPacket = (PNDIS_PACKET) MacReceiveContext;
-    }
-
-    //
-    // Now we can simply copy from the source packet to the
-    // destination packet.
-    //
-
-    NdisCopyFromPacketToPacket(
-            DstPacket,              // destination packet.
-            0,                      // destination offset.
-            BytesToTransfer,        // bytes to copy.
-            SrcPacket,              // source packet.
-            ByteOffset,             // source offset.
-            BytesTransferred        // bytes copied.
-            );
-
-    //
-    //  If we allocated an NDIS_BUFFER then we need to free it. We don't
-    //  need to unchain the buffer from the packet since the packet is
-    //  a local stack variable the will just get trashed anyway.
-    //
-
-    if ( NdisBuffer != NULL ) {
-
-        NdisFreeBuffer(NdisBuffer);
-    }
-
-    RELEASE_SPIN_LOCK_DPC(&Miniport->Lock);
-    KeLowerIrql(OldIrql);
-
-    return NDIS_STATUS_SUCCESS;
-}
-
-
-VOID
-MiniportArcCopyFromBufferToPacket(
-    IN PCHAR Buffer,
-    IN UINT BytesToCopy,
-    IN PNDIS_PACKET Packet,
-    IN UINT Offset,
-    OUT PUINT BytesCopied
-    )
-
-/*++
-
-Routine Description:
-
-    Copy from a buffer into an ndis packet.
-
-Arguments:
-
-    Buffer - The packet to copy from.
-
-    Offset - The offset from which to start the copy.
-
-    BytesToCopy - The number of bytes to copy from the buffer.
-
-    Packet - The destination of the copy.
-
-    BytesCopied - The number of bytes actually copied.  Will be less
-                than BytesToCopy if the packet is not large enough.
-
-Return Value:
-
-    None
-
---*/
-
-{
-    //
-    // Holds the count of the number of ndis buffers comprising the
-    // destination packet.
-    //
-    UINT DestinationBufferCount;
-
-    //
-    // Points to the buffer into which we are putting data.
-    //
-    PNDIS_BUFFER DestinationCurrentBuffer;
-
-    //
-    // Points to the location in Buffer from which we are extracting data.
-    //
-    PUCHAR SourceCurrentAddress;
-
-    //
-    // Holds the virtual address of the current destination buffer.
-    //
-    PVOID DestinationVirtualAddress;
-
-    //
-    // Holds the length of the current destination buffer.
-    //
-    UINT DestinationCurrentLength;
-
-    //
-    // Keep a local variable of BytesCopied so we aren't referencing
-    // through a pointer.
-    //
-    UINT LocalBytesCopied = 0;
-
-
-    //
-    // Take care of boundary condition of zero length copy.
-    //
-
-    *BytesCopied = 0;
-    if (!BytesToCopy) return;
-
-    //
-    // Get the first buffer of the destination.
-    //
-
-    NdisQueryPacket(
-        Packet,
-        NULL,
-        &DestinationBufferCount,
-        &DestinationCurrentBuffer,
-        NULL
-        );
-
-    //
-    // Could have a null packet.
-    //
-
-    if (!DestinationBufferCount) return;
-
-    NdisQueryBuffer(
-        DestinationCurrentBuffer,
-        &DestinationVirtualAddress,
-        &DestinationCurrentLength
-        );
-
-    //
-    // Set up the source address.
-    //
-
-    SourceCurrentAddress = Buffer;
-
-
-    while (LocalBytesCopied < BytesToCopy) {
-
-        //
-        // Check to see whether we've exhausted the current destination
-        // buffer.  If so, move onto the next one.
-        //
-
-        if (!DestinationCurrentLength) {
-
-            NdisGetNextBuffer(
-                DestinationCurrentBuffer,
-                &DestinationCurrentBuffer
-                );
-
-            if (!DestinationCurrentBuffer) {
-
-                //
-                // We've reached the end of the packet.  We return
-                // with what we've done so far. (Which must be shorter
-                // than requested.)
-                //
-
-                break;
-
-            }
-
-            NdisQueryBuffer(
-                DestinationCurrentBuffer,
-                &DestinationVirtualAddress,
-                &DestinationCurrentLength
-                );
-
-            continue;
-
-        }
-
-        //
-        // Try to get us up to the point to start the copy.
-        //
-
-        if (Offset) {
-
-            if (Offset > DestinationCurrentLength) {
-
-                //
-                // What we want isn't in this buffer.
-                //
-
-                Offset -= DestinationCurrentLength;
-                DestinationCurrentLength = 0;
-                continue;
-
-            } else {
-
-                DestinationVirtualAddress = (PCHAR)DestinationVirtualAddress
-                                            + Offset;
-                DestinationCurrentLength -= Offset;
-                Offset = 0;
-
-            }
-
-        }
-
-
-        //
-        // Copy the data.
-        //
-
-        {
-
-            //
-            // Holds the amount of data to move.
-            //
-            UINT AmountToMove;
-
-            //
-            // Holds the amount desired remaining.
-            //
-            UINT Remaining = BytesToCopy - LocalBytesCopied;
-
-
-            AmountToMove = DestinationCurrentLength;
-
-            AmountToMove = ((Remaining < AmountToMove)?
-                            (Remaining):(AmountToMove));
-
-            NdisMoveFromMappedMemory(
-                DestinationVirtualAddress,
-                SourceCurrentAddress,
-                AmountToMove
-                );
-
-            SourceCurrentAddress += AmountToMove;
-            LocalBytesCopied += AmountToMove;
-            DestinationCurrentLength -= AmountToMove;
-
-        }
-
-    }
-
-    *BytesCopied = LocalBytesCopied;
-
-
-}
-
-
 
 VOID
 NdisMCancelTimer(

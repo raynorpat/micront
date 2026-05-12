@@ -5449,10 +5449,7 @@ NdisSynchronizeWithInterrupt(
 
 #if defined(NDIS_MINIPORT_DRIVER) || defined(NDIS_WRAPPER)
 
-#include <afilter.h>
 #include <efilter.h>
-#include <tfilter.h>
-#include <ffilter.h>
 
 #define NDIS_M_MAX_MULTI_LIST 32
 #define NDIS_M_MAX_LOOKAHEAD 526
