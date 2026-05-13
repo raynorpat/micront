@@ -131,70 +131,13 @@ IPRcvComplete(void)
 // individual attribution declined.)
 //
 
-//* ParseRcvdOptions - Validate incoming options.
-//
-//	Called during reception handling to validate incoming options. We make sure that everything
-//	is OK as best we can, and find indices for any source route option.
-//
-//	Input:	OptInfo		- Pointer to option info. structure.
-//			Index		- Pointer to optindex struct to be filled in.
-//			
-//
-//	Returns: Index of error if any, MAX_OPT_SIZE if no errors.
-//
-uchar
-ParseRcvdOptions(IPOptInfo *OptInfo, OptIndex *Index)
-{
-	uint		i= 0;			// Index variable.
-	uchar		*Options = OptInfo->ioi_options;
-	uint		OptLength = (uint)OptInfo->ioi_optlength;		
-	uchar		Length;			// Length of option.
-	uchar		Pointer;		// Pointer field, for options that use it.
-
-	while(i < OptLength && *Options != IP_OPT_EOL) {
-		if (*Options == IP_OPT_NOP) {
-			i++;
-			Options++;
-			continue;
-		}
-		if (((Length = Options[IP_OPT_LENGTH]) + i) > OptLength) {
-			return (uchar)i + (uchar)IP_OPT_LENGTH;	// Length exceeds options length.
-		}
-
-		Pointer = Options[IP_OPT_DATA] - 1;
-
-		if (*Options == IP_OPT_TS) {
-			if (Length < (MIN_TS_PTR - 1))
-				return (uchar)i + (uchar)IP_OPT_LENGTH;
-			Index->oi_tsindex == (uchar)i;		
-		} else {
-			if (Length < (MIN_RT_PTR - 1))
-				return (uchar)i + (uchar)IP_OPT_LENGTH;
-				
-			if (*Options == IP_OPT_LSRR || *Options == IP_OPT_SSRR) { 	
-				// A source route option
-				if (Pointer < Length) {	// Route not complete
-					
-					if ((Length - Pointer) < sizeof(IPAddr))
-						return (uchar)i + (uchar)IP_OPT_LENGTH;
-					
-					Index->oi_srtype = *Options;
-					Index->oi_srindex = (uchar)i;
-				}
-			} else {
-				if (*Options == IP_OPT_RR) {
-					if (Pointer < Length)
-						Index->oi_rrindex = (uchar)i;
-				}
-			}
-		}
-
-		i += Length;
-		Options += Length;
-	}
-
- 	return MAX_OPT_SIZE;
-}
+// ParseRcvdOptions, CheckLocalOptions — removed.  IP option processing
+// is gone (any packet with IHL > 5 is dropped at IPRcv entry); these
+// helpers had no remaining caller.  The option-walk parser was a
+// historical reservoir of pointer / length / overflow bugs and the
+// only legitimate inbound use (source-route honouring on a forwarding
+// host) is also gone.  See `git log` for the original parser and
+// `docs-wip/IPSTACK-HARDENING.md` for rationale.
 
 //* BCastRcv - Receive a broadcast or multicast packet.
 //
@@ -287,66 +230,6 @@ DeliverToUser(NetTableEntry *SrcNTE, NetTableEntry *DestNTE,
 // FreeRH, ReassembleFragment, RATDComplete, IPReassemble — stripped.
 // See comment above (formerly FindRH).
 
-		
-	
-//* CheckLocalOptions - Check the options received with a packet.
-//
-//	A routine called when we've received a packet for this host and want to examine
-//	it for options. We process the options, and return TRUE or FALSE depending on whether
-//	or not it's for us.
-//
-//	Input:	SrcNTE		- Pointer to NTE this came in on.
-//			Header		- Pointer to incoming header.
-//			OptInfo		- Place to put opt info.
-//			DestType	- Type of incoming packet.
-//
-//	Returns: DestType - Local or remote.
-//
-uchar
-CheckLocalOptions(NetTableEntry *SrcNTE, IPHeader UNALIGNED *Header,
-    IPOptInfo *OptInfo, uchar DestType)
-{
-	uint			HeaderLength;					// Length in bytes of header.
-	OptIndex		Index;
-	uchar			ErrIndex;
-
-#ifdef	DEBUG
-	if (DestType >= DEST_REMOTE)
-		DEBUGCHK;
-#endif
-
-	
-	HeaderLength = (Header->iph_verlen & (uchar)~IP_VER_FLAG) << 2;
-
-#ifdef DEBUG
-	if (HeaderLength <= sizeof(IPHeader))
-		DEBUGCHK;
-#endif
-			
-	OptInfo->ioi_options = (uchar *)(Header + 1);				
-	OptInfo->ioi_optlength = HeaderLength - sizeof(IPHeader); 						
-	
-
-	// We have options of some sort.  Validate them.  ParseRcvdOptions
-	// errors are silently dropped (no ICMP_PARAM_PROBLEM reply) to
-	// avoid advertising stack fingerprint over invalid input.
-	Index.oi_srindex = MAX_OPT_SIZE;
-	if ((ErrIndex = ParseRcvdOptions(OptInfo, &Index)) < MAX_OPT_SIZE) {
-		return DEST_INVALID;
-	}
-
-	// H-006: source-routed packets are dropped on receive.  LSRR/SSRR
-	// are not honoured.  Forwarding is gone, and the only legitimate
-	// use of an inbound source-route on a single-NIC guest is L2
-	// impersonation.  ParseRcvdOptions still records the SR index so
-	// we can silently drop here.
-	if (Index.oi_srindex != MAX_OPT_SIZE)
-		return DEST_INVALID;
-
-	return DEST_LOCAL;
-
-}
-
 //* TDUserRcv - Completion routing for a user transfer data.
 //
 //	This is the completion handle for TDs invoked because we need to give data to a
@@ -377,13 +260,10 @@ TDUserRcv(void *NetContext, PNDIS_PACKET Packet, NDIS_STATUS Status, uint DataSi
 		OptInfo.ioi_ttl = Header->iph_ttl;
 		OptInfo.ioi_tos = Header->iph_tos;
 		OptInfo.ioi_flags = (net_short(Header->iph_offset) >> 13) & IP_FLAG_DF;
-		if (Context->tdc_hlength != sizeof(IPHeader)) {
-			OptInfo.ioi_options = (uchar *)(Header + 1);				
-			OptInfo.ioi_optlength = Context->tdc_hlength - sizeof(IPHeader);
-		} else {
-			OptInfo.ioi_options = (uchar *)NULL;				
-			OptInfo.ioi_optlength = 0; 						
-		}
+		// IP options are dropped at IPRcv entry, so the TD path
+		// never sees an option-bearing header.
+		OptInfo.ioi_options = (uchar *)NULL;
+		OptInfo.ioi_optlength = 0;
 		
 		DestType = Context->tdc_dtype;
 		RcvBuf.ipr_next = NULL;
@@ -484,28 +364,19 @@ IPRcv(void *MyContext, void *Data, uint DataSize, uint TotalSize, NDIS_HANDLE LC
 	
 				if (DestType < DEST_REMOTE) {
 					// It's either local or some sort of broadcast.
-				
-					// The data probably belongs at this station. If there
-					// aren't any options, it definetly belongs here, and we'll
-					// dispatch it either to our reasssmbly code or to the
-					// deliver to user code. If there are options, we'll check
-					// them and then either handle the packet locally or pass it
-					// to our forwarding code.
-						
-					if (HeaderLength != sizeof(IPHeader)) {		
-						// We have options.
-						
-						uchar	NewDType;
-						NewDType = CheckLocalOptions(NTE, IPH, &OptInfo,
-							DestType);
-						if (NewDType != DEST_LOCAL) {
-							if (NewDType == DEST_REMOTE)
-								goto forward;
-							else {
-								IPSInfo.ipsi_inhdrerrors++;
-								return;				// Bad Options.
-							}
-						}
+
+					// IP options are not processed.  Record route,
+					// timestamp, source routing and the rest are
+					// legacy cruft with no legitimate use on the
+					// deployment target; on a hostile L2 they're a
+					// L2-impersonation lever and a parser surface for
+					// classic option-walk integer / pointer bugs.
+					// Any packet with IHL > 5 is dropped on the
+					// floor and counted.  No ICMP_PARAM_PROBLEM is
+					// returned (stack fingerprint).
+					if (HeaderLength != sizeof(IPHeader)) {
+						IPSInfo.ipsi_inhdrerrors++;
+						return;
 					}
 	
 					// No options.  See if it's a fragment — if it is, drop it
@@ -599,12 +470,8 @@ IPRcv(void *MyContext, void *Data, uint DataSize, uint TotalSize, NDIS_HANDLE LC
 	
 				}
 	
-				// H-020: forwarding removed.  Anything not destined
-				// for us is dropped and counted.  The `forward:` label
-				// is retained as a goto target for CheckLocalOptions
-				// rejects (which set DestType=DEST_REMOTE so options
-				// would have been re-validated by the forwarding path).
-forward:
+				// Forwarding removed.  Anything not destined for us
+				// (DestType >= DEST_REMOTE) is dropped and counted.
 				IPSInfo.ipsi_inaddrerrors++;
 				return;
 			}										// Bad version		

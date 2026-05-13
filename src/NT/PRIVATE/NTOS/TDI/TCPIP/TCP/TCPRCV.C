@@ -1735,6 +1735,19 @@ TCPRcv(void *IPContext, IPAddr Dest, IPAddr Src, IPAddr LocalAddr,
     if (Size >= sizeof(TCPHeader) && XsumRcvBuf(PHXSUM(Src, Dest, PROTOCOL_TCP,
     	Size), RcvBuf) == 0xffff) {
 
+        // Drop fully self-aliased 4-tuple: src.addr == dst.addr AND
+        // src.port == dst.port.  AFD refuses to bind two endpoints to
+        // the same {addr, port}, so no legitimate peer (including
+        // loopback, whose ports differ) can produce this pattern.
+        // Without the drop, the SYN handler below initialises a TCB
+        // with tcb_daddr == tcb_saddr and tcb_dport == tcb_sport;
+        // the SYN-ACK is then sent to ourselves, the state machine
+        // re-enters with the same alias, and we ACK-storm.
+        if (Src == Dest && TCPH->tcp_src == TCPH->tcp_dest) {
+            TStats.ts_inerrs++;
+            return IP_SUCCESS;
+        }
+
         // The packet is valid. Get the info we need and byte swap it,
         // and then try to find a matching TCB.
 

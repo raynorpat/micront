@@ -815,22 +815,18 @@ ICMPRcv(NetTableEntry *NTE, IPAddr Dest, IPAddr Src, IPAddr LocalAddr, IPRcvBuf 
         case ICMP_ECHO:
             ICMPInStats.icmps_echos++;
 
-            // Create our new optinfo structure.
+            // Create our new optinfo structure.  IP options are stripped
+            // at IPRcv entry, so OptInfo->ioi_options is always NULL and
+            // the option-reverse / record-route-update path that used to
+            // run here is gone.
             IPInitOptions(&NewOptInfo);
             NewOptInfo.ioi_tos = OptInfo->ioi_tos;
             NewOptInfo.ioi_flags = OptInfo->ioi_flags;
 
-            // If we have options, we need to reverse them and update any
-            // record route info. We can use the option buffer supplied by the
-            // IP layer, since we're part of him.
-            if (OptInfo->ioi_options != (uchar *)NULL)
-                IPUpdateRcvdOptions(OptInfo, &NewOptInfo, Src, LocalAddr);
-
-
-                SendEcho(Src, LocalAddr, ICMP_ECHO_RESP,
-                    *(ushort UNALIGNED *)&Header->ich_param,
-                    *((ushort UNALIGNED *)&Header->ich_param + 1),
-                    RcvBuf, Size, &NewOptInfo);
+            SendEcho(Src, LocalAddr, ICMP_ECHO_RESP,
+                *(ushort UNALIGNED *)&Header->ich_param,
+                *((ushort UNALIGNED *)&Header->ich_param + 1),
+                RcvBuf, Size, &NewOptInfo);
 
             IPFreeOptions(&NewOptInfo);
             break;

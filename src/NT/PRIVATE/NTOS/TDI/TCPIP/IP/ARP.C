@@ -1276,6 +1276,15 @@ CreateARPTableEntry(ARPInterface *Interface, IPAddr Destination,
         return Entry;
     }
 
+    // Refuse to grow the cache past its ceiling.  Inbound learning
+    // and outbound resolution both come through here; an attacker on
+    // a hostile L2 segment can otherwise drive ai_count into
+    // nonpaged-pool exhaustion at modest pps.
+    if (Interface->ai_count >= ARP_MAX_ENTRIES) {
+        CTEFreeLock(&Interface->ai_ARPTblLock, TableHandle);
+        return (ARPTableEntry *)NULL;
+    }
+
     // Allocate memory for the entry. If we can't, fail the request.
     Size =  sizeof(ARPTableEntry) - 1 +
                         (Interface->ai_media == NdisMedium802_5 ?
@@ -2550,6 +2559,31 @@ HandleARPPacket(ARPInterface *Interface, void *Header, uint HeaderSize,
     } else {
         CTEFreeLock(&Interface->ai_ARPTblLock, LHandle);
 		LHandle = TableHandle;
+
+        // Hostile-L2 hardening: do not honour ARP packets that try
+        // to update a cache entry already in the ARP_GOOD state.
+        // The classic cache-poisoning attack sends a forged ARP
+        // (request or gratuitous response) whose source IP matches
+        // a host we've already resolved — typically the gateway —
+        // with the attacker's MAC as the source hardware address.
+        // The unhardened code would overwrite the cached MAC and
+        // route all subsequent outbound traffic for that IP through
+        // the attacker.  Updates remain legal during the
+        // RESOLVING_GLOBAL / RESOLVING_LOCAL window because that
+        // is the response to a request we sent and is correlated
+        // with our own state machine.  GOOD entries refresh by
+        // re-resolution on timeout rather than by overhearing.
+        //
+        // Releasing the entry lock and setting Entry = NULL skips
+        // the cache-update switch below but still falls through to
+        // the LocalAddr + ARP_REQUEST reply path at the bottom of
+        // the function — a request targeting one of our IPs is
+        // still answered, the attacker just doesn't get to rewrite
+        // our cache as a side effect.
+        if (Entry->ate_state == ARP_GOOD) {
+            CTEFreeLock(&Entry->ate_lock, LHandle);
+            Entry = (ARPTableEntry *)NULL;
+        }
 	}
 
     // At this point, entry should be valid, and we hold the lock on the entry

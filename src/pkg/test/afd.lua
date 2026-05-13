@@ -138,13 +138,10 @@ local example_ip   -- set by test 3, read by test 4
 
 t.test("DNS A-record lookup of example.com via 8.8.8.8", function()
     diag("dns.resolve_all_a('example.com', '8.8.8.8')")
-    local ok, ips_or_err = pcall(dns.resolve_all_a,
-                                 "example.com", "8.8.8.8", OUTBOUND_TIMEOUT)
-    if not ok then
-        t.skip("DNS query failed (no outbound network?): " ..
-               tostring(ips_or_err))
-    end
-    local ips = ips_or_err
+    -- No defensive skip: if outbound UDP doesn't work, that's a
+    -- real failure in the network stack and we want to see it.
+    local ips = dns.resolve_all_a("example.com", "8.8.8.8",
+                                  OUTBOUND_TIMEOUT)
     t.ok(#ips >= 1, "no A records returned")
     for i, ip in ipairs(ips) do
         diag("  A[%d] = %s", i, ip)
@@ -156,24 +153,22 @@ end)
 
 -- ------------------------------------------------------------------
 -- 4. External TCP — HEAD against example.com using the IP resolved
--- by test 3. Skips if test 3 didn't resolve.
+-- by test 3.  Test 3 sets example_ip on success; if test 3 failed,
+-- this test will fail too via the assertion below — that's the
+-- intended cascade.  No defensive skips.
 -- ------------------------------------------------------------------
 
 t.test("TCP outbound HTTP HEAD to example.com:80", function()
-    if not example_ip then
-        t.skip("example.com IP not resolved (DNS test failed)")
-    end
+    t.ok(example_ip,
+         "example.com IP not resolved by test 3 — outbound TCP " ..
+         "depends on outbound DNS")
 
     diag("tcp socket")
     local s = afd.tcp()
     diag("bind")
     afd.bind(s, "0.0.0.0", 0)
     diag("connect %s:80", example_ip)
-    local ok, err_obj = pcall(afd.connect, s, example_ip, 80, OUTBOUND_TIMEOUT)
-    if not ok then
-        s:close()
-        t.skip("connect to example.com:80 failed: " .. tostring(err_obj))
-    end
+    afd.connect(s, example_ip, 80, OUTBOUND_TIMEOUT)
 
     diag("send request")
     local req = "HEAD / HTTP/1.0\r\nHost: example.com\r\n\r\n"

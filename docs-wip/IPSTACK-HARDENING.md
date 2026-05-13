@@ -111,9 +111,9 @@ violations turn into findings.
   type-5 reception is dropped at dispatch in `ICMP.C`; the `Redirect`
   function in `IPROUTE.C` is gone.  Routing table cannot be mutated
   by network input.
-- I4. **Reassembly is bounded.** Total in-flight reassembly memory and
-  per-source context count have explicit caps; oldest contexts evict on
-  pressure; per-context timeout is enforced on a real timer, not opportunistic.
+- ~~I4. **Reassembly is bounded.**~~ Retired 2026-05-11 by
+  inheritance: IP-layer reassembly is gone (see I5), so there is no
+  in-flight reassembly memory or per-source context to bound.
 - ~~I5. **Datagram size is bounded before allocation.**~~ Retired
   2026-05-11: IP-layer reassembly is gone; there is no path that
   accumulates fragment data into a single allocation.
@@ -123,8 +123,11 @@ violations turn into findings.
 - I7. **Per-TCB out-of-order queue is bounded in bytes.** Past the cap,
   segments are dropped; no allocation chain grows unboundedly with
   attacker-chosen seq numbers.
-- I8. **ARP cache changes are validated.** Replies to non-outstanding
-  requests do not silently overwrite entries; cache size is capped.
+- ~~I8. **ARP cache changes are validated.**~~ Satisfied 2026-05-13:
+  cache update on existing `ARP_GOOD` entry refused (`ARPRcv`);
+  `ARP_MAX_ENTRIES = 256` ceiling enforced in `CreateARPTableEntry`.
+  Replies to non-outstanding requests cannot silently overwrite
+  entries; cache size is capped.
 
 The findings in §6 are the specific places where we today violate one or
 more of these invariants.
@@ -141,8 +144,10 @@ To be filled in. Sketch:
 - Oracle: per-finding observable. BSOD = guest dies. Pool DoS = nonpaged pool
   watermark crosses threshold. Route hijack = routing table changes. Reject =
   specific stat counter increments and packet does not reach upper layer.
-- Regression: golden traffic suite (TCP echo, HTTP fetch, fragmented UDP at
-  spec sizes, ICMP echo at 64/1472/8192 bytes) passes on patched build.
+- Regression: golden traffic suite (TCP echo, HTTP fetch, DNS over UDP,
+  ICMP echo at sizes that fit a single MTU) passes on patched build.
+  Fragmented payloads and >MTU ICMP are deliberately excluded — the
+  stack drops them post-strip and that is the intended behaviour.
 
 Open questions:
 
@@ -297,22 +302,37 @@ pinned on first analysis.
   rules out Length<2).
 - **Reachable:** T1.
 - **Invariant violated:** general parser hygiene.
-- **Analysis:** TBD. Is there a higher-level header validator that rejects
-  options before this loop sees them?
-- **Reproducer:** TBD.
-- **Decision:** TBD.
-- **Status:** LOGGED.
+- **Decision:** 2026-05-13 — covered by the IP option strip
+  (decision log 2026-05-13). The option-walk loop is gone; any
+  packet with `IHL > 5` is dropped at `IPRcv` entry and counted in
+  `ipsi_inhdrerrors`. The Length<2 / option-walk parsing surface no
+  longer exists to hang.
+- **Status:** INVALID — code path removed.
 
 ### H-008 — Record-route / timestamp pointer bounds on update
 
-- **Where:** `IPRCV.C` option parsing + IP transmit option-update path
-  (location TBD).
+- **Where:** `IPRCV.C` option parsing + IP transmit option-update path.
 - **Class:** Out-of-bounds write on transit/reply.
 - **Severity:** MED (suspected).
 - **Reachable:** T1 (via packets that elicit a reply or transit).
-- **Analysis:** TBD. With forwarding off and source routing dropped (I1, I2)
-  this surface mostly closes; remaining concern is reply-with-options paths.
-- **Status:** LOGGED.
+- **Decision:** 2026-05-13 — covered by the IP option strip
+  (decision log 2026-05-13). Inbound options dropped at `IPRcv`
+  entry, so the reply-with-options paths in `IPUpdateRcvdOptions` /
+  `UpdateOptions` / `UpdateRouteOption` are never entered with a
+  non-NULL option buffer. `IPInitOptions` and `IPFreeOptions` are
+  unchanged (already maintained `ioi_options == NULL`,
+  `ioi_optlength == 0`). `IPUpdateRcvdOptions` is an inert stub
+  that zeros the reply IPOptInfo. `IPCopyOptions` refuses
+  user-supplied option buffers with `IP_BAD_OPTION` — the call
+  sites at `TCPCONN.C:1195`, `ADDR.C:1369`, `ICMP.C:895` already
+  map that to `TDI_BAD_OPTION` and propagate it back through AFD,
+  so the caller learns at the setsockopt / sendmsg site that
+  options are unsupported (rather than silently no-op'd). The
+  four exported helpers keep their slots in the `IPInfo`
+  function-pointer table so TCP / UDP / setsockopt callers link
+  unchanged. The outbound emit-options branch in `IPXMIT.C` is
+  unreachable in any case.
+- **Status:** INVALID — code path removed.
 
 ### H-009 — ICMP redirect accepted
 
@@ -339,25 +359,46 @@ pinned on first analysis.
 - **Class:** Amplification / interaction with H-001/H-002.
 - **Severity:** HIGH (in combination with reassembly bugs); MED standalone.
 - **Reachable:** T1.
-- **Analysis:** TBD. Standalone, this is a reflection/amplification factor of
-  ~1; severity is mostly inherited from reassembly bugs feeding it.
-- **Reproducer:** TBD.
-- **Decision:** TBD.
-- **Status:** LOGGED.
+- **Analysis:** 2026-05-13 — re-examined post fragmentation strip.
+  `ICMPRcv` calls `SendEcho(..., RcvBuf, Size, ...)` at `ICMP.C:830`;
+  reply payload length equals request `Size`. With reassembly removed,
+  inbound `Size` is MTU-bounded (Ethernet 1500 → IP payload ≤ 1480).
+  No path can deliver a >MTU `Size` to `ICMPRcv`. Broadcast echo is
+  already dropped at `ICMP.C:746-747` (`if (IsBCast) return`).
+  Amplification factor is 1 against MTU-bounded payloads; no
+  meaningful surface remains.
+- **Decision:** 2026-05-13 — INVALID by inheritance from the
+  fragmentation strip (decision log 2026-05-11).
+- **Status:** INVALID — bounded by upstream invariant.
 
 ### H-011 — Land (src == dst SYN)
 
 - **Where:** `TCPRCV.C` ~1807-1810 (SYN handling).
 - **Class:** Logic / loop on local TCB.
-- **Severity:** MED (NT 3.50-era effect on this code path TBD; was BSOD on
-  some Microsoft builds, may be silent loop here).
+- **Severity:** MED.
 - **Reachable:** T1.
-- **Analysis:** TBD. Trace what the SYN handler actually does when both
-  endpoints alias the local addr/port. Effect may be benign loop, ack storm,
-  or full hang.
-- **Reproducer:** TBD.
-- **Decision:** TBD.
-- **Status:** LOGGED.
+- **Analysis:** 2026-05-13 — `TCPRcv` accepts the segment, finds no
+  matching TCB, dispatches to the SYN-from-listener path at
+  `TCPRCV.C:1782-1815` and initialises `RcvTCB->tcb_daddr = Src`,
+  `tcb_saddr = Dest`, `tcb_dport = TCPH->tcp_src`,
+  `tcb_sport = TCPH->tcp_dest`. With `Src == Dest && tcp_src == tcp_dest`
+  the TCB is now self-aliasing. `SendSYN` (called via the accept path)
+  emits a SYN-ACK that the IP layer routes back to ourselves; on next
+  receive `FindTCB` matches the same self-aliased TCB; ACK storm in
+  the SYN-RCVD → ESTABLISHED transition. Empirically this is closer to
+  livelock than crash on this build, but the failure mode is CPU
+  exhaustion either way.
+- **Decision:** 2026-05-13 — drop at TCP entry. Added a 4-tuple check
+  in `TCPRcv` (after size/checksum gate, before TCB lookup): when
+  `Src == Dest && TCPH->tcp_src == TCPH->tcp_dest`, increment
+  `TStats.ts_inerrs` and return `IP_SUCCESS`. No legitimate flow,
+  including 127.0.0.1 loopback, produces this 4-tuple because AFD
+  refuses to bind two endpoints to the same `{addr, port}` (loopback
+  uses different ports either side). Five-line change, no API impact.
+- **Test:** verified by clean build; runtime probe pending the test
+  harness. AFD UDP-loopback / TCP-loopback / DHCP suites all pass on
+  the patched build (separate ports, alias check does not fire).
+- **Status:** PATCHED.
 
 ### H-012 — SYN flood / unbounded half-open
 
@@ -404,12 +445,24 @@ pinned on first analysis.
 - **Where:** `TCPRCV.C` RST handling around ~2071 (SYN-SENT) and ~2569
   (ESTABLISHED).
 - **Class:** Blind connection reset.
-- **Severity:** LOW (off-path RST injection across the open internet is
-  hard at NT-3.50-era window sizes; documented but not a focus).
+- **Severity:** LOW.
 - **Reachable:** T1, T2.
-- **Analysis:** TBD. Just record the policy; RFC 5961-grade tightening is
-  probably out of scope.
-- **Status:** LOGGED.
+- **Analysis:** 2026-05-13 — this stack accepts any in-window RST per
+  pre-RFC-5961 behaviour (no challenge-ACK, no exact-seq requirement).
+  An off-path attacker who can guess sequence numbers within the
+  receive window can reset connections. NT-3.50-era window sizes
+  (typically 8 KB) plus the full 32-bit sequence space make blind
+  guessing across the open internet impractical without a side
+  channel; T2 with reflective probing is in-scope for the threat
+  model but not commonly weaponised against TLS-over-TCP workloads
+  (RST = connection drop = client retry, no data corruption). RFC
+  5961 challenge-ACK would require state machine changes
+  disproportionate to the residual risk at MicroNT's scale.
+- **Decision:** 2026-05-13 — ACCEPT. Residual risk documented; revisit
+  if a workload appears whose threat model includes RST-injection
+  resilience without relying on TLS (e.g. long-lived plaintext TCP
+  control channels).
+- **Status:** ACCEPTED.
 
 ### H-016 — TCP options parsing
 
@@ -426,37 +479,117 @@ pinned on first analysis.
 
 - **Where:** `TCPDELIV.C` `HandleUrgent` ~1600-1705.
 - **Class:** Historical BSOD on urgent data; appears mitigated in this tree.
-- **Severity:** suspected INVALID.
+- **Severity:** N/A (mitigated).
 - **Reachable:** T1 post-bind.
-- **Analysis:** TBD. Initial read: bounds checked at ~1622 and ~1638. Need
-  to confirm path coverage including the BSD-style 1-byte case at lower
-  protocol layers.
-- **Status:** LOGGED.
+- **Analysis:** 2026-05-13 — full path traced.
+  - Source: `tri_urgent = (uint)net_short(TCPH->tcp_urgent)` at
+    `TCPRCV.C:1744`. Cast bounds the value to `[0, 0xFFFF]`; no path
+    can deliver a >16-bit urgent pointer.
+  - Caller gate: `HandleUrgent` is only invoked from
+    `TCPRCV.C:2588` under runtime `if (RcvInfo.tri_flags & TCP_FLAG_URG)`.
+    The seq-equals-rcvnext entry assertion at `TCPDELIV.C:1613` is
+    established by the in-sequence reassembly drain loop (`TCPRCV.C`
+    ~2580-2620) before the call; not a free-form precondition.
+  - BSD branch (`TCPDELIV.C:1622`): explicit
+    `if (tri_urgent == 0 || tri_urgent > *Size) { tri_flags &= ~URG; return; }`.
+    The exact WinNuke trigger (urgent pointer past segment end) is the
+    early-return case.
+  - RFC branch (`TCPDELIV.C:1638`):
+    `UrgSize = MIN(tri_urgent + 1, *Size)` clamps to segment. Wrap
+    impossible because `tri_urgent` is 16-bit zero-extended and
+    `+1` fits in uint. `BytesInBack = *Size - BytesInFront - UrgSize`
+    is non-negative in both branches given the bounds above.
+- **Decision:** 2026-05-13 — INVALID. Bounds checks present and
+  reachable on both URG dispositions.
+- **Status:** INVALID — defended in tree.
 
 ### H-018 — UDP broadcast amplification (Fraggle)
 
-- **Where:** `UDP.C` broadcast delivery path.
+- **Where:** `UDP.C` broadcast delivery path; `UDP.C`
+  `TdiSendDatagram`.
 - **Class:** Amplification.
-- **Severity:** LOW (no chargen/echo built; no broadcast on cloud single-NIC
-  in normal operation).
+- **Severity:** LOW.
 - **Reachable:** T1 if a broadcastable UDP service exists; otherwise N/A.
-- **Analysis:** TBD. Probably ACCEPT subject to "no UDP service binds to
-  broadcast address" being an enforced invariant.
-- **Status:** LOGGED.
+- **Analysis:** 2026-05-13 — initial review found three pre-existing
+  defences:
+  - `TdiOpenAddress` refuses non-local non-wildcard bind addresses
+    (`ADDR.C:887`), so a service cannot bind to a broadcast IP.
+  - `UDPRcv` rejects UDP packets with broadcast source addresses
+    (`UDP.C:1325`).
+  - No built-in UDP reflectors (echo / chargen / daytime not in
+    tree).
+  Initial conclusion was ACCEPT (no built-in reflectors, app-layer
+  policy out of stack's scope).
+
+  Reconsidered 2026-05-13 once the deployment scope was tightened:
+  the *only* legitimate UDP broadcast use in the entire stack is the
+  DHCP client at boot. Everything else — application sockets, future
+  workloads, any non-DHCP code path — has no business sending to or
+  receiving from a broadcast address. With the scope explicit, the
+  ACCEPT residual ("application-layer reflectors are possible if
+  a workload binds wildcard and replies to broadcast input") becomes
+  a structural denial: the stack itself refuses to deliver broadcast
+  to a non-DHCP socket, and refuses to send to a broadcast
+  destination from a non-DHCP socket.
+- **Decision:** 2026-05-13 — flipped from ACCEPT to PATCH. Two
+  gates, both keyed on `AO_DHCP_FLAG` (the existing marker set by
+  AOs that were created with the DHCP-client option):
+  - **Inbound.** `UDPRcv`'s broadcast-delivery loop only delivers
+    to AOs whose `ao_flags & AO_DHCP_FLAG` is set. Wildcard sockets
+    bound by non-DHCP code paths receive unicast UDP only; broadcast
+    input is dropped at the AO-iteration step.
+  - **Outbound.** `TdiSendDatagram` refuses to send to a destination
+    of type `DEST_BCAST` / `DEST_SN_BCAST` / `DEST_REM_BCAST` from
+    an AO without `AO_DHCP_FLAG`. Returns `TDI_BAD_ADDR`. Multicast
+    (CLASSD addresses) is unaffected.
+- **Test:** verified by clean build. DHCP suite must continue to
+  pass on the patched build (DHCP client AO carries the flag, both
+  inbound OFFER/ACK delivery and outbound DISCOVER/REQUEST send go
+  through the gate without rejection).
+- **Status:** PATCHED.
 
 ### H-019 — ARP cache poisoning / unsolicited replies
 
-- **Where:** `ARP.C` ~2538-2553.
+- **Where:** `ARP.C` ~2538-2553 (cache update on inbound ARP),
+  `CreateARPTableEntry` (unbounded growth).
 - **Class:** L2 trust.
 - **Severity:** HIGH on T3.
 - **Reachable:** T3.
 - **Invariant violated:** I8.
-- **Analysis:** TBD. Hypervisor anti-spoof handles this on EC2/GCE; cheap
-  VPS often does not. We cannot detect which we're on.
-- **Reproducer:** TBD. Easier to demonstrate on a Linux host with the same
-  driver path.
-- **Decision:** TBD.
-- **Status:** LOGGED.
+- **Analysis:** 2026-05-13 — two distinct primitives in this finding,
+  hardened together.
+  - **MAC pin against poisoning.** Previously, `ARPRcv` would update
+    any existing cache entry's MAC unconditionally on receipt of any
+    ARP frame whose source IP matched the entry's destination, regardless
+    of opcode or state. The classic poisoning attack sends a forged
+    response (or gratuitous announcement) claiming the gateway's IP
+    with the attacker's MAC; we'd overwrite the cache and route all
+    outbound to the attacker. The hardening: in the existing-entry
+    branch of `ARPRcv`, refuse updates when `ate_state == ARP_GOOD`.
+    Updates are accepted only during the `RESOLVING_GLOBAL` /
+    `RESOLVING_LOCAL` window — i.e. the response to a request we
+    sent. GOOD entries are refreshed by re-resolution on timeout
+    (the existing state machine at `ARPTransmit` already drives this).
+    Important: the early-return setting `Entry = NULL` still lets the
+    `LocalAddr && ARP_REQUEST` reply path at the bottom of `ARPRcv`
+    run, so a request targeting one of our IPs is still answered;
+    only the cache-update side effect is suppressed.
+  - **Cache size cap.** `Interface->ai_count` is bumped by
+    `CreateARPTableEntry` with no ceiling. An attacker on a hostile
+    L2 can flood ARP frames targeting our IPs (the
+    `LocalAddr`-gated create path) and force unbounded
+    `CTEAllocMem`. Hardening: `ARP_MAX_ENTRIES = 256` defined in
+    `ARPDEF.H`, checked at the top of `CreateARPTableEntry`. Sized
+    to accommodate gateway + DHCP server + transient peers during
+    boot with margin; on a single-NIC guest the steady-state count
+    is 1-2. At cap, new-entry creation returns NULL, callers
+    fail closed (outbound packet drops with no resolution; inbound
+    cache learning is silently skipped).
+- **Test:** verified by clean build. The ARP-poisoning probe is
+  pending the test harness — see open question OQ-4 for
+  pcap-side observation.
+- **Decision:** 2026-05-13 — both hardenings landed.
+- **Status:** PATCHED. Invariant I8 satisfied.
 
 ### H-020 — IP forwarding default / runtime toggle
 
@@ -529,9 +662,12 @@ Tracked separately from per-finding TBDs because they cut across findings.
 
 - ~~OQ-1.~~ Resolved 2026-05-12 — compile-out chosen.  Forwarding code
   removed entirely; nothing left to flip.
-- OQ-2. What is our policy when an attacker fills a bounded structure (frag
-  table, half-open queue, ARP cache)? Drop-oldest, drop-new, randomized
-  drop, or per-source quota? Same answer for all three?
+- OQ-2. What is our policy when an attacker fills a bounded structure
+  (half-open SYN queue, per-TCB out-of-order queue, ARP cache)?
+  Drop-oldest, drop-new, randomized drop, or per-source quota? Same
+  answer across structures or one each? The ARP cache cap currently
+  fails closed (refuses new entries) which is "drop-new" by default;
+  the SYN and OOO cases are still open via H-012 / H-013.
 - OQ-3. Are we willing to diverge from on-the-wire RFC behaviour where the
   RFC mandates we accept something we'd rather drop (e.g., source-routed
   packets, ICMP redirects)? Default: yes, document each divergence here.
@@ -561,3 +697,82 @@ Tracked separately from per-finding TBDs because they cut across findings.
   `IPSInfo.ipsi_forwarding` hard-locked to `IP_NOT_FORWARDING`.  Findings
   H-006, H-009, H-020 marked INVALID.  Invariants I1, I2, I3 retire.
   OQ-1 resolved (compile-out).  Build verified clean.
+
+- 2026-05-13 — Quick-win pass on findings re-examined post strip.
+  Four findings flipped status; no invariants retire. Details:
+  H-010 INVALID by inheritance (reassembly strip caps inbound `Size`
+  at MTU; broadcast echo already dropped). H-017 INVALID by analysis
+  (`tri_urgent` 16-bit-bounded, explicit checks at `TCPDELIV.C:1622`
+  + `:1638`). H-015 ACCEPTED (RFC 5961 challenge-ACK out of scope;
+  TLS-over-TCP tolerates RST-as-drop; revisit if a plaintext
+  long-lived workload appears). H-011 PATCHED (4-tuple alias drop
+  added at `TCPRCV.C` after size/checksum gate, counted as
+  `ts_inerrs`; loopback unaffected because AFD's same-`{addr,port}`
+  bind refusal means legitimate flows always differ in port).
+
+- 2026-05-13 — **Decision: strip IP option processing entirely.**
+  Any packet with `IHL > 5` is dropped at `IPRcv` entry and counted
+  in `ipsi_inhdrerrors`. Deleted: `ParseRcvdOptions`,
+  `CheckLocalOptions` (`IPRCV.C`). Inert stubs in `INIT.C`:
+  `IPUpdateRcvdOptions` zeros the reply IPOptInfo and returns
+  `IP_SUCCESS`; `IPCopyOptions` returns `IP_BAD_OPTION` so any
+  caller passing an option buffer learns at the call site that
+  the stack does not accept IP options — `TCPCONN.C:1195`,
+  `ADDR.C:1369`, `ICMP.C:895` already map that to
+  `TDI_BAD_OPTION` and propagate it back through AFD. The four
+  exported helpers keep their slots in the `IPInfo`
+  function-pointer table so TCP / UDP / ICMP / setsockopt callers
+  continue to compile and link; `IPInitOptions` / `IPFreeOptions`
+  are unchanged because they already maintained
+  `ioi_options == NULL`. ICMP echo handler's
+  `if (ioi_options != NULL) IPUpdateRcvdOptions(...)` is dead and
+  removed. Forward reference to `ParseRcvdOptions` in `IPROUTE.C`
+  gone. `ValidRouteOption` (local helper) deleted. `UpdateOptions`
+  and `UpdateRouteOption` remain in `IPXMIT.C` because the
+  broadcast send path calls them; they are inert against NULL
+  inputs which is the steady state once `IPInitOptions` runs.
+  Rationale: record route, timestamp, source routing, and the rest
+  are legacy cruft with no legitimate use on the deployment
+  target; on hostile L2 they are an impersonation lever (LSRR/SSRR
+  — already retired by H-006) and a parser surface for classic
+  option-walk integer / pointer / length bugs (Class 6 in
+  `docs-wip/KERNEL-ABI-HARDENING.md`). The IP_BAD_OPTION return
+  from `IPCopyOptions` was a deliberate choice over silent
+  acceptance: refuse loudly at the userland boundary rather than
+  let drift accumulate between "I asked for option X" and "no
+  option X went on the wire". Findings H-007, H-008 marked
+  INVALID. Build verified clean (`tdi_tcpip_ip`, `tdi_tcpip_tcp`).
+
+- 2026-05-13 — **Decision: ARP cache hardening for hostile L2.**
+  Two pieces:
+  - **MAC pin against cache poisoning.** `ARPRcv` no longer updates
+    existing cache entries that are in `ARP_GOOD` state. Updates
+    are accepted only during the `RESOLVING_*` window — the
+    response to a request we sent. GOOD entries are refreshed by
+    re-resolution on timeout. Refusal still lets the LocalAddr +
+    REQUEST reply path run, so requests for our IPs are still
+    answered.
+  - **Cache size cap.** `ARP_MAX_ENTRIES = 256` ceiling added in
+    `ARPDEF.H` and enforced at the top of `CreateARPTableEntry`.
+    Refuses unbounded `Interface->ai_count` growth from a hostile
+    L2 flood of ARP frames targeting our IPs.
+  Side effects accepted: peer MAC changes are not learned via
+  overheard ARP; they require timeout-driven re-resolution.
+  Finding H-019 marked PATCHED. Invariant I8 satisfied.
+  Build verified clean.
+
+- 2026-05-13 — **Decision: H-018 (UDP broadcast amplification)
+  reclassified ACCEPTED → PATCHED.** Initial ACCEPT was based on
+  "wildcard sockets must receive broadcast because DHCP needs it";
+  that was correct under a flexible deployment scope. With the
+  scope tightened to "cloud workload host, the only broadcast is
+  DHCP", the constraint becomes a specific exemption that can be
+  gated. Two changes keyed on `AO_DHCP_FLAG`:
+  - `UDPRcv` broadcast loop delivers only to flagged AOs.
+  - `TdiSendDatagram` refuses broadcast destinations from
+    unflagged AOs (returns `TDI_BAD_ADDR`).
+  App-layer Fraggle is now structurally impossible — non-DHCP
+  workloads cannot observe or originate broadcast UDP. The DHCP
+  client at `nt.net.dhcp` carries the flag and continues to work
+  unchanged. Build verified clean (`tdi_tcpip_tcp`). Multicast
+  unaffected.

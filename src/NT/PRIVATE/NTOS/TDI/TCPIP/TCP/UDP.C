@@ -918,6 +918,23 @@ TdiSendDatagram(PTDI_REQUEST Request, PTDI_CONNECTION_INFORMATION ConnInfo,
             if (GetAddress(ConnInfo->RemoteAddress, &SendReq->usr_addr,
                 &SendReq->usr_port)) {
 
+                // Deployment scope: the only legitimate broadcast-
+                // destined UDP send is the DHCP client at lease
+                // acquisition.  Sockets without AO_DHCP_FLAG cannot
+                // address a broadcast destination — refuses the
+                // Fraggle reflector shape regardless of application-
+                // layer behaviour, and refuses inadvertent
+                // misconfigured broadcast sends from any other code
+                // path.  Multicast (CLASSD) is unaffected.
+                if (!(SrcAO->ao_flags & AO_DHCP_FLAG) &&
+                    IS_BCAST_DEST(
+                        (*LocalNetInfo.ipi_getaddrtype)(SendReq->usr_addr))) {
+                    CTEFreeLock(&SrcAO->ao_lock, Handle);
+                    FreeUDPSendReq(SendReq);
+                    CTEFreeLock(&UDPSendReqLock, SRHandle);
+                    return TDI_BAD_ADDR;
+                }
+
                 SendReq->usr_rtn = Request->RequestNotifyObject;
                 SendReq->usr_context = Request->RequestContext;
                 SendReq->usr_buffer = Buffer;
@@ -1385,6 +1402,16 @@ UDPRcv(void *IPContext, IPAddr Dest, IPAddr Src, IPAddr LocalAddr,
         }
     } else {
         // This is a broadcast, we'll need to loop.
+        //
+        // Deployment scope: the only legitimate inbound broadcast
+        // UDP is DHCP server traffic (OFFER / ACK) coming back at
+        // a client that hasn't acquired a lease yet.  Sockets
+        // without AO_DHCP_FLAG do not receive broadcast packets,
+        // even if their wildcard bind would otherwise match.  This
+        // makes app-layer Fraggle reflectors structurally
+        // impossible — the stack never delivers a broadcast packet
+        // to a non-DHCP application socket, so the reflection
+        // attack has no input to feed on.
 
         AOSearchContext     Search;
 
@@ -1392,9 +1419,11 @@ UDPRcv(void *IPContext, IPAddr Dest, IPAddr Src, IPAddr LocalAddr,
         	&Search);
         if (ReceiveingAO != NULL) {
             do {
-                UDPDeliver(ReceiveingAO, Src, UH->uh_src, RcvBuf, Size, OptInfo,
-                    AOTableHandle);
-                CTEGetLock(&AddrObjTableLock, &AOTableHandle);
+                if (ReceiveingAO->ao_flags & AO_DHCP_FLAG) {
+                    UDPDeliver(ReceiveingAO, Src, UH->uh_src, RcvBuf, Size,
+                        OptInfo, AOTableHandle);
+                    CTEGetLock(&AddrObjTableLock, &AOTableHandle);
+                }
                 ReceiveingAO = GetNextAddrObj(&Search);
             } while (ReceiveingAO != NULL);
         } else

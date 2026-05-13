@@ -153,6 +153,15 @@ typedef struct ARPTableEntry {
 #define ARP_HASH(x)         ((((uchar *)&(x))[3]) % ARP_TABLE_SIZE)
 typedef ARPTableEntry   *ARPTable[];
 
+// Total cap on the per-interface cache.  Sized to accommodate a
+// gateway, a DHCP server, transient peers during boot, and a margin
+// for legitimate same-segment chatter.  Past this ceiling, new entries
+// are refused — both inbound learning (`ARPRcv` -> `CreateARPTableEntry`)
+// and outbound resolution (`ARPTransmit` -> `CreateARPTableEntry`).
+// A hostile L2 neighbour can no longer pin the host into nonpaged-pool
+// exhaustion by flooding ARP frames at sustained pps.
+#define ARP_MAX_ENTRIES     256
+
 //* List structure for local representation of an IPAddress.
 typedef struct ARPIPAddr {
     struct ARPIPAddr        *aia_next;      // Next in list.

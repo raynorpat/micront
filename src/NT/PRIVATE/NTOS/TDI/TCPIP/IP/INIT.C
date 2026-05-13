@@ -344,187 +344,25 @@ IPGetLocalMTU(IPAddr LocalAddr, ushort *MTU)
 
 //** IPUpdateRcvdOptions - Update options for use in replying.
 //
-//  A routine to update options for use in a reply. We reverse any source route options,
-//  and optionally update the record route option. We also return the index into the
-//  options of the record route options (if we find one). The options are assumed to be
-//  correct - no validation is performed on them. We fill in the caller provided
-//  IPOptInfo with the new option buffer.
-//
-//  Input:  Options     - Pointer to option info structure with buffer to be reversed.
-//          NewOptions  - Pointer to option info structure to be filled in.
-//          Src         - Source address of datagram that generated the options.
-//          LocalAddr   - Local address responding. If this != NULL_IP_ADDR, then
-//                          record route and timestamp options will be updated with this
-//                          address.
-//
-//
-//  Returns: Index into options of record route option, if any.
+//  Inert: IP option processing is removed from the stack.  Inbound
+//  options are dropped at IPRcv entry, so OldOptions->ioi_options is
+//  always NULL by the time any reply path runs.  We zero the reply
+//  IPOptInfo and return.  The function symbol is kept because it is
+//  wired into the exported `IPInfo` function-pointer table (`ipi_updateopts`)
+//  that TCP / UDP / ICMP call through.
 //
 IP_STATUS
 IPUpdateRcvdOptions(IPOptInfo *OldOptions, IPOptInfo *NewOptions, IPAddr Src, IPAddr LocalAddr)
 {
-    uchar       Length, Ptr;
-    uchar       i;                          // Index variable
-    IPAddr UNALIGNED *LastAddr;             // First address in route.
-    IPAddr UNALIGNED *FirstAddr;            // Last address in route.
-    IPAddr      TempAddr;                   // Temp used in exchange.
-    uchar       *Options, OptLength;
-    OptIndex    Index;                      // Optindex used by UpdateOptions.
+    UNREFERENCED_PARAMETER(OldOptions);
+    UNREFERENCED_PARAMETER(Src);
+    UNREFERENCED_PARAMETER(LocalAddr);
 
-    Options = CTEAllocMem(OptLength = OldOptions->ioi_optlength);
-
-    if (!Options)
-        return IP_NO_RESOURCES;
-
-    CTEMemCopy(Options, OldOptions->ioi_options, OptLength);
-    Index.oi_srindex = MAX_OPT_SIZE;
-    Index.oi_rrindex = MAX_OPT_SIZE;
-    Index.oi_tsindex = MAX_OPT_SIZE;
-
+    NewOptions->ioi_addr = NULL_IP_ADDR;
     NewOptions->ioi_flags &= ~IP_FLAG_SSRR;
-
-    i = 0;
-    while(i < OptLength) {
-        if (Options[i] == IP_OPT_EOL)
-            break;
-
-        if (Options[i] == IP_OPT_NOP) {
-            i++;
-            continue;
-        }
-
-        Length = Options[i+IP_OPT_LENGTH];
-        switch (Options[i]) {
-            case IP_OPT_SSRR:
-                NewOptions->ioi_flags |= IP_FLAG_SSRR;
-            case IP_OPT_LSRR:
-                // Have a source route. We save the last gateway we came through as
-                // the new address, reverse the list, shift the list forward one address,
-                // and set the Src address as the last gateway in the list.
-
-                // First, check for an empty source route. If the SR is empty
-                // we'll skip most of this.
-                if (Length != (MIN_RT_PTR - 1)) {
-                    // A non empty source route.
-                    // First reverse the list in place.
-                    Ptr = Options[i+IP_OPT_PTR] - 1 - sizeof(IPAddr);
-                    LastAddr = (IPAddr *)(&Options[i + Ptr]);
-                    FirstAddr = (IPAddr *)(&Options[i + IP_OPT_PTR + 1]);
-                    NewOptions->ioi_addr = *LastAddr;   // Save Last address as
-                                                        // first hop of new route.
-                    while (LastAddr > FirstAddr) {
-                        TempAddr = *LastAddr;
-                        *LastAddr-- = *FirstAddr;
-                        *FirstAddr++ = TempAddr;
-                    }
-
-                    // Shift the list forward one address. We'll copy all but
-                    // one IP address.
-                    CTEMemCopy(&Options[i + IP_OPT_PTR + 1],
-                        &Options[i + IP_OPT_PTR + 1 + sizeof(IPAddr)],
-                        Length - (sizeof(IPAddr) + (MIN_RT_PTR -1)));
-
-                    // Set source as last address of route.
-                    *(IPAddr UNALIGNED *)(&Options[i + Ptr]) = Src;
-                }
-
-                Options[i+IP_OPT_PTR] = MIN_RT_PTR;     // Set pointer to min legal value.
-                i += Length;
-                break;
-            case IP_OPT_RR:
-                // Save the index in case LocalAddr is specified. If it isn't specified,
-                // reset the pointer and zero the option.
-                Index.oi_rrindex = i;
-                if (LocalAddr == NULL_IP_ADDR) {
-                    CTEMemSet(&Options[i+MIN_RT_PTR-1], 0, Length - (MIN_RT_PTR-1));
-                    Options[i+IP_OPT_PTR] = MIN_RT_PTR;
-                }
-                i += Length;
-                break;
-            case IP_OPT_TS:
-                Index.oi_tsindex = i;
-
-                // We have a timestamp option. If we're not going to update, reinitialize
-                // it for next time. For the 'unspecified' options, just zero the buffer.
-                // For the 'specified' options, we need to zero the timestamps without
-                // zeroing the specified addresses.
-                if (LocalAddr == NULL_IP_ADDR) {        // Not going to update, reinitialize.
-                    uchar   Flags;
-
-                    Options[i+IP_OPT_PTR] = MIN_TS_PTR; // Reinitialize pointer.
-                    Flags = Options[i+IP_TS_OVFLAGS] & IP_TS_FLMASK; // Get option type.
-                    Options[i+IP_TS_OVFLAGS] = Flags;   // Clear overflow count.
-                    switch (Flags) {
-                        uchar   j;
-                        ulong UNALIGNED *TSPtr;
-
-                        // The unspecified types. Just clear the buffer.
-                        case TS_REC_TS:
-                        case TS_REC_ADDR:
-                            CTEMemSet(&Options[i+MIN_TS_PTR-1], 0, Length - (MIN_TS_PTR-1));
-                            break;
-
-                        // We have a list of addresses specified. Just clear the timestamps.
-                        case TS_REC_SPEC:
-                            // j starts off as the offset in bytes from start of buffer to
-                            // first timestamp.
-                            j = MIN_TS_PTR-1+sizeof(IPAddr);
-                                // TSPtr points at timestamp.
-                            TSPtr = (ulong UNALIGNED *)&Options[i+j];
-
-                            // Now j is offset of end of timestamp being zeroed.
-                            j += sizeof(ulong);
-                            while (j <= Length) {
-                                *TSPtr++ = 0;
-                                j += sizeof(ulong);
-                            }
-                            break;
-                        default:
-                            break;
-                    }
-                }
-                i += Length;
-                break;
-
-            default:
-                i += Length;
-                break;
-        }
-
-    }
-
-    if (LocalAddr != NULL_IP_ADDR) {
-        UpdateOptions(Options, &Index, LocalAddr);
-    }
-
-    NewOptions->ioi_optlength = OptLength;
-    NewOptions->ioi_options = Options;
+    NewOptions->ioi_options = (uchar *)NULL;
+    NewOptions->ioi_optlength = 0;
     return IP_SUCCESS;
-
-}
-
-//* ValidRouteOption - Validate a source or record route option.
-//
-//  Called to validate that a user provided source or record route option is good.
-//
-//  Entry:  Option      - Pointer to option to be checked.
-//          NumAddr     - NumAddr that need to fit in option.
-//          BufSize     - Maximum size of option.
-//
-//  Returns: 1 if option is good, 0 if not.
-//
-uchar
-ValidRouteOption(uchar *Option, uint NumAddr, uint BufSize)
-{
-    if (Option[IP_OPT_LENGTH] < (3 + (sizeof(IPAddr)*NumAddr)) ||
-        Option[IP_OPT_LENGTH] > BufSize ||
-        ((Option[IP_OPT_LENGTH] - 3) % sizeof(IPAddr)))     // Routing options is too small.
-        return 0;
-
-    if (Option[IP_OPT_PTR] != MIN_RT_PTR)                   // Pointer isn't correct.
-        return 0;
-
-    return 1;
 }
 
 //** IPInitOptions - Initialize an option buffer.
@@ -553,172 +391,30 @@ IPInitOptions(IPOptInfo *Options)
 
 //** IPCopyOptions - Copy the user's options into IP header format.
 //
-//  This routine takes an option buffer supplied by an IP client, validates it, and
-//  creates an IPOptInfo structure that can be passed to the IP layer for transmission. This
-//  includes allocating a buffer for the options, munging any source route
-//  information into the real IP format.
-//
-//  Note that we never lock this structure while we're using it. This may cause transitory
-//  incosistencies while the structure is being updated if it is in use during the update.
-//  This shouldn't be a problem - a packet or too might get misrouted, but it should
-//  straighten itself out quickly. If this is a problem the client should make sure not
-//  to call this routine while it's in the IPTransmit routine.
-//
-//  Entry:  Options     - Pointer to buffer of user supplied options.
-//          Size        - Size in bytes of option buffer
-//          OptInfoPtr  - Pointer to IPOptInfo structure to be filled in.
-//
-//  Returns: A status, indicating whether or not the options were valid and copied.
+//  Always refuses.  The stack does not emit IP options on the wire;
+//  a caller that hands us an option buffer is asking for something
+//  we cannot deliver, and the conservative response is to surface
+//  that at the call site rather than silently accept + no-op.  All
+//  three callers (`TCPCONN.C:1195`, `ADDR.C:1369`, `ICMP.C:895`)
+//  already map `IP_BAD_OPTION` to `TDI_BAD_OPTION` and propagate it
+//  back through AFD, so the failure is visible to userspace as the
+//  setsockopt / sendmsg returning an error — not as a silently
+//  ignored option followed by a packet on the wire that doesn't
+//  match what the caller asked for.  Kept as a symbol because
+//  `ipi_copyopts` is part of the exported `IPInfo` function-pointer
+//  table.
 //
 IP_STATUS
 IPCopyOptions(uchar *Options, uint Size, IPOptInfo *OptInfoPtr)
 {
-    uchar       *TempOptions;       // Buffer of options we'll build
-    uint        TempSize;           // Size of options.
-    IP_STATUS   TempStatus;         // Temporary status
-    uchar       OptSeen = 0;        // Indicates which options we've seen.
-
+    UNREFERENCED_PARAMETER(Options);
+    UNREFERENCED_PARAMETER(Size);
 
     OptInfoPtr->ioi_addr = NULL_IP_ADDR;
-
     OptInfoPtr->ioi_flags &= ~IP_FLAG_SSRR;
-
-    if (Size == 0) {
-		CTEAssert(FALSE);
-        OptInfoPtr->ioi_options = (uchar *)NULL;
-        OptInfoPtr->ioi_optlength = 0;
-        return IP_SUCCESS;
-    }
-
-
-    // Option size needs to be rounded to multiple of 4.
-    if ((TempOptions = CTEAllocMem(((Size & 3) ? (Size & ~3) + 4 : Size))) == (uchar *)NULL)
-        return IP_NO_RESOURCES;     // Couldn't get a buffer, return error.
-
-    CTEMemSet(TempOptions, 0, ((Size & 3) ? (Size & ~3) + 4 : Size));
-
-    // OK, we have a buffer. Loop through the provided buffer, copying options.
-    TempSize = 0;
-    TempStatus = IP_PENDING;
-    while (Size && TempStatus == IP_PENDING) {
-        uint    SRSize;             // Size of a source route option.
-
-        switch (*Options) {
-            case IP_OPT_EOL:
-                TempStatus = IP_SUCCESS;
-                break;
-            case IP_OPT_NOP:
-                TempOptions[TempSize++] = *Options++;
-                Size--;
-                break;
-            case IP_OPT_SSRR:
-                if (OptSeen & (OPT_LSRR | OPT_SSRR)) {
-                    TempStatus = IP_BAD_OPTION;             // We've already seen a record route.
-                    break;
-                }
-                OptInfoPtr->ioi_flags |= IP_FLAG_SSRR;
-                OptSeen |= OPT_SSRR;            // Fall through to LSRR code.
-            case IP_OPT_LSRR:
-                if ( (*Options == IP_OPT_LSRR) &&
-					 (OptSeen & (OPT_LSRR | OPT_SSRR))
-				   ) {
-                    TempStatus = IP_BAD_OPTION;             // We've already seen a record route.
-                    break;
-                }
-                if (*Options == IP_OPT_LSRR)
-                    OptSeen |= OPT_LSRR;
-                if (!ValidRouteOption(Options, 2, Size)) {
-                    TempStatus = IP_BAD_OPTION;
-                    break;
-                }
-
-                // Option is valid. Copy the first hop address to NewAddr, and move all
-                // of the other addresses forward.
-                TempOptions[TempSize++] = *Options++;       // Copy option type.
-                SRSize = *Options++;
-                Size -= SRSize;
-                SRSize -= sizeof(IPAddr);
-                TempOptions[TempSize++] = SRSize;
-                TempOptions[TempSize++] = *Options++;       // Copy pointer.
-                OptInfoPtr->ioi_addr = *(IPAddr UNALIGNED *)Options;
-                Options += sizeof(IPAddr);                  // Point to address beyond first hop.
-                CTEMemCopy(&TempOptions[TempSize], Options, SRSize - 3);
-                TempSize += (SRSize - 3);
-                Options += (SRSize - 3);
-                break;
-            case IP_OPT_RR:
-                if (OptSeen & OPT_RR) {
-                    TempStatus = IP_BAD_OPTION;             // We've already seen a record route.
-                    break;
-                }
-                OptSeen |= OPT_RR;
-                if (!ValidRouteOption(Options, 1, Size)) {
-                    TempStatus = IP_BAD_OPTION;
-                    break;
-                }
-                SRSize = Options[IP_OPT_LENGTH];
-                CTEMemCopy(&TempOptions[TempSize], Options, SRSize);
-                TempSize += SRSize;
-                Options += SRSize;
-                Size -= SRSize;
-                break;
-            case IP_OPT_TS:
-                {
-                    uchar   Overflow, Flags;
-
-                    if (OptSeen & OPT_TS) {
-                        TempStatus = IP_BAD_OPTION;     // We've already seen a time stamp
-                        break;
-                    }
-                    OptSeen |= OPT_TS;
-                    Flags = Options[IP_TS_OVFLAGS] & IP_TS_FLMASK;
-                    Overflow = (Options[IP_TS_OVFLAGS] & IP_TS_OVMASK) >> 4;
-
-                    if (Overflow || (Flags != TS_REC_TS && Flags != TS_REC_ADDR &&
-                        Flags != TS_REC_SPEC)) {
-                        TempStatus = IP_BAD_OPTION;     // Bad flags or overflow value.
-                        break;
-                    }
-
-                    SRSize = Options[IP_OPT_LENGTH];
-                    if (SRSize > Size || SRSize < 8 ||
-                        Options[IP_OPT_PTR] != MIN_TS_PTR) {
-                        TempStatus = IP_BAD_OPTION;             // Option size isn't good.
-                        break;
-                    }
-                    CTEMemCopy(&TempOptions[TempSize], Options, SRSize);
-                    TempSize += SRSize;
-                    Options += SRSize;
-                    Size -= SRSize;
-                }
-                break;
-            default:
-                TempStatus = IP_BAD_OPTION;         // Unknown option, error.
-                break;
-        }
-    }
-
-    if (TempStatus == IP_PENDING)       // We broke because we hit the end of the buffer.
-        TempStatus = IP_SUCCESS;        // that's OK.
-
-    if (TempStatus != IP_SUCCESS) {     // We had some sort of an error.
-        CTEFreeMem(TempOptions);
-        return TempStatus;
-    }
-
-    // Check the option size here to see if it's too big. We check it here at the end
-    // instead of at the start because the option size may shrink if there are source route
-    // options, and we don't want to accidentally error out a valid option.
-    TempSize  = (TempSize & 3 ? (TempSize & ~3) + 4 : TempSize);
-    if (TempSize > MAX_OPT_SIZE) {
-        CTEFreeMem(TempOptions);
-        return IP_OPTION_TOO_BIG;
-    }
-    OptInfoPtr->ioi_options = TempOptions;
-    OptInfoPtr->ioi_optlength = TempSize;
-
-    return IP_SUCCESS;
-
+    OptInfoPtr->ioi_options = (uchar *)NULL;
+    OptInfoPtr->ioi_optlength = 0;
+    return IP_BAD_OPTION;
 }
 
 //**    IPFreeOptions - Free options we're done with.

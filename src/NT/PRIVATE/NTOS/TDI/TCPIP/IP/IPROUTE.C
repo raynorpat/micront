@@ -27,7 +27,6 @@ extern	NetTableEntry	*LoopNTE;			// Pointer to loopback NTE.
 extern	Interface		LoopInterface;		// Pointer to loopback interface.
 
 extern IP_STATUS SendICMPErr(IPAddr, IPHeader UNALIGNED *, uchar, uchar, ulong);
-extern uchar ParseRcvdOptions(IPOptInfo *, OptIndex *);
 extern void ULMTUNotify(IPAddr Dest, IPAddr Src, uchar Prot, void *Ptr,
 		uint NewMTU);
 
