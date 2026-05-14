@@ -249,8 +249,13 @@ Return Value:
         }
     except( EXCEPTION_EXECUTE_HANDLER ) {
         //
-        // Fall through, since we do not want to undo what we have done.
+        // Handle is already installed in the caller's handle table by
+        // ObInsertObject / ObOpenObjectByName above; if the *LinkHandle
+        // write faults, close it here so the handle name doesn't leak
+        // into the caller's table.
         //
+        NtClose( Handle );
+        Status = GetExceptionCode();
         }
 
     return( Status );
@@ -332,8 +337,13 @@ Return Value:
         }
     except( EXCEPTION_EXECUTE_HANDLER ) {
         //
-        // Fall through, since we do not want to undo what we have done.
+        // Handle is already installed in the caller's handle table by
+        // ObInsertObject / ObOpenObjectByName above; if the *LinkHandle
+        // write faults, close it here so the handle name doesn't leak
+        // into the caller's table.
         //
+        NtClose( Handle );
+        Status = GetExceptionCode();
         }
 
     return( Status );

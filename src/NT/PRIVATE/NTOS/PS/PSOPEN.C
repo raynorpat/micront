@@ -210,7 +210,8 @@ Return Value:
                 *ProcessHandle = Handle;
                 }
             except(EXCEPTION_EXECUTE_HANDLER) {
-                return Status;
+                NtClose( Handle );
+                return GetExceptionCode();
                 }
             }
 
@@ -271,7 +272,8 @@ Return Value:
                 *ProcessHandle = Handle;
                 }
             except(EXCEPTION_EXECUTE_HANDLER) {
-                return Status;
+                NtClose( Handle );
+                return GetExceptionCode();
                 }
             }
 
@@ -453,7 +455,8 @@ Return Value:
                 *ThreadHandle = Handle;
                 }
             except(EXCEPTION_EXECUTE_HANDLER) {
-                return Status;
+                NtClose( Handle );
+                return GetExceptionCode();
                 }
             }
         return Status;
@@ -505,7 +508,8 @@ Return Value:
                 *ThreadHandle = Handle;
                 }
             except(EXCEPTION_EXECUTE_HANDLER) {
-                return Status;
+                NtClose( Handle );
+                return GetExceptionCode();
                 }
             }
 

@@ -513,6 +513,13 @@ Return Value:
                 try {
                     *TimerHandle = Handle;
                  } except(ExSystemExceptionFilter()) {
+                    //
+                    // ObInsertObject installed Handle in the caller's
+                    // table; close it so a faulted user write doesn't
+                    // leak the handle name.
+                    //
+                    NtClose(Handle);
+                    Status = GetExceptionCode();
                  }
             }
         }
@@ -612,6 +619,13 @@ Return Value:
                 *TimerHandle = Handle;
 
             } except(ExSystemExceptionFilter()) {
+                //
+                // Handle is already installed in the caller's table by
+                // ObOpenObjectByName; close it so a faulted user write
+                // doesn't leak the handle name.
+                //
+                NtClose(Handle);
+                Status = GetExceptionCode();
             }
         }
 

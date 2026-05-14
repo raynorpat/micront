@@ -96,7 +96,7 @@ shape as the OB/SE family.
   fixed-size object body.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE`
   only; object body initialised by `Ke…Initialize`.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same output-handle-leak shape as the OB/SE/IO/MM/PS
     siblings.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes —
@@ -126,7 +126,7 @@ shape as the OB/SE family.
   fixed-size object body.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE`
   only; object body initialised by `Ke…Initialize`.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same output-handle-leak shape as the OB/SE/IO/MM/PS
     siblings.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes —
@@ -156,7 +156,7 @@ shape as the OB/SE family.
   fixed-size object body.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE`
   only; object body initialised by `Ke…Initialize`.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same output-handle-leak shape as the OB/SE/IO/MM/PS
     siblings.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes —
@@ -191,7 +191,7 @@ buffer.
   - Sample buffer pinned via MDL; bounded by `BufferSize`
     which itself is bounded by the range × bucket size.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE` only.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same handle-leak shape.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes —
   `HANDLE` only.
@@ -220,7 +220,7 @@ shape as the OB/SE family.
   fixed-size object body.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE`
   only; object body initialised by `Ke…Initialize`.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same output-handle-leak shape as the OB/SE/IO/MM/PS
     siblings.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes —
@@ -250,7 +250,7 @@ shape as the OB/SE family.
   fixed-size object body.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE`
   only; object body initialised by `Ke…Initialize`.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same output-handle-leak shape as the OB/SE/IO/MM/PS
     siblings.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes —
@@ -351,7 +351,7 @@ Probes output handle, calls `ObOpenObjectByName` filtered to
 - C8 Output buffer aliasing / METHOD mismatch — N/A
 - [x] C9 Pool exhaustion via attacker-controlled allocation — none.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE` only.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same output-handle-leak shape.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes —
   `HANDLE` only.
@@ -376,7 +376,7 @@ Probes output handle, calls `ObOpenObjectByName` filtered to
 - C8 Output buffer aliasing / METHOD mismatch — N/A
 - [x] C9 Pool exhaustion via attacker-controlled allocation — none.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE` only.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same output-handle-leak shape.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes —
   `HANDLE` only.
@@ -401,7 +401,7 @@ Probes output handle, calls `ObOpenObjectByName` filtered to
 - C8 Output buffer aliasing / METHOD mismatch — N/A
 - [x] C9 Pool exhaustion via attacker-controlled allocation — none.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE` only.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same output-handle-leak shape.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes —
   `HANDLE` only.
@@ -426,7 +426,7 @@ Probes output handle, calls `ObOpenObjectByName` filtered to
 - C8 Output buffer aliasing / METHOD mismatch — N/A
 - [x] C9 Pool exhaustion via attacker-controlled allocation — none.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE` only.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same output-handle-leak shape.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes —
   `HANDLE` only.
@@ -451,7 +451,7 @@ Probes output handle, calls `ObOpenObjectByName` filtered to
 - C8 Output buffer aliasing / METHOD mismatch — N/A
 - [x] C9 Pool exhaustion via attacker-controlled allocation — none.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE` only.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same output-handle-leak shape.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes —
   `HANDLE` only.

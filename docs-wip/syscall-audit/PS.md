@@ -81,7 +81,7 @@ its VA space, attaches token, inserts handle.
     the parent.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE` only;
   `EPROCESS` body initialised field-by-field.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same output-handle-leak shape: `*ProcessHandle = Handle`
     write fault leaves the process inserted but its handle name
     un-communicated.  Self-inflicted DoS — the orphan handle
@@ -165,7 +165,7 @@ context back to user.
     after the alloc.
   - Fix shape: zero the `Ctx->Context` block after allocation
     (or use `ExAllocatePoolWithQuotaTag`'s zero-init variant).
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - The user-write fault path at `:174-180` returns
     `STATUS_SUCCESS` even when the write faulted.  Caller
     can't tell the data didn't reach the user buffer.  Same
@@ -230,7 +230,7 @@ provided).  Writes handle on success.
 - C8 Output buffer aliasing / METHOD mismatch — N/A
 - [x] C9 Pool exhaustion via attacker-controlled allocation — none.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE` only.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same output-handle-leak shape as the other Open* siblings.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes —
   `HANDLE` only.
@@ -256,7 +256,7 @@ output-handle-leak shape.
 - C8 Output buffer aliasing / METHOD mismatch — N/A
 - [x] C9 Pool exhaustion via attacker-controlled allocation — none.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE` only.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same output-handle-leak shape.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes —
   `HANDLE` only.

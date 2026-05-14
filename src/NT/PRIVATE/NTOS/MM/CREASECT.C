@@ -249,7 +249,13 @@ Return Value:
     try {
         *SectionHandle = Handle;
     } except (EXCEPTION_EXECUTE_HANDLER) {
-        return Status;
+        //
+        // ObInsertObject installed Handle in the caller's table;
+        // close it so a faulted user write doesn't leak the handle
+        // name.
+        //
+        NtClose(Handle);
+        return GetExceptionCode();
     }
 
 #if DBG
@@ -2835,7 +2841,13 @@ Return Value:
     try {
         *SectionHandle = Handle;
     } except (EXCEPTION_EXECUTE_HANDLER) {
-        return Status;
+        //
+        // Handle is already installed in the caller's table by
+        // ObOpenObjectByName; close it so a faulted user write doesn't
+        // leak the handle name.
+        //
+        NtClose(Handle);
+        return GetExceptionCode();
     }
 
     return Status;

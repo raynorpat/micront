@@ -352,7 +352,7 @@ Probes `SectionHandle`, calls `ObOpenObjectByName` filtered to
 - C8 Output buffer aliasing / METHOD mismatch — N/A
 - [x] C9 Pool exhaustion via attacker-controlled allocation — none.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE` only.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same handle-leak shape as SE/OB/IO Open*: `*SectionHandle =
     Handle` write fault leaves the handle installed but
     un-communicated.  Self-inflicted DoS.

@@ -22,49 +22,46 @@ biggest fraction of findings per edit.
 
 ### P1 — Output-handle leak on `*Handle` write fault
 
-**Shape.**  After `ObInsertObject` (or `ExCreateHandle`,
-`ObOpenObjectByName` with handle output, etc.) succeeds, the
-syscall writes the handle value to a user-mode `OUT PHANDLE`
-parameter inside a `__try`.  On AV (user unmapped the output
-page between probe and write), the `except` "falls through"
-without `NtClose`.  The handle remains installed in the caller's
-(or target process's) handle table; the value is never
-communicated.
+**Closed.**  Every syscall in the audit's reach list now follows
+the `LPCCREAT.C:240-247` template: when the `*Handle` user-mode
+write faults, `NtClose(Handle)` runs in the `except` arm and the
+function returns `GetExceptionCode()` (or sets `Status` to it
+for syscalls that have additional cleanup after the try).
+Closed across SE, OB, PS, MM, IO, EX, CONFIG; LPC sites
+(`NtAcceptConnectPort`, `NtConnectPort`) were already correct
+when audited.
 
-**Reach (~22 sites):**
+Two pattern variants were folded into the same fix:
 
-| Subsystem | Syscalls |
-| --- | --- |
-| SE | `NtOpenProcessToken`, `NtOpenThreadToken`, `NtDuplicateToken`, `NtCreateToken` |
-| OB | `NtCreateSymbolicLinkObject`, `NtOpenSymbolicLinkObject`, `NtCreateDirectoryObject`, `NtOpenDirectoryObject`, `NtDuplicateObject` |
-| IO | `NtCreateIoCompletion`, `NtOpenIoCompletion` (+ thin wrappers `NtCreateFile`/`NtOpenFile`/`NtCreateMailslotFile`/`NtCreateNamedPipeFile` via `IoCreateFile`) |
-| MM | `NtOpenSection` |
-| PS | `NtCreateProcess`, `NtCreateThread`, `NtOpenProcess`, `NtOpenThread` |
-| EX | `NtCreate{Event,EventPair,Mutant,Semaphore,Timer,Profile}`, `NtOpen{Event,EventPair,Mutant,Semaphore,Timer}` |
-| CONFIG | `NtCreateKey`, `NtOpenKey` |
-| LPC | `NtAcceptConnectPort`, `NtConnectPort` (verify); `NtCreatePort` already has the right shape — **template** |
+- **Silent fall-through** (`} except { }` empty body, or
+  `return Status` with `Status == NT_SUCCESS`) — vintage NT 3.5
+  "let the caller take an AV when they read their own buffer"
+  design choice.  Found in OB, EX, IO, PS, CONFIG.  Changed to
+  the LPCCREAT template (`NtClose + report fault`) so the
+  syscall surface is honest about what happened.
 
-**Severity.**  Self-inflicted DoS only.  Caller leaks one
-handle slot in their own table per triggering call.
-Cross-process variants (`NtDuplicateObject`) leak in the
-**target** process; mildly worse but limited by who can hold
-`PROCESS_DUP_HANDLE` on both source and target.
+- **Cross-process variant** (`NtDuplicateObject:1503`) — the
+  handle was installed in `TargetProcess`'s table (not the
+  caller's) by `ExCreateHandle` while attached.  The fix
+  reattaches to `TargetProcess` for the `NtClose` call.
 
-**Fix shape (template at `LPC/LPCCREAT.C:240-247`):**
+- **CONFIG outer-try variant** — `NtCreateKey`/`NtOpenKey`
+  wrap the entire body (probes, open, multiple user-buffer
+  writes) in one outer try.  Fix is `HANDLE Handle = NULL` at
+  declaration plus `if (Handle != NULL) NtClose(Handle)` in
+  the outer except.
 
-```c
-try {
-    *Handle = LocalHandle;
-} except (EXCEPTION_EXECUTE_HANDLER) {
-    NtClose(LocalHandle);
-    Status = GetExceptionCode();
-}
-```
+**Original shape.**  After `ObInsertObject` /
+`ObOpenObjectByName` succeeded, the syscall wrote the handle
+value to a user-mode `OUT PHANDLE` parameter inside a `__try`.
+On AV the `except` either fell through silently or returned
+the success status, leaving the handle installed.
 
-For cross-process variants (`NtDuplicateObject`, etc.), wrap
-the `NtClose` in `KeAttachProcess(&TargetProcess->Pcb)` /
-`KeDetachProcess()` so the close happens in the target's
-context.
+**Severity (when present).**  Self-inflicted DoS only.  Caller
+leaks one handle slot per triggering call.  Cross-process
+variant (`NtDuplicateObject`) leaked in the target process;
+limited by who can hold `PROCESS_DUP_HANDLE` on both source and
+target.
 
 ---
 
@@ -500,7 +497,7 @@ disclosures elsewhere.
 
 | Pattern | Edits | Effort |
 | --- | --- | --- |
-| P1 — Handle leak | ~22 sites, ~5 lines each | ~110 lines |
+| ~~P1 — Handle leak~~ (closed kernel-wide) | 22+ sites | done |
 | P2 — NonPaged length cap | 1 helper + 6 syscall edits | ~80 lines (with new field) |
 | ~~P3 — Capture overflow~~ (closed: cap in `CAPTURE.C`) | 2 helpers | done |
 | ~~P4 — Release NULL~~ (closed: NULL guards in `CAPTURE.C`) | 5 helpers | done |

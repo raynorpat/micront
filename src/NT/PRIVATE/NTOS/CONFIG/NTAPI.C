@@ -189,7 +189,7 @@ Return Value:
     KPROCESSOR_MODE mode;
     CM_PARSE_CONTEXT ParseContext;
     PCM_KEY_BODY KeyBody;
-    HANDLE Handle;
+    HANDLE Handle = NULL;
 
     PAGED_CODE();
     CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtCreateKey\n"));
@@ -278,6 +278,17 @@ Return Value:
             KdPrint(("!!NtCreateKey: code:%08lx\n", GetExceptionCode()));
         }
         status = GetExceptionCode();
+        //
+        // If ObOpenObjectByName succeeded but a later user-buffer
+        // write (*KeyHandle, *Disposition) faulted, the handle was
+        // already installed in the caller's table.  Close it here so
+        // the handle name doesn't leak.  Handle is initialised to NULL
+        // up front so this is safe on every path that didn't reach the
+        // successful open.
+        //
+        if (Handle != NULL) {
+            NtClose(Handle);
+        }
     }
 
     CmpUnlockRegistry();
@@ -1182,7 +1193,7 @@ Return Value:
     NTSTATUS    status;
     KPROCESSOR_MODE mode;
     PCM_KEY_BODY KeyBody;
-    HANDLE Handle;
+    HANDLE Handle = NULL;
 
     PAGED_CODE();
     CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtOpenKey\n"));
@@ -1235,6 +1246,18 @@ Return Value:
             KdPrint(("!!NtOpenKey: code:%08lx\n", GetExceptionCode()));
         }
         status = GetExceptionCode();
+        //
+        // If ObOpenObjectByName succeeded but the *KeyHandle write
+        // faulted (non-PREDEFINED branch at :1241), the handle is
+        // already installed in the caller's table.  Close it here.
+        // The PREDEFINED_HANDLE branch closes Handle on its normal
+        // path; if a fault hit before that close ran, this defensive
+        // close picks it up.  Handle is initialised to NULL so any
+        // pre-open fault is safe.
+        //
+        if (Handle != NULL) {
+            NtClose(Handle);
+        }
     }
 
     CmpUnlockRegistry();

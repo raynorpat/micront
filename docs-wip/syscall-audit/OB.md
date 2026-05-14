@@ -56,7 +56,7 @@ directory object via `ObCreateObject` + `RtlZeroMemory`, inserts it.
 - [x] C10 Uninitialized output / pool-contents leak
   - `RtlZeroMemory(Directory, sizeof(*Directory))` at `:79`
     immediately after `ObCreateObject` — clean.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same handle-leak shape as `NtCreateSymbolicLinkObject` at
     `:95-102`.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes
@@ -104,7 +104,7 @@ second `__try`, inserts the handle, writes the handle to user.
   - `ObCreateObject` body is filled field-by-field at `:214-218`,
     then the link buffer is `RtlMoveMemory`'d into the symbolic
     link.  No uninitialized bytes returned to user.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - At `:247-254`, `*LinkHandle = Handle` write fault is caught
     with a "fall through, since we do not want to undo what we
     have done" comment.  The handle was already inserted via
@@ -146,7 +146,7 @@ handle value back to user.
 - [x] C9 Pool exhaustion via attacker-controlled allocation — no
   user-sized allocation.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE` only.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - The success path's `*TargetHandle = MAKE_OBJECT_HANDLE(NewHandle)`
     write at `:1502-1511` is wrapped in `__try` with "fall
     through, since we cannot undo what we have done."  Same
@@ -212,7 +212,7 @@ writes the handle.
 - C8 Output buffer aliasing / METHOD mismatch — N/A
 - [x] C9 Pool exhaustion via attacker-controlled allocation — none.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE` only.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same handle-leak shape at `:152-159`.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes
   - Output is a single `HANDLE`.
@@ -239,7 +239,7 @@ writes the handle.
   user-sized allocation.
 - [x] C10 Uninitialized output / pool-contents leak — single
   `HANDLE` output.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same handle-leak shape as `NtCreateSymbolicLinkObject` at
     `:330-337`.  Output write fault drops handle name on the
     floor; handle remains in caller's table.

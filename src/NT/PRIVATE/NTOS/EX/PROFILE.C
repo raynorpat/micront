@@ -445,6 +445,13 @@ Return Value:
                 try {
                     *ProfileHandle = Handle;
                 } except(EXCEPTION_EXECUTE_HANDLER) {
+                    //
+                    // ObInsertObject installed Handle in the caller's
+                    // table; close it so a faulted user write doesn't
+                    // leak the handle name.
+                    //
+                    NtClose(Handle);
+                    Status = GetExceptionCode();
                 }
             }
         }

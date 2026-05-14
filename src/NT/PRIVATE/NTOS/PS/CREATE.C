@@ -582,7 +582,9 @@ Return Value:
             }
         } except(EXCEPTION_EXECUTE_HANDLER) {
 
-            if ( GetExceptionCode() == STATUS_QUOTA_EXCEEDED ) {
+            NTSTATUS ExceptionStatus = GetExceptionCode();
+
+            if ( ExceptionStatus == STATUS_QUOTA_EXCEEDED ) {
 
                 //
                 // This trick us used so that Dbgk doesn't report
@@ -597,9 +599,18 @@ Return Value:
                     (VOID) KeResumeThread(&Thread->Tcb);
                 }
                 KeReadyThread(&Thread->Tcb);
-                ZwClose(LocalThreadHandle);
-                return GetExceptionCode();
             }
+
+            //
+            // ObInsertObject above installed LocalThreadHandle in the
+            // caller's handle table; whichever exception fired, close
+            // the handle here so it doesn't leak.  Original code only
+            // closed on STATUS_QUOTA_EXCEEDED and fell through silently
+            // on the more common STATUS_ACCESS_VIOLATION from a
+            // user-faulted *ThreadHandle write.
+            //
+            ZwClose(LocalThreadHandle);
+            return ExceptionStatus;
         }
     }
 
@@ -1494,7 +1505,13 @@ insert_process:
     try {
         *ProcessHandle = LocalProcessHandle;
     } except(EXCEPTION_EXECUTE_HANDLER) {
-        return st;
+        //
+        // ObInsertObject installed LocalProcessHandle in the caller's
+        // handle table; close it so a faulted *ProcessHandle write
+        // doesn't leak the handle name.
+        //
+        ZwClose(LocalProcessHandle);
+        return GetExceptionCode();
     }
     return st;
 

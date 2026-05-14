@@ -94,7 +94,7 @@ its `except`.
 - [x] C9 Pool exhaustion via attacker-controlled allocation —
   fixed-size object.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE` only.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same handle-leak shape as the SE / OB Open*/Create* siblings:
     `*IoCompletionHandle = Handle` write fault at `:140-145`
     drops the handle name; the handle was already installed by
@@ -269,7 +269,7 @@ handling all live in the helper.
     to user (modern Windows uses `ExAllocatePoolWithQuotaZeroTag`
     here; NT 3.5 doesn't).  Per-driver concern; flag during
     individual driver audits.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - **Fast-IO path inconsistency** at `INTERNAL.C:5025-5030`:
     after `FastIoDeviceControl` succeeds, `*IoStatusBlock =
     localIoStatus` writes inside a `__try`; the except records
@@ -512,7 +512,7 @@ nested handle-write try with `NOTHING` on except.
 - C8 Output buffer aliasing / METHOD mismatch — N/A
 - [x] C9 Pool exhaustion via attacker-controlled allocation — none.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE` only.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same handle-leak as `NtCreateIoCompletion` at `:243-248`.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes —
   `HANDLE` only.

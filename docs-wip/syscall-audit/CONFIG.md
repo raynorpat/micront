@@ -34,7 +34,7 @@ output `KeyHandle`/`Disposition`.  Takes
   - Class name capture bounded by `USHORT MaximumLength`.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE`
   and optional `Disposition` ULONG only.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same handle-leak shape: `*KeyHandle = Handle` at `:269`
     inside the outer try; on fault, `CmpExceptionFilter` sets
     status to AV but the handle is already inserted.
@@ -276,7 +276,7 @@ Probes output `KeyHandle`, calls `ObOpenObjectByName` with
 - C8 Output buffer aliasing / METHOD mismatch — N/A
 - [x] C9 Pool exhaustion via attacker-controlled allocation — none.
 - [x] C10 Uninitialized output / pool-contents leak — `HANDLE` only.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - Same handle-leak shape as `NtCreateKey`.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes —
   `HANDLE` only.

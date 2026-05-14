@@ -4446,6 +4446,13 @@ Warning:
 
         } except(EXCEPTION_EXECUTE_HANDLER) {
 
+            //
+            // Handle was installed in the caller's table by
+            // ObInsertObject above; close it via NtClose so the file
+            // system gets its IRP_MJ_CLOSE and the handle name doesn't
+            // leak into the caller's table.
+            //
+            NtClose(handle);
             status = GetExceptionCode();
 
         }

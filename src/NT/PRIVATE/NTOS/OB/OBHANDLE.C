@@ -1505,8 +1505,24 @@ Return Value:
                 }
             except( EXCEPTION_EXECUTE_HANDLER ) {
                 //
-                // Fall through, since we cannot undo what we have done.
+                // The handle was installed by ExCreateHandle in
+                // TargetProcess's table; if the *TargetHandle write
+                // faults, close it in TargetProcess's context so the
+                // handle name doesn't leak there.  The user-side
+                // *TargetHandle pointer lives in the caller's address
+                // space, which is why the write happens after the
+                // KeDetachProcess above.
                 //
+                BOOLEAN ReAttached = FALSE;
+                if (PsGetCurrentProcess() != TargetProcess) {
+                    KeAttachProcess( &TargetProcess->Pcb );
+                    ReAttached = TRUE;
+                    }
+                NtClose( MAKE_OBJECT_HANDLE( NewHandle ) );
+                if (ReAttached) {
+                    KeDetachProcess();
+                    }
+                Status = GetExceptionCode();
                 }
             }
         }
