@@ -292,9 +292,16 @@ Return Value:
         // must be added.
         //
 
-        RequiredLength = (ULONG)sizeof(TOKEN_GROUPS) +
-                         ((Token->UserAndGroupCount - ANYSIZE_ARRAY - 1) *
-                         ((ULONG)sizeof(SID_AND_ATTRIBUTES)) );
+        //
+        // sizeof(TOKEN_GROUPS) bakes in one Groups[ANYSIZE_ARRAY] slot,
+        // so the (UserAndGroupCount - 2) factor below underflows a ULONG
+        // when UserAndGroupCount == 1 (restricted tokens with no groups
+        // beyond the user).  Compute as { ULONG GroupCount;
+        // SID_AND_ATTRIBUTES Groups[N]; } from first principles:
+        //
+        RequiredLength = (ULONG)sizeof(ULONG) +
+                         ((Token->UserAndGroupCount - 1) *
+                          (ULONG)sizeof(SID_AND_ATTRIBUTES));
 
         Index = 1;
         while (Index < Token->UserAndGroupCount) {

@@ -403,21 +403,29 @@ this can recurse until the system bug-checks.
 
 ---
 
-### P12 — `NtAccessCheck` ad-hoc bugs (not part of a pattern)
+### P12 — `NtAccessCheck` + `NtDuplicateToken` ad-hoc bugs
 
-`SE/ACCESSCK.C` has two unique findings that don't fit the
-patterns above:
+**Closed.**  Three SE one-off findings, plus a broader leak
+caught during the fix:
 
-- **C3 missing `__try`** at `:970` and `:1009` — `*PrivilegeSetLength`
-  deref outside try.  Local DoS.
-- **C11 refcount leak** at `:1107` — `STATUS_INVALID_SECURITY_DESCR`
-  early return forgets to release Token + SD.
+- **`*PrivilegeSetLength` deref outside `__try`** at
+  `ACCESSCK.C:970` and `:1012` — closed by capturing into
+  `LocalPrivilegeSetLength` inside the initial probe try; bounds
+  checks downstream use the local.
+- **Token + SD + Privileges leak at `ACCESSCK.C:1107`**
+  (`STATUS_INVALID_SECURITY_DESCR`) — closed.  Broader finding
+  caught during the fix: `Privileges` from
+  `SePrivilegePolicyCheck` was never freed anywhere in
+  `NtAccessCheck`; every post-`:937` return path now calls
+  `SeFreePrivileges`, which itself gained a NULL guard matching
+  the P4 SE release-helper pattern.
+- **`NtDuplicateToken:150` operator typo** (`&&` → `||`) —
+  closed.  Invalid `TokenType` values now reject with
+  `STATUS_INVALID_PARAMETER`.  Test:
+  `pkg/test/fuzz/se.lua` `NtDuplicateToken rejects TokenType=...`.
 
-Plus the `NtDuplicateToken:150` operator typo (`&&` where `||`
-was meant — dead validation).
-
-Three one-off edits.  Listed separately because they're
-non-pattern.
+SE module audit complete.  See [`SE.md`](SE.md) fix-scope
+summary for the full closure list.
 
 ---
 
@@ -503,7 +511,7 @@ disclosures elsewhere.
 | P9 — IOCP data-loss | 1 site, reorder | ~10 lines |
 | P10 — Pool zero typo | 1 site, 2 lines | ~2 lines |
 | P11 — Must-succeed fallback | 1 site, drop fallback | ~5 lines |
-| P12 — `NtAccessCheck` adhoc | 3 sites | ~30 lines |
+| ~~P12 — `NtAccessCheck` adhoc~~ (closed: SE wrap-up commit) | 4 sites | done |
 | **Subtotal — direct fixes** | **~60 edits** | **~400 lines** |
 | Primitives backport | 7 primitives | ~200-300 lines per primitive |
 

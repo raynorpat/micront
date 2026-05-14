@@ -838,6 +838,7 @@ Return Value:
     ACCESS_MASK PreviouslyGrantedAccess = 0;
     GENERIC_MAPPING LocalGenericMapping;
     PPRIVILEGE_SET Privileges = NULL;
+    ULONG LocalPrivilegeSetLength;
 
     PAGED_CODE();
 
@@ -869,9 +870,18 @@ Return Value:
             sizeof(ULONG)
             );
 
+        //
+        // Capture *PrivilegeSetLength into a local up front: subsequent
+        // reads at :970 and :1012 sit outside any __try and would take
+        // an unhandled fault if the caller unmapped the page after the
+        // probe.
+        //
+
+        LocalPrivilegeSetLength = *PrivilegeSetLength;
+
         ProbeForWrite(
             PrivilegeSet,
-            *PrivilegeSetLength,
+            LocalPrivilegeSetLength,
             sizeof(ULONG)
             );
 
@@ -967,7 +977,7 @@ Return Value:
 
     if (Privileges != NULL) {
 
-        if ( ((ULONG)SepPrivilegeSetSize( Privileges )) > *PrivilegeSetLength ) {
+        if ( ((ULONG)SepPrivilegeSetSize( Privileges )) > LocalPrivilegeSetLength ) {
 
             ObDereferenceObject( Token );
 
@@ -977,9 +987,11 @@ Return Value:
 
             } except ( EXCEPTION_EXECUTE_HANDLER ) {
 
+                SeFreePrivileges( Privileges );
                 return( GetExceptionCode() );
             }
 
+            SeFreePrivileges( Privileges );
             return( STATUS_BUFFER_TOO_SMALL );
 
         } else {
@@ -995,6 +1007,7 @@ Return Value:
             } except ( EXCEPTION_EXECUTE_HANDLER ) {
 
                 ObDereferenceObject( Token );
+                SeFreePrivileges( Privileges );
                 return( GetExceptionCode() );
             }
 
@@ -1006,7 +1019,7 @@ Return Value:
         // No privileges were used, construct an empty privilege set
         //
 
-        if ( *PrivilegeSetLength < sizeof(PRIVILEGE_SET) ) {
+        if ( LocalPrivilegeSetLength < sizeof(PRIVILEGE_SET) ) {
 
             ObDereferenceObject( Token );
 
@@ -1055,6 +1068,7 @@ Return Value:
     if (!NT_SUCCESS(Status)) {
 
         ObDereferenceObject( Token );
+        SeFreePrivileges( Privileges );
 
         try {
 
@@ -1077,6 +1091,7 @@ Return Value:
         //
 
         ObDereferenceObject( Token );
+        SeFreePrivileges( Privileges );
 
         try {
 
@@ -1104,6 +1119,11 @@ Return Value:
                 (PISECURITY_DESCRIPTOR)CapturedSecurityDescriptor
                 ) == NULL ) {
 
+        SeReleaseSecurityDescriptor( CapturedSecurityDescriptor,
+                                     PreviousMode,
+                                     FALSE );
+        ObDereferenceObject( Token );
+        SeFreePrivileges( Privileges );
         return( STATUS_INVALID_SECURITY_DESCR );
     }
 
@@ -1171,6 +1191,7 @@ Return Value:
         );
 
     ObDereferenceObject( Token );
+    SeFreePrivileges( Privileges );
 
     try {
 
@@ -1211,6 +1232,18 @@ Return Value:
 
 {
     PAGED_CODE();
+
+    //
+    // Tolerate NULL: SePrivilegePolicyCheck leaves the output pointer
+    // unset when no privileges were used, and ExFreePool(NULL)
+    // bug-checks BAD_POOL_CALLER here.  Matches the NULL-tolerance
+    // of SeReleaseSid / SeReleaseAcl / SeRelease*AndAttributesArray
+    // / SeReleaseSecurityDescriptor in CAPTURE.C.
+    //
+
+    if (Privileges == NULL) {
+        return;
+    }
 
     ExFreePool( Privileges );
 }

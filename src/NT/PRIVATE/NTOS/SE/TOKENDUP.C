@@ -147,7 +147,7 @@ Return Value:
             // Make sure the TokenType is valid
             //
 
-            if ( (TokenType < TokenPrimary) && (TokenType > TokenImpersonation) ) {
+            if ( (TokenType < TokenPrimary) || (TokenType > TokenImpersonation) ) {
                 return(STATUS_INVALID_PARAMETER);
             }
 
@@ -329,8 +329,19 @@ Return Value:
     //
 
     if (NT_SUCCESS(Status)) {
-        try { *NewTokenHandle = LocalHandle; }
-            except(EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
+        try {
+            *NewTokenHandle = LocalHandle;
+        } except(EXCEPTION_EXECUTE_HANDLER) {
+
+            //
+            // Handle is already installed in the caller's table by
+            // ObInsertObject; if *NewTokenHandle write faults, close
+            // it here so the handle name doesn't leak.
+            //
+
+            NtClose(LocalHandle);
+            return GetExceptionCode();
+        }
     }
 
    return Status;

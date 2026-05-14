@@ -192,3 +192,39 @@ t.test("NtPrivilegeCheck succeeds on PrivilegeCount=0 (NULL-release path)", func
     end)
 end)
 
+-- ------------------------------------------------------------------
+-- NtDuplicateToken — TokenType validation.
+--
+-- TOKENDUP.C:150 originally used && where || was meant, making the
+-- "is TokenType in {Primary, Impersonation}" check dead code.  Invalid
+-- values silently passed through to SepDuplicateToken which is
+-- fail-soft on unknown types.  Now they reject with
+-- STATUS_INVALID_PARAMETER.
+-- ------------------------------------------------------------------
+
+local INVALID_TYPES = {
+    { name = "zero",      value = 0 },
+    { name = "out-of-range", value = 3 },
+    { name = "saturated", value = 0xFFFFFFFF },
+}
+
+for _, it in ipairs(INVALID_TYPES) do
+    t.test(string.format(
+        "NtDuplicateToken rejects TokenType=%s (0x%x)", it.name, it.value),
+    function()
+        with_proc_token(se.TOKEN_QUERY + se.TOKEN_DUPLICATE, function(tok)
+            local new_handle = ffi.new('HANDLE[1]')
+            local st = errmod.normalize(ntdll.NtDuplicateToken(
+                handle.raw(tok),
+                se.TOKEN_ALL_ACCESS,
+                nil,
+                0,
+                it.value,
+                new_handle))
+            t.eq(st, STATUS_INVALID_PARAMETER,
+                 "expected STATUS_INVALID_PARAMETER, got "
+                 .. string.format("0x%08x", st))
+        end)
+    end)
+end
+

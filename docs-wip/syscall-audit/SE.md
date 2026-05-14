@@ -17,30 +17,24 @@ body.  All later writes to user memory sit inside their own small
 via `SeCaptureSecurityDescriptor`.
 
 - [x] C1 Probe-then-deref TOCTOU
-  - `*PrivilegeSetLength` is re-read at `:970` and `:1009` after the
-    initial probe.  The probe's "size" argument (`:874`) read the value
-    once but didn't capture it; an attacker can flip the user-side
-    `ULONG` between the probe and these checks.  Impact bounded —
-    `SepPrivilegeSetSize(Privileges)` is kernel-computed, so the
-    comparison can be made to pick the wrong branch but cannot induce
-    OOB write — but the window is gratuitous and shares a root cause
-    with C3.
+  - `*PrivilegeSetLength` was originally re-read at `:970` and
+    `:1012` after the initial probe — TOCTOU window plus
+    unhandled-fault hazard (see C3).  **Closed:** captured into
+    `LocalPrivilegeSetLength` inside the initial probe try; later
+    bounds checks use the local.
 - [x] C2 Direct user-pointer deref without capture
-  - `*PrivilegeSetLength` is dereferenced three times (`:874`, `:970`,
-    `:1009`) without being captured into a local.  The fix mirrors what
-    `*GenericMapping` already does at `:884`: read once at probe time,
+  - Closed by the same capture (see C1).  Pattern now mirrors
+    `LocalGenericMapping` at `:884`: read once at probe time,
     work against the local thereafter.
 - [x] C3 Missing `__try` wrap — **finding**
-  - The deref of `*PrivilegeSetLength` at `:970` (inside the
-    `Privileges != NULL` branch's bounds check) and at `:1009` (inside
-    the empty-privset branch's bounds check) is **outside any `__try`
-    block**.  If the user unmaps that page between entry and either
-    check, the kernel takes an unhandled access violation.  Direct
-    local-DoS primitive for any process that can call `NtAccessCheck`.
-    Fix is C2 (capture once at probe time).
+  - Originally the deref of `*PrivilegeSetLength` at `:970` and
+    `:1012` was outside any `__try` — a user-unmap between probe
+    and check would have taken an unhandled access violation
+    (local-DoS primitive).  **Closed** by the C1/C2 capture; the
+    two remaining `*PrivilegeSetLength` write-backs at `:986` and
+    `:1028` keep their own per-write try.
 - [x] C4 Length-field trust
-  - Same root cause as C1/C2 — `*PrivilegeSetLength` is the length
-    field, never captured, re-read at use time.
+  - Same root cause as C1/C2 — now closed.
 - [x] C5 Integer overflow in size computation
   - No attacker-controlled multiplication in the syscall body;
     `*PrivilegeSetLength` is passed straight to `ProbeForWrite` which
@@ -62,25 +56,33 @@ via `SeCaptureSecurityDescriptor`.
     sub-field counts (each a `USHORT`).  `SepPrivilegePolicyCheck`
     allocates `Privileges` sized by token-internal state.  No
     unbounded user-controlled allocation in the syscall body.
-- [ ] C10 Uninitialized output / pool-contents leak
-  - At `:989` the success path does `RtlMoveMemory(PrivilegeSet,
-    Privileges, SepPrivilegeSetSize(Privileges))`.  If
-    `SepPrivilegePolicyCheck` doesn't fully initialize padding/unused
-    bytes of its allocated `Privileges` block, this leaks pool
-    contents to user.  Audit deferred until `SE/PRIV.C` is reviewed.
+- [x] C10 Uninitialized output / pool-contents leak
+  - The `Privileges` block at `:989` comes from
+    `SepAssemblePrivileges` (`SEGLOBAL.C:727`), which `RtlMoveMemory`s
+    from one of three pre-built kernel globals
+    (`SepSystemSecurityPrivilegeSet`, `SepTakeOwnershipPrivilegeSet`,
+    `SepDoublePrivilegeSet`) fully initialized field-by-field at boot
+    in `SepInitializePrivileges` (`SEGLOBAL.C:692-722`).  `PRIVILEGE_SET`
+    has no padding on x86 (naturally aligned), so every byte of each
+    global is written before any caller reads it.  No uninit leak.
+  - Empty-set path at `:1003-1037` writes only `PrivilegeCount=0` +
+    `Control=0` to the user buffer; bytes past offset 8 retain the
+    user's own content, not kernel pool bytes.
 - [x] C11 Reference-count discipline under error paths — **finding**
-  - At `:1107` `return( STATUS_INVALID_SECURITY_DESCR );` leaks both
-    references taken earlier in the body:
-    - `Token` (referenced via `ObReferenceObjectByHandle` at `:900`)
-      — no `ObDereferenceObject(Token)` call on this path.
-    - `CapturedSecurityDescriptor` (allocated via
-      `SeCaptureSecurityDescriptor` at `:1047`) — no
-      `SeReleaseSecurityDescriptor` call on this path.
-    - Every other error path in this body releases both correctly;
-      this branch is the singular outlier.  Repeated invocation with
-      a malformed SD (missing owner or group) leaks one token
-      reference and one paged-pool SD allocation per call — slow-burn
-      DoS for any caller that can reach `NtAccessCheck`.
+  - At `:1107` `return( STATUS_INVALID_SECURITY_DESCR );` leaked
+    `Token` + `CapturedSecurityDescriptor` + `Privileges` —
+    audit-identified path.  Now releases all three.
+  - **Broader finding caught during the fix.**  The `Privileges`
+    block returned by `SePrivilegePolicyCheck` at `:937-944` was
+    never freed anywhere in `NtAccessCheck` — leaked on every
+    success path and several intermediate error paths whenever the
+    caller asked for `ACCESS_SYSTEM_SECURITY` or `WRITE_OWNER` and
+    the token held the matching privilege.  20-32 bytes of
+    `PagedPool` per qualifying call.  Every post-`:937` return now
+    calls `SeFreePrivileges(Privileges)`.
+  - **NULL-tolerance added to `SeFreePrivileges`** so callers don't
+    have to NULL-gate, matching the SE release-helper pattern
+    established in P4.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes
   - Outputs are `NTSTATUS`, `ACCESS_MASK`, and a `PRIVILEGE_SET` whose
     contents are `LUID` + `ULONG` attributes — no kernel pointers
@@ -182,12 +184,11 @@ the reset path.
     validation lives in `SeCaptureSidAndAttributesArray`.
 - C7 IOCTL access-bit encoding — N/A
 - C8 Output buffer aliasing / METHOD mismatch — N/A
-- [ ] C9 Pool exhaustion via attacker-controlled allocation
-  - `SeCaptureSidAndAttributesArray` (`CAPTURE.C`) allocates from
-    `PagedPool` sized by user-given group count × `sizeof(SID_AND_
-    ATTRIBUTES)`, plus per-SID copies.  Implicit upper bound is
-    `MmUserProbeAddress` (probe must fit in user space) — still
-    ~2 GB worst case.  No per-token or per-process quota check.
+- [x] C9 Pool exhaustion via attacker-controlled allocation
+  - `SeCaptureSidAndAttributesArray` allocation is now capped by
+    `SEP_MAX_CAPTURE_COUNT (0x10000)` (P3) — worst-case footprint
+    ~5.5 MB across the two allocations.  No per-process quota
+    (broader infrastructure gap, not SE-local).
 - [x] C10 Uninitialized output / pool-contents leak
   - Output goes through `SepAdjustGroups` which writes per-entry
     fields explicitly.  No `RtlCopyMemory` of a kernel pool block
@@ -321,10 +322,10 @@ when `DisableAllPrivileges=TRUE`, leaving `CapturedPrivileges` at NULL.
     AttributesArray`.
 - C7 IOCTL access-bit encoding — N/A
 - C8 Output buffer aliasing / METHOD mismatch — N/A
-- [ ] C9 Pool exhaustion via attacker-controlled allocation
-  - Same shape as `NtAdjustGroupsToken`: user-sized allocation
-    bounded only by `MmUserProbeAddress`.  No quota check.  Wrap
-    above (C5) actually *caps* the allocation, ironically.
+- [x] C9 Pool exhaustion via attacker-controlled allocation
+  - `SeCaptureLuidAndAttributesArray` allocation is now capped by
+    `SEP_MAX_CAPTURE_COUNT (0x10000)` (P3) — worst case ~768 KB.
+    No per-process quota (broader infrastructure gap, not SE-local).
 - [x] C10 Uninitialized output / pool-contents leak
   - Output written by `SepAdjustPrivileges` per-entry; no block
     copy of kernel pool to user (modulo the C5 downstream concern).
@@ -459,17 +460,16 @@ check inside `SepCreateToken`.
     syscall's C5).
 - C7 IOCTL access-bit encoding — N/A
 - C8 Output buffer aliasing / METHOD mismatch — N/A
-- [ ] C9 Pool exhaustion via attacker-controlled allocation
-  - Multiple user-sized captures: `CapturedUser` (count=1,
-    bounded), `CapturedGroups` (user count), `CapturedPrivileges`
-    (user count), `CapturedOwner` / `CapturedPrimaryGroup`
-    (bounded SIDs), `CapturedDefaultDacl` (bounded by 16-bit
-    `AclSize`).  Groups and Privileges are the unbounded ones
-    — same exhaustion shape as the `NtAdjust*` syscalls.
-  - Also: `SeCaptureAcl` uses `NonPagedPool` (`:1583`) — the
-    one syscall in this file pulling on the precious non-paged
-    pool, again with attacker-controlled (though 16-bit
-    bounded) size.
+- [x] C9 Pool exhaustion via attacker-controlled allocation
+  - `CapturedGroups` and `CapturedPrivileges` now capped by
+    `SEP_MAX_CAPTURE_COUNT (0x10000)` (P3) — worst case ~5.5 MB
+    `PagedPool` per call.  `CapturedUser` (count=1),
+    `CapturedOwner`, `CapturedPrimaryGroup`, `CapturedDefaultDacl`
+    were already bounded by SID/ACL structural limits.
+  - Note: `SeCaptureAcl` uses `NonPagedPool` (`:1583`) — the one
+    syscall in this file pulling on the precious non-paged pool,
+    but bounded by 16-bit `AclSize`.  No per-process quota
+    (broader infrastructure gap, not SE-local).
 - [x] C10 Uninitialized output / pool-contents leak
   - Output is a single `HANDLE`.
 - [x] C11 Reference-count discipline under error paths
@@ -480,7 +480,8 @@ check inside `SepCreateToken`.
     duplicate).
   - Handle leak on the `*TokenHandle = LocalHandle` write fault
     at `:1703-1705` (same shape as Open*Token / DuplicateToken,
-    same minor-self-DoS classification).
+    same minor-self-DoS classification).  **Closed:** the except
+    arm now `NtClose(LocalHandle)`s before returning.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes
   - Returns a `HANDLE`.
 
@@ -506,21 +507,12 @@ inside `__try`.
   - No length-bearing parameter.
 - [x] C5 Integer overflow in size computation
   - No size arithmetic in the body.
-- [ ] C6 Semantic validation gaps — **finding**
-  - `:150-152` validates `TokenType` with the wrong logical
-    operator:
-    ```c
-    if ( (TokenType < TokenPrimary) && (TokenType > TokenImpersonation) )
-        return STATUS_INVALID_PARAMETER;
-    ```
-    With `TokenPrimary=1` and `TokenImpersonation=2` this is
-    `TokenType < 1 && TokenType > 2` — **always false**.  No
-    value of `TokenType` can satisfy both halves, so the check
-    is dead code.  Should be `||`.
-  - Vintage NT 3.5 typo.  Downstream `SepDuplicateToken` is
-    fail-soft on unknown `TokenType` values, so the immediate
-    consequence is "weird types pass through to the helper"
-    rather than corruption — but the gate is doing nothing.
+- [x] C6 Semantic validation gaps — **finding**
+  - `:150-152` originally used `&&` where `||` was meant:
+    `(TokenType < TokenPrimary) && (TokenType > TokenImpersonation)`
+    is always false (`TokenPrimary=1`, `TokenImpersonation=2`),
+    so the gate was dead code.  Now `||` — invalid `TokenType`
+    values reject with `STATUS_INVALID_PARAMETER`.
 - C7 IOCTL access-bit encoding — N/A
 - C8 Output buffer aliasing / METHOD mismatch — N/A
 - [x] C9 Pool exhaustion via attacker-controlled allocation
@@ -528,11 +520,12 @@ inside `__try`.
     token's structure (kernel-bounded), not by user input.
 - [x] C10 Uninitialized output / pool-contents leak
   - Output is a single `HANDLE`.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)**
   - Same handle-leak pattern as `NtOpenProcessToken` at
     `:332-333`: `*NewTokenHandle = LocalHandle` write fault
     leaves the new handle installed in the caller's table but
-    un-communicated.  Self-inflicted DoS only.
+    un-communicated.  Self-inflicted DoS only.  **Closed:** the
+    except arm now `NtClose(LocalHandle)`s before returning.
   - Source-token deref at `:323` is unconditional and reached on
     every success-or-error post-insert path — no source leak.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes
@@ -569,7 +562,7 @@ probed and written under `__try`; access-mask validation deferred to
   - No user-sized allocation in the syscall body.
 - [x] C10 Uninitialized output / pool-contents leak
   - Output is a single `HANDLE` value.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)**
   - At `:140-149` the post-success `*TokenHandle = LocalHandle`
     write sits in its own `__try`; on a fault (user unmaps the
     output page between probe at `:90` and write here), the
@@ -581,8 +574,8 @@ probed and written under `__try`; access-mask validation deferred to
   - Self-inflicted: only the caller is harmed.  Repeated
     triggering (deliberately invalidating own output buffer
     mid-call) can exhaust the caller's handle table — slow-burn
-    self-DoS.  Fix is `NtClose(LocalHandle)` before the `return
-    GetExceptionCode()` at `:146`.
+    self-DoS.  **Closed:** the except arm now `NtClose(LocalHandle)`s
+    before returning at `:146`.
   - Same pattern appears in `NtOpenThreadToken` below.  Common NT
     3.5 vintage idiom.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes
@@ -622,13 +615,13 @@ single-output (`TokenHandle`) probe/write pattern as
     by the *source* token (kernel-side), not user input.
 - [x] C10 Uninitialized output / pool-contents leak
   - Output is a single `HANDLE` value.
-- [ ] C11 Reference-count discipline under error paths — **finding (minor)**
+- [x] C11 Reference-count discipline under error paths — **finding (minor)**
   - Same handle-leak as `NtOpenProcessToken` above, at `:362-363`.
     `ObOpenObjectByPointer` (or `ObInsertObject` on the
     `CopyOnOpen` path at `:313`) has already installed the
     handle; the `*TokenHandle` write fault drops the handle name
-    on the floor.  Fix is `NtClose(LocalHandle)` before
-    `return GetExceptionCode()` at `:363`.
+    on the floor.  **Closed:** the except arm now
+    `NtClose(LocalHandle)`s before returning at `:363`.
   - Impersonation-state restore at `:341-346` *is* correctly
     placed before the user-write try, so the impersonation
     cleanup is sound on this fault path.
@@ -693,9 +686,10 @@ helper as `NtAdjustPrivilegesToken` and inherits the same C5 wrap.
     `SecurityIdentification` with `STATUS_BAD_IMPERSONATION_LEVEL`.
 - C7 IOCTL access-bit encoding — N/A
 - C8 Output buffer aliasing / METHOD mismatch — N/A
-- [ ] C9 Pool exhaustion via attacker-controlled allocation
-  - Same shape as the other capture-array syscalls: user-sized
-    `PagedPool` allocation in the helper, no per-process quota.
+- [x] C9 Pool exhaustion via attacker-controlled allocation
+  - Capped by `SEP_MAX_CAPTURE_COUNT (0x10000)` (P3) — worst case
+    ~768 KB.  No per-process quota (broader infrastructure gap,
+    not SE-local).
 - [x] C10 Uninitialized output / pool-contents leak
   - Output buffer is overwritten by `RtlMoveMemory` of the
     captured + attribute-stamped array; `SepPrivilegeCheck`
@@ -756,26 +750,21 @@ compute `RequiredLength` from kernel-side token state → `*ReturnLength
 - [x] C4 Length-field trust
   - `TokenInformationLength` is by-value (ULONG); used in
     `RequiredLength` comparison only.
-- [ ] C5 Integer overflow in size computation — **finding (minor)**
-  - `TokenGroups` arm at `:295-298`:
-    ```c
-    RequiredLength = sizeof(TOKEN_GROUPS) +
-                     ((Token->UserAndGroupCount - ANYSIZE_ARRAY - 1) *
-                     sizeof(SID_AND_ATTRIBUTES));
-    ```
-    For a token with `UserAndGroupCount==1` (no groups, just
-    user — possible for some restricted tokens),
-    `(1 - 1 - 1) = (ULONG)-1` underflows, multiplies to wrap.
-    `RequiredLength` ends up huge.  Write at `:315` reports the
-    huge value to the user as `*ReturnLength`; bounds check at
-    `:324` then almost always returns `STATUS_BUFFER_TOO_SMALL`.
-  - Consequence is a *bogus* `ReturnLength` value, not OOB
-    corruption — but user-mode code that re-allocates based on
-    `ReturnLength` could end up requesting absurd sizes.  Soft
-    finding.
+- [x] C5 Integer overflow in size computation — **finding (minor)**
+  - `TokenGroups` arm at `:295-298` originally used
+    `sizeof(TOKEN_GROUPS) + (UserAndGroupCount - ANYSIZE_ARRAY - 1) *
+    sizeof(SID_AND_ATTRIBUTES)` — for tokens with
+    `UserAndGroupCount==1` (no groups beyond user), the
+    `(1 - 1 - 1)` factor underflows a ULONG and `RequiredLength`
+    ends up huge.  User saw bogus `*ReturnLength` and almost
+    always got `STATUS_BUFFER_TOO_SMALL`.
+  - **Closed:** rewritten to compute from first principles —
+    `sizeof(ULONG) + (UserAndGroupCount - 1) *
+    sizeof(SID_AND_ATTRIBUTES)`.  Correct for all valid token
+    shapes (`UserAndGroupCount >= 1`), no underflow.
   - Sibling arms (`TokenPrivileges` at `:368`, etc.) compute
-    `RequiredLength` from kernel-side counts and don't have the
-    same off-by-one shape.
+    `RequiredLength` from kernel-side counts and didn't have the
+    same off-by-one shape — unchanged.
 - [x] C6 Semantic validation gaps
   - Each arm validates per its `TOKEN_QUERY` /
     `TOKEN_QUERY_SOURCE` access requirement via
@@ -1020,6 +1009,35 @@ Fixing **four** helper-side issues closes the bulk of the SE findings:
    raises STATUS_PRIVILEGE_NOT_HELD` covers the externally-visible
    behaviour (status code unchanged; rejection point now earlier).
 
-Remaining syscall-local issues (handle leaks, dead `TokenType`
-check, `*PrivilegeSetLength` outside `__try`, refcount leak at
-`ACCESSCK.C:1107`) are independent and need per-syscall fixes.
+Per-syscall closures:
+
+5. ~~Handle leaks on `*TokenHandle = LocalHandle` write fault~~ —
+   **done**.  `NtOpenProcessToken:146`, `NtOpenThreadToken:363`,
+   `NtDuplicateToken:332`, `NtCreateToken:1704` each now
+   `NtClose(LocalHandle)` in the except arm before returning.
+6. ~~Dead `TokenType` validation in `NtDuplicateToken`~~ — **done**.
+   `&&` → `||` at `TOKENDUP.C:150`; invalid `TokenType` now
+   rejects with `STATUS_INVALID_PARAMETER`.
+7. ~~Refcount + Privileges leak in `NtAccessCheck`~~ — **done**.
+   `ACCESSCK.C:1107` `STATUS_INVALID_SECURITY_DESCR` path now
+   releases Token, `CapturedSecurityDescriptor`, and `Privileges`.
+   Broader Privileges leak (success path + every post-capture
+   error return) closed by adding `SeFreePrivileges(Privileges)`
+   before each return.  `SeFreePrivileges` itself extended with a
+   NULL guard matching the SE release-helper pattern from P4.
+8. ~~`NtQueryInformationToken` `TokenGroups` arm underflow~~ —
+   **done**.  `TOKENQRY.C:295-297` rewritten to compute
+   `RequiredLength` from first principles
+   (`sizeof(ULONG) + N * sizeof(SID_AND_ATTRIBUTES)`) — no
+   underflow when `UserAndGroupCount == 1`.
+
+9. ~~`*PrivilegeSetLength` deref outside `__try` in `NtAccessCheck`~~
+   — **done**.  The original `ProbeForRead` at `ACCESSCK.C:866`
+   was followed by bare `*PrivilegeSetLength` reads at `:970` and
+   `:1012` outside any try block (a faulted page would have been
+   unhandled).  Now captured into `LocalPrivilegeSetLength` inside
+   the initial probe try and used everywhere downstream; the two
+   write-back sites at `:986` and `:1028` keep their own per-write
+   try guarding `*PrivilegeSetLength`.
+
+SE module audit complete.

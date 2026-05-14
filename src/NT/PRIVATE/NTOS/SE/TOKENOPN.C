@@ -143,6 +143,16 @@ Return Value:
 
         } except(EXCEPTION_EXECUTE_HANDLER) {
 
+            //
+            // The handle is already installed in the caller's handle
+            // table by ObOpenObjectByPointer above; if the *TokenHandle
+            // write faults, the handle name never reaches the caller
+            // and would otherwise leak into the caller's table until
+            // process exit.  Close it here to keep the failure
+            // self-contained.
+            //
+
+            NtClose(LocalHandle);
             return GetExceptionCode();
 
         }
@@ -359,8 +369,20 @@ Return Value:
     //
 
     if (NT_SUCCESS(Status)) {
-        try { *TokenHandle = LocalHandle; }
-            except(EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
+        try {
+            *TokenHandle = LocalHandle;
+        } except(EXCEPTION_EXECUTE_HANDLER) {
+
+            //
+            // Handle is already installed in the caller's table by
+            // the open/duplicate above; if *TokenHandle write faults,
+            // close it here so the handle name doesn't leak into the
+            // caller's table.
+            //
+
+            NtClose(LocalHandle);
+            return GetExceptionCode();
+        }
     }
 
     return Status;

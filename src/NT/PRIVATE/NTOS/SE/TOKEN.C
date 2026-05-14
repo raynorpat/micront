@@ -1701,8 +1701,19 @@ Return Value:
     //
 
     if (NT_SUCCESS(Status)) {
-        try { *TokenHandle = LocalHandle; }
-            except(EXCEPTION_EXECUTE_HANDLER) { return GetExceptionCode(); }
+        try {
+            *TokenHandle = LocalHandle;
+        } except(EXCEPTION_EXECUTE_HANDLER) {
+
+            //
+            // Handle is already installed in the caller's table by
+            // SepCreateToken's ObInsertObject; if *TokenHandle write
+            // faults, close it here so the handle name doesn't leak.
+            //
+
+            NtClose(LocalHandle);
+            return GetExceptionCode();
+        }
     }
 
     return Status;
