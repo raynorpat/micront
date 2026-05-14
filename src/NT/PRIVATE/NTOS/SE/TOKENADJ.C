@@ -306,21 +306,43 @@ Return Value:
     SepAcquireTokenWriteLock( Token );
 
     //
-    // First pass through the privileges list - just count the changes
+    // First pass through the privileges list - just count the changes.
+    //
+    // Wrapped in __try: SepAdjustPrivileges reads from the captured
+    // privileges array (kernel pool).  An exception here would
+    // otherwise propagate without a kernel SEH frame and bug-check
+    // KMODE_EXCEPTION_NOT_HANDLED.  The second-pass call below is
+    // already wrapped for the same reason.
     //
 
 
-    Status = SepAdjustPrivileges(
-                Token,
-                FALSE,                // Don't make changes this pass
-                DisableAllPrivileges,
-                CapturedPrivilegeCount,
+    try {
+
+        Status = SepAdjustPrivileges(
+                    Token,
+                    FALSE,                // Don't make changes this pass
+                    DisableAllPrivileges,
+                    CapturedPrivilegeCount,
+                    CapturedPrivileges,
+                    PreviousState,
+                    &LocalReturnLength,
+                    &ChangeCount,
+                    &ChangesMade
+                    );
+
+    } except(EXCEPTION_EXECUTE_HANDLER) {
+
+        SepReleaseTokenWriteLock( Token, FALSE );
+        ObDereferenceObject( Token );
+        if (CapturedPrivileges != NULL) {
+            SeReleaseLuidAndAttributesArray(
                 CapturedPrivileges,
-                PreviousState,
-                &LocalReturnLength,
-                &ChangeCount,
-                &ChangesMade
+                PreviousMode,
+                TRUE
                 );
+        }
+        return GetExceptionCode();
+    }
 
     if (ARGUMENT_PRESENT(PreviousState)) {
 
@@ -673,19 +695,41 @@ Return Value:
     // This pass is always necessary for groups to make sure the caller
     // isn't trying to do anything illegal to mandatory groups.
     //
+    // Wrapped in __try: SepAdjustGroups reads from the captured groups
+    // array (kernel pool) and from per-element SIDs.  An exception here
+    // would otherwise propagate without a kernel SEH frame and bug-check
+    // KMODE_EXCEPTION_NOT_HANDLED.  The second-pass call below is
+    // already wrapped for the same reason.
+    //
 
-    Status = SepAdjustGroups(
-                 Token,
-                 FALSE,                // Don't make changes this pass
-                 ResetToDefault,
-                 CapturedGroupCount,
-                 CapturedGroups,
-                 PreviousState,
-                 NULL,                // Not returning SIDs this call
-                 &LocalReturnLength,
-                 &ChangeCount,
-                 &ChangesMade
-                 );
+    try {
+
+        Status = SepAdjustGroups(
+                     Token,
+                     FALSE,                // Don't make changes this pass
+                     ResetToDefault,
+                     CapturedGroupCount,
+                     CapturedGroups,
+                     PreviousState,
+                     NULL,                // Not returning SIDs this call
+                     &LocalReturnLength,
+                     &ChangeCount,
+                     &ChangesMade
+                     );
+
+    } except(EXCEPTION_EXECUTE_HANDLER) {
+
+        SepReleaseTokenWriteLock( Token, FALSE );
+        ObDereferenceObject( Token );
+        if (ARGUMENT_PRESENT(CapturedGroups)) {
+            SeReleaseSidAndAttributesArray(
+                CapturedGroups,
+                PreviousMode,
+                TRUE
+                );
+        }
+        return GetExceptionCode();
+    }
 
     if (ARGUMENT_PRESENT(PreviousState)) {
 

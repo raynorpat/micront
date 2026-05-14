@@ -219,25 +219,32 @@ helper-side edit; benefits the whole kernel).
 
 ### P5 — First-pass helpers called without `__try`
 
-**Shape.**  `SepAdjustPrivileges` (`TOKENADJ.C:313`) and
-`SepAdjustGroups` (`TOKENADJ.C:677`) are called for the
-"counting" first pass before any user-side writes.  Both are
-called **outside any `__try` block** in their respective
-syscall entry points.  An OOB-read AV (from **P3**) inside the
-first-pass walk therefore escalates to
-`KMODE_EXCEPTION_NOT_HANDLED` and bug-checks the system.
+**Closed.**  Both first-pass `SepAdjust*` calls in
+`TOKENADJ.C` are now wrapped in `__try / __except`:
 
-**Reach (2 sites):**
+- `NtAdjustPrivilegesToken` first pass at `:313` matches the
+  existing second-pass cleanup at `:380-411` — release lock
+  with `FALSE`, dereference token, release captured array
+  (NULL-safe via P4), return `GetExceptionCode()`.
+- `NtAdjustGroupsToken` first pass at `:677` matches the
+  existing second-pass cleanup at `:774-801`.
 
-- `NtAdjustPrivilegesToken:313` calling `SepAdjustPrivileges`.
-- `NtAdjustGroupsToken:677` calling `SepAdjustGroups`.
+A future bug in `SepAdjust*` or any helper they call that
+takes a fault is now a clean error return rather than a
+system bug-check.  Combined with P3 (no current OOB-read
+primitive from hostile input) and P4 (no NULL-release DoS),
+the SE capture/adjust pipeline is structurally clean.
+Existing happy-path tests in `pkg/test/se.lua`
+(`adjust_privileges save_previous returns prior state`,
+`adjust_privileges with mixed enable/disable`, `adjust_groups:
+disable a group...`) cover the no-regression case.
 
-**Severity.**  Defense-in-depth — primary fix is P3.  But
-even after P3, defensive `__try` here prevents a future
-similar bug from immediately becoming a system DoS.
-
-**Fix shape.**  Wrap both first-pass calls in `__try /
-__except`.  ~10 lines each.
+**Original shape.**  `SepAdjustPrivileges` (`TOKENADJ.C:313`)
+and `SepAdjustGroups` (`TOKENADJ.C:677`) were called for the
+"counting" first pass before any user-side writes, both
+**outside any `__try` block**.  An OOB-read AV (from **P3**)
+inside the first-pass walk would escalate to
+`KMODE_EXCEPTION_NOT_HANDLED` and bug-check the system.
 
 ---
 
@@ -489,7 +496,7 @@ disclosures elsewhere.
 | P2 — NonPaged length cap | 1 helper + 6 syscall edits | ~80 lines (with new field) |
 | ~~P3 — Capture overflow~~ (closed: cap in `CAPTURE.C`) | 2 helpers | done |
 | ~~P4 — Release NULL~~ (closed: NULL guards in `CAPTURE.C`) | 5 helpers | done |
-| P5 — First-pass `__try` | 2 sites, ~10 lines each | ~20 lines |
+| ~~P5 — First-pass `__try`~~ (closed: both wrapped in `TOKENADJ.C`) | 2 sites | done |
 | P6 — Padding zero | ~20 arms, 1 line each | ~20 lines |
 | P7 — Kernel-pointer info | 2 sites, ~5 lines each | ~10 lines |
 | P8 — Phase-1 disclosure | 1 site, restructure | ~50 lines |

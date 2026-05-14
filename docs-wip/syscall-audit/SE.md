@@ -421,12 +421,21 @@ check inside `SepCreateToken`.
   - **Cap in place (capture layer only)** — both capture helpers
     now reject `count > SEP_MAX_CAPTURE_COUNT (0x10000)`.  The
     primary OOB primitives in the helpers themselves are no longer
-    reachable.  **Still open:** the `SepCreateToken` privilege
-    check at `TOKEN.C:2223` runs after `ObCreateObject` (P11), and
-    the five token-body loops at `:1934 / :1946 / :1982 / :2118 /
-    :2146` are now bounded by the cap but still operate on
-    attacker-shaped data — those structural fixes are independent
-    of P3.
+    reachable.  The five token-body loops at `:1934 / :1946 /
+    :1982 / :2118 / :2146` are now bounded by the cap but still
+    operate on attacker-shaped data — those structural fixes are
+    independent of P3.
+  - **Privilege check moved to top of `SepCreateToken`** — the
+    `SeSinglePrivilegeCheck(SeCreateTokenPrivilege, ...)` previously
+    at `TOKEN.C:2223` now runs immediately after `PAGED_CODE` at
+    the top of the function, before any allocation or per-element
+    processing.  Unprivileged callers reject with
+    `STATUS_PRIVILEGE_NOT_HELD` without driving `ObCreateObject`,
+    the mandatory-group attribute fix-up, the `SeChangeNotifyPrivilege`
+    scan, the owner search, the body allocation, or the dynamic-part
+    allocation.  The captures in `NtCreateToken`'s syscall body still
+    run (capped by P3), but the heavy work is gated.  System-token
+    boot path (`SystemToken=TRUE`) bypasses the check as before.
 - [x] C6 Semantic validation gaps
   - `TokenType` validity not checked at the syscall layer.
     `SepCreateToken` at `TOKEN.C:2090` stores `TokenType` into
@@ -995,13 +1004,21 @@ Fixing **four** helper-side issues closes the bulk of the SE findings:
    `NtPrivilegeCheck:418`.  Test:
    `pkg/test/fuzz/se.lua` `NtPrivilegeCheck succeeds on
    PrivilegeCount=0`.
-3. **Wrap first-pass `SepAdjust*` calls in `__try`** at
-   `TOKENADJ.C:313` and `:677`.  Turns OOB-read AVs into status
-   returns instead of bug-checks; defense-in-depth even with the
-   C5 fix.
-4. **Move `SeSinglePrivilegeCheck` to the top of `SepCreateToken`**
-   (before `ObCreateObject`).  Closes the unprivileged-reachability
-   on `NtCreateToken` for the new SepCreateToken-side primitives.
+3. ~~**Wrap first-pass `SepAdjust*` calls in `__try`**~~ — **done**.
+   Both first-pass calls at `TOKENADJ.C:313` and `:677` are now
+   wrapped, matching the existing second-pass cleanup shape.
+   Future faults in `SepAdjust*` return an error NTSTATUS rather
+   than bug-checking `KMODE_EXCEPTION_NOT_HANDLED`.
+4. ~~**Move `SeSinglePrivilegeCheck` to the top of `SepCreateToken`**~~
+   — **done**.  Check now runs immediately after `PAGED_CODE`, before
+   the mandatory-group fix-up loop, the `SeChangeNotifyPrivilege`
+   scan, `ObCreateObject`, body initialization, and the dynamic-part
+   allocation.  Unprivileged callers of `NtCreateToken` short-circuit
+   to `STATUS_PRIVILEGE_NOT_HELD` without driving any of that work.
+   `SystemToken=TRUE` boot path bypasses as before.  Test:
+   `pkg/test/se.lua` `create_token without SeCreateTokenPrivilege
+   raises STATUS_PRIVILEGE_NOT_HELD` covers the externally-visible
+   behaviour (status code unchanged; rejection point now earlier).
 
 Remaining syscall-local issues (handle leaks, dead `TokenType`
 check, `*PrivilegeSetLength` outside `__try`, refcount leak at

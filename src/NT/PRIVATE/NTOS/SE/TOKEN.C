@@ -1924,6 +1924,21 @@ Return Value:
 
     PAGED_CODE();
 
+    //
+    // SeCreateTokenPrivilege is required to create a token through
+    // this API.  Run the check up front so unprivileged callers
+    // reject before any pool allocation, object creation, or
+    // per-element processing of the captured input arrays.  The
+    // SystemToken=TRUE path is the kernel-internal initial-token
+    // boot and bypasses the check.
+    //
+
+    if (!SystemToken) {
+        if (!SeSinglePrivilegeCheck(SeCreateTokenPrivilege, RequestorMode)) {
+            return STATUS_PRIVILEGE_NOT_HELD;
+        }
+    }
+
     ASSERT( sizeof(SECURITY_IMPERSONATION_LEVEL) <= sizeof(ULONG) );
 
     //
@@ -2218,28 +2233,20 @@ Return Value:
                      );
 
         if ( NT_SUCCESS(Status) ) {
-            BOOLEAN PrivilegeHeld;
 
-            PrivilegeHeld = SeSinglePrivilegeCheck(
-                            SeCreateTokenPrivilege,
-                            KeGetPreviousMode()
-                            );
+            //
+            // SeCreateTokenPrivilege has already been verified at the
+            // top of SepCreateToken; ObInsertObject is the remaining
+            // work to publish the token under a handle.
+            //
 
-            if (PrivilegeHeld) {
-
-                Status = ObInsertObject( Token,
-                                         &AccessState,
-                                         0,
-                                         0,
-                                         (PVOID *)NULL,
-                                         TokenHandle
-                                         );
-
-            } else {
-
-                Status = STATUS_PRIVILEGE_NOT_HELD;
-                ObDereferenceObject( Token );
-            }
+            Status = ObInsertObject( Token,
+                                     &AccessState,
+                                     0,
+                                     0,
+                                     (PVOID *)NULL,
+                                     TokenHandle
+                                     );
 
             SeDeleteAccessState( &AccessState );
 
