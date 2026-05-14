@@ -32,15 +32,19 @@ whether the cage is, in fact, dynamite.
 
 ## Foundations that color every bug class below
 
-### SEH dispatcher correctness
+### SEH dispatcher
 
-Our `_KiKernelDispatch` builds no real trap frame, so the
-`saved-ebp` slot is read as `KTRAP_FRAME` and `fs:[0]` ends up
-pointing at garbage. See `project_seh_global_unwind2_bug` memory note.
-Until that's fixed, any kernel-side defense of the form "we caught
-the fault, returned an NTSTATUS" is built on sand — the unwind path
-itself can corrupt state. Any class below that says "mitigated by
-`__try` / `__except`" carries this footnote silently.
+Kernel-mode `Zw*` go through `_KiKernelDispatch`
+(`KE/I386/sysstubs.asm`), not INT 2Eh. For `NtContinue` and
+`NtRaiseException` — the two services that read `[ebp+0]` as
+`PKTRAP_FRAME` — `kkd_with_trap_frame` synthesizes a real
+`KTRAP_FRAME` on the kernel stack: `TsExceptionList` from real
+`fs:[0]`, `TsSegCs = KGDT_R0_CODE` with FRAME_EDITED bits set so
+`EXIT_ALL`'s iret-emulation path resumes at `CONTEXT.Eip:CONTEXT.Esp`
+with the saved chain head restored. The other ~190 services take
+a fast path with no trap frame. `RtlUnwind`'s `ZwContinue` round
+trip through this helper is what makes kernel-mode
+`__try` / `__except` sound.
 
 ### What probe actually guarantees
 
@@ -377,6 +381,13 @@ The classes above are universal. What matters for prioritization is
 
 ## Audit progress
 
+Per-syscall checkbox matrix lives under
+[`syscall-audit/`](syscall-audit/README.md) — one file per kernel
+subsystem (KE, IO, MM, OB, PS, SE, EX, LPC, CONFIG), one section per
+service in `_KiServiceTable` (182 total), with the 13 classes above as
+checkboxes under each.  Findings, mitigations, and references go inline
+under the relevant item as the audit advances.
+
 Format for findings as we accumulate them:
 
 ```
@@ -391,12 +402,12 @@ Seed entries (from prior work, not a complete audit):
 - Class 6 — `TCP/NTDISP.C:3300` — tier 2 — `IsDHCPZeroAddress` reads
   `sin_zero` as a typed flag. Type confusion as deliberate feature;
   documented here as a worked example.
-- Foundations — `_KiKernelDispatch` — universal — SEH unwind dispatcher
-  doesn't build a trap frame; see `project_seh_global_unwind2_bug`
-  memory note. Affects every class that says "mitigated by `__try`".
 
 ## Related docs
 
+- [`syscall-audit/`](syscall-audit/README.md) — per-syscall × bug-class
+  checkbox matrix, split by subsystem; the working surface for the
+  audit this doc maps.
 - [`SOCKET-SECURITY.md`](SOCKET-SECURITY.md) — sockets-specific access
   control and the AFD-opens-TDI-as-SYSTEM trick.
 - [`IPSTACK-HARDENING.md`](IPSTACK-HARDENING.md) — kernel TCP/IP stack

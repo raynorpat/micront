@@ -45,6 +45,18 @@ Revision History:
 
 #define LongAligned( ptr )  (LongAlign((ptr) == (ptr)))
 
+//
+// Upper bound on element counts accepted by the SID/LUID array
+// capture helpers.  Real callers pass a handful of entries -- a token's
+// groups or privileges, the privilege list for a check, etc.  The cap
+// is several orders of magnitude beyond any legitimate use and is
+// small enough that ArrayCount * sizeof(element) cannot wrap a ULONG.
+// Anything larger is rejected with STATUS_INVALID_PARAMETER before any
+// allocation or loop indexed by ArrayCount runs.
+//
+
+#define SEP_MAX_CAPTURE_COUNT  0x10000
+
 
 NTSTATUS
 SeCaptureSecurityDescriptor (
@@ -1319,6 +1331,16 @@ Return Value:
 
 
     //
+    // Reject counts that would overflow the size multiply below or
+    // request an unreasonably large kernel-pool allocation.  See
+    // SEP_MAX_CAPTURE_COUNT.
+    //
+
+    if (ArrayCount > SEP_MAX_CAPTURE_COUNT) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    //
     // Get the length needed to hold the array
     //
 
@@ -1607,6 +1629,17 @@ typedef struct _TEMP_ARRAY_ELEMENT {
     // loop just adds up the length needed.  Kernel mode, thus, avoids
     // having to allocate a temporary buffer.
     //
+
+    //
+    // Reject counts that would overflow the size multiply below, that
+    // would let the per-element first-pass loop walk an out-of-bounds
+    // TempArray, or that would request an unreasonably large
+    // kernel-pool allocation.  See SEP_MAX_CAPTURE_COUNT.
+    //
+
+    if (ArrayCount > SEP_MAX_CAPTURE_COUNT) {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     //
     // Get the length needed to hold the array elements.
