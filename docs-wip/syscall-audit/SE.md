@@ -212,6 +212,11 @@ the reset path.
     `SepAdjustGroups` writes) before the second-pass try at `:774`
     completes.  Exception fires → `:799` calls release on NULL →
     bug-check.  Local DoS primitive.
+  - **NULL guard in place** — `SeReleaseSidAndAttributesArray` now
+    early-returns on NULL (`CAPTURE.C`), so the `:799` unconditional
+    release no longer bug-checks.  The asymmetric guarding at the
+    syscall layer (`ARGUMENT_PRESENT` at four sites, raw at one) is
+    untouched — the helper-side guard makes both shapes safe.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes
   - Outputs are `NTSTATUS`, `ULONG`, and a `TOKEN_GROUPS` carrying
     `SID + attributes` — no kernel pointers.
@@ -707,6 +712,11 @@ helper as `NtAdjustPrivilegesToken` and inherits the same C5 wrap.
     `:392` try; same NULL-deref shape.
   - Fix: add `if (CapturedPrivileges != NULL)` around both
     release sites, *or* fix the helper to no-op on NULL.
+  - **NULL guard in place** — `SeReleaseLuidAndAttributesArray`
+    now early-returns on NULL (`CAPTURE.C`), so both the success-
+    path release at `:418` and the write-back-fault path at
+    `:406-414` are safe.  Test: `pkg/test/fuzz/se.lua`
+    `NtPrivilegeCheck succeeds on PrivilegeCount=0`.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes
   - Outputs are LUID + attribute fields + a `BOOLEAN` — no
     kernel pointers.
@@ -955,16 +965,14 @@ syscall checkboxes at once.
 - Reachable only through validated syscalls; no direct
   attacker-controlled inputs.
 
-### Release functions (`SeRelease*And…Array`, `SeReleaseSid`, `SeReleaseAcl`)
+### Release functions (`SeRelease*And…Array`, `SeReleaseSid`, `SeReleaseAcl`, `SeReleaseSecurityDescriptor`)
 
-- All call `ExFreePool(CapturedArray)` unconditionally when
-  `RequestorMode==UserMode` or `ForceCapture==TRUE`.  No NULL
-  check.
-- Realistically triggered today only via the two outlier sites
-  in `NtAdjustGroupsToken:799` and `NtPrivilegeCheck:418`; other
-  callers happen to gate releases with `if (Captured* != NULL)`.
-  Fixing the release helpers (defensive NULL check) closes both
-  outlier syscalls at once.
+- All five release helpers in `CAPTURE.C` early-return on NULL
+  before reaching `ExFreePool`.  `BAD_POOL_CALLER` bug-check on
+  NULL-release is no longer reachable at either outlier site
+  (`NtAdjustGroupsToken:799`, `NtPrivilegeCheck:418`).  Other
+  callers that already gated with `if (Captured* != NULL)` are
+  unaffected by the change.
 
 ## Fix-scope summary across SE
 
@@ -978,10 +986,15 @@ Fixing **four** helper-side issues closes the bulk of the SE findings:
    allocation.  Closes the C5 findings on `NtAdjustGroupsToken`,
    `NtAdjustPrivilegesToken`, `NtPrivilegeCheck`, and (capture-layer
    portion of) `NtCreateToken`.  Tests: `pkg/test/fuzz/se.lua`.
-2. **NULL-check in release helpers** (`SeReleaseLuidAndAttributesArray`,
-   `SeReleaseSidAndAttributesArray`, and as defensive hygiene
-   `SeReleaseSid`/`SeReleaseAcl`).  Closes the C11 findings on
-   `NtAdjustGroupsToken:799` and `NtPrivilegeCheck:418`.
+2. ~~**NULL-check in release helpers**~~ — **done**.  All five
+   release helpers in `CAPTURE.C` (`SeReleaseSecurityDescriptor`,
+   `SeReleaseSid`, `SeReleaseAcl`,
+   `SeReleaseLuidAndAttributesArray`,
+   `SeReleaseSidAndAttributesArray`) early-return on NULL.  Closes
+   the C11 findings on `NtAdjustGroupsToken:799` and
+   `NtPrivilegeCheck:418`.  Test:
+   `pkg/test/fuzz/se.lua` `NtPrivilegeCheck succeeds on
+   PrivilegeCount=0`.
 3. **Wrap first-pass `SepAdjust*` calls in `__try`** at
    `TOKENADJ.C:313` and `:677`.  Turns OOB-read AVs into status
    returns instead of bug-checks; defense-in-depth even with the

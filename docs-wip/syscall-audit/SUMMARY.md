@@ -175,9 +175,23 @@ not a bug-check.
 
 ### P4 — Release-helper NULL-pointer feed-through
 
-**Shape.**  `SeReleaseLuidAndAttributesArray`,
+**Closed.**  All five SE release helpers in `CAPTURE.C`
+(`SeReleaseSecurityDescriptor`, `SeReleaseSid`,
+`SeReleaseAcl`, `SeReleaseLuidAndAttributesArray`,
+`SeReleaseSidAndAttributesArray`) now early-return on NULL
+before reaching `ExFreePool`.  The two reach sites
+(`NtPrivilegeCheck:418` on `PrivilegeCount==0` and
+`NtAdjustGroupsToken:799` on `ResetToDefault=TRUE` + faulted
+second-pass write) no longer bug-check `BAD_POOL_CALLER`.
+Test: `pkg/test/fuzz/se.lua` `NtPrivilegeCheck succeeds on
+PrivilegeCount=0` exercises the success-path NULL release; the
+fault-path NULL release in `NtAdjustGroupsToken` is harder to
+trigger from userspace (needs a read-only `PreviousState`
+mapping) and is left untested.
+
+**Original shape.**  `SeReleaseLuidAndAttributesArray`,
 `SeReleaseSidAndAttributesArray`, `SeReleaseSid`,
-`SeReleaseAcl` all call `ExFreePool(CapturedArray)` without
+`SeReleaseAcl` all called `ExFreePool(CapturedArray)` without
 checking for NULL.  Modern Windows's `ExFreePool` handles NULL;
 NT 3.5's bug-checks `BAD_POOL_CALLER`.
 
@@ -474,7 +488,7 @@ disclosures elsewhere.
 | P1 — Handle leak | ~22 sites, ~5 lines each | ~110 lines |
 | P2 — NonPaged length cap | 1 helper + 6 syscall edits | ~80 lines (with new field) |
 | ~~P3 — Capture overflow~~ (closed: cap in `CAPTURE.C`) | 2 helpers | done |
-| P4 — Release NULL | 4 helpers, 1 line each + 2 call-site guards | ~10 lines |
+| ~~P4 — Release NULL~~ (closed: NULL guards in `CAPTURE.C`) | 5 helpers | done |
 | P5 — First-pass `__try` | 2 sites, ~10 lines each | ~20 lines |
 | P6 — Padding zero | ~20 arms, 1 line each | ~20 lines |
 | P7 — Kernel-pointer info | 2 sites, ~5 lines each | ~10 lines |

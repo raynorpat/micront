@@ -642,6 +642,16 @@ Return Value:
 
     PAGED_CODE();
 
+    //
+    // Tolerate NULL: a successful capture can leave the output
+    // pointer unset (e.g. ArrayCount == 0 paths), and ExFreePool(NULL)
+    // bug-checks BAD_POOL_CALLER here.
+    //
+
+    if (CapturedSecurityDescriptor == NULL) {
+        return;
+    }
+
     if ( ((RequestorMode == KernelMode) && (ForceCapture == TRUE)) ||
           (RequestorMode == UserMode ) ) {
 
@@ -972,6 +982,16 @@ Return Value:
 
     PAGED_CODE();
 
+    //
+    // Tolerate NULL: a successful capture can leave the output
+    // pointer unset (e.g. ArrayCount == 0 paths), and ExFreePool(NULL)
+    // bug-checks BAD_POOL_CALLER here.
+    //
+
+    if (CapturedSid == NULL) {
+        return;
+    }
+
     if ( ((RequestorMode == KernelMode) && (ForceCapture == TRUE)) ||
           (RequestorMode == UserMode ) ) {
 
@@ -1209,6 +1229,16 @@ Return Value:
     //
 
     PAGED_CODE();
+
+    //
+    // Tolerate NULL: a successful capture can leave the output
+    // pointer unset (e.g. ArrayCount == 0 paths), and ExFreePool(NULL)
+    // bug-checks BAD_POOL_CALLER here.
+    //
+
+    if (CapturedAcl == NULL) {
+        return;
+    }
 
     if ( ((RequestorMode == KernelMode) && (ForceCapture == TRUE)) ||
           (RequestorMode == UserMode ) ) {
@@ -1448,6 +1478,16 @@ Return Value:
     //
 
     PAGED_CODE();
+
+    //
+    // Tolerate NULL: a successful capture can leave the output
+    // pointer unset (e.g. ArrayCount == 0 paths), and ExFreePool(NULL)
+    // bug-checks BAD_POOL_CALLER here.
+    //
+
+    if (CapturedArray == NULL) {
+        return;
+    }
 
     if ( ((RequestorMode == KernelMode) && (ForceCapture == TRUE)) ||
           (RequestorMode == UserMode ) ) {
@@ -1929,6 +1969,16 @@ Return Value:
     //
 
     PAGED_CODE();
+
+    //
+    // Tolerate NULL: a successful capture can leave the output
+    // pointer unset (e.g. ArrayCount == 0 paths), and ExFreePool(NULL)
+    // bug-checks BAD_POOL_CALLER here.
+    //
+
+    if (CapturedArray == NULL) {
+        return;
+    }
 
     if ( ((RequestorMode == KernelMode) && (ForceCapture == TRUE)) ||
           (RequestorMode == UserMode ) ) {

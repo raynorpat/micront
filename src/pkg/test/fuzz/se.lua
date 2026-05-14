@@ -171,3 +171,24 @@ for _, hc in ipairs(HOSTILE_COUNTS) do
     end)
 end
 
+-- PrivilegeCount = 0 is a legitimate edge case: the capture helper
+-- early-returns *CapturedArray=NULL with STATUS_SUCCESS, then the
+-- success-path release in PRIVILEG.C:418 calls
+-- SeReleaseLuidAndAttributesArray(NULL, ...).  Without the NULL
+-- guard in the release helpers this bug-checks BAD_POOL_CALLER.
+t.test("NtPrivilegeCheck succeeds on PrivilegeCount=0 (NULL-release path)", function()
+    with_proc_token(se.TOKEN_QUERY, function(tok)
+        local buf = ffi.new('unsigned char[?]', 16)
+        local hdr = ffi.cast('PRIVILEGE_SET_HDR *', buf)
+        hdr.PrivilegeCount = 0
+        hdr.Control        = 0
+        local result = ffi.new('BOOLEAN[1]')
+        local st = errmod.normalize(
+            ntdll.NtPrivilegeCheck(handle.raw(tok), buf, result))
+        t.eq(st, STATUS_SUCCESS,
+             "expected STATUS_SUCCESS, got " .. string.format("0x%08x", st))
+        t.eq(result[0], 0,
+             "empty privilege set with Control=0 -> not held")
+    end)
+end)
+
