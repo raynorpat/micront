@@ -112,6 +112,17 @@ Return Value:
 
     requestorMode = KeGetPreviousMode();
 
+    //
+    // Reject obviously-huge buffer lengths up front; the EA buffer
+    // stages into NonPagedPool below.
+    //
+
+    if (requestorMode != KernelMode &&
+        (Length > IOP_MAX_TRANSFER_LENGTH ||
+         EaListLength > IOP_MAX_TRANSFER_LENGTH)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     if (requestorMode != KernelMode) {
 
         //
@@ -666,6 +677,14 @@ Return Value:
     //
 
     requestorMode = KeGetPreviousMode();
+
+    //
+    // Reject obviously-huge EA buffer lengths up front.
+    //
+
+    if (requestorMode != KernelMode && Length > IOP_MAX_TRANSFER_LENGTH) {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     if (requestorMode != KernelMode) {
 

@@ -241,7 +241,7 @@ handling all live in the helper.
   `KERNEL-ABI-HARDENING.md`).
 - C8 Output buffer aliasing / METHOD mismatch — N/A at this
   layer; per-driver.
-- [ ] C9 Pool exhaustion via attacker-controlled allocation — **finding**
+- [x] C9 Pool exhaustion via attacker-controlled allocation — **finding** *(closed: bounded by `IOP_MAX_TRANSFER_LENGTH` (P2))*
   - `INTERNAL.C:5166` allocates `max(InputBufferLength,
     OutputBufferLength)` from **NonPagedPoolCacheAligned** (the
     `poolType` at `:5141` for `DeviceIoControl=TRUE`).  Non-paged
@@ -352,7 +352,7 @@ as `NtDeviceIoControlFile` *except*:
   `CTL_CODE`-driven access-mask check).
 - C7 IOCTL access-bit encoding — N/A at this layer.
 - C8 Output buffer aliasing / METHOD mismatch — N/A at this layer.
-- [ ] C9 Pool exhaustion via attacker-controlled allocation — **finding**
+- [x] C9 Pool exhaustion via attacker-controlled allocation — **finding** *(closed: bounded by `IOP_MAX_TRANSFER_LENGTH` (P2))*
   - Same non-paged pool exhaustion shape as
     `NtDeviceIoControlFile`.  FSCTL is reachable on any file
     handle (including `\Device\NamedPipe\…` and
@@ -453,7 +453,7 @@ cancelled.
   access required.
 - C7 IOCTL access-bit encoding — N/A
 - C8 Output buffer aliasing / METHOD mismatch — N/A
-- [ ] C9 Pool exhaustion via attacker-controlled allocation — **finding**
+- [x] C9 Pool exhaustion via attacker-controlled allocation — **finding** *(closed: bounded by `IOP_MAX_TRANSFER_LENGTH` (P2))*
   - `IRP_MJ_DIRECTORY_CONTROL` IRPs are long-lived (pending until
     a notification fires).  Each open + notify request consumes
     non-paged pool for an IRP + MDL + per-driver buffer state.
@@ -577,7 +577,7 @@ bytes**, dispatches `IRP_MJ_DIRECTORY_CONTROL` /
 - [x] C6 Semantic validation gaps — `FILE_LIST_DIRECTORY` access.
 - C7 IOCTL access-bit encoding — N/A
 - C8 Output buffer aliasing / METHOD mismatch — N/A
-- [ ] C9 Pool exhaustion via attacker-controlled allocation — **finding**
+- [x] C9 Pool exhaustion via attacker-controlled allocation — **finding** *(closed: bounded by `IOP_MAX_TRANSFER_LENGTH` (P2))*
   - `DIR.C:457` `ExAllocatePoolWithQuota(NonPagedPool, Length)`
     — user-controlled length, non-paged pool.  Bounded by
     `MmUserProbeAddress` from the probe.  Same pattern as the

@@ -115,6 +115,18 @@ Return Value:
     requestorMode = KeGetPreviousMode();
 
     //
+    // Reject obviously-huge transfer lengths up front.  Buffered-I/O
+    // paths below stage the entire Length into NonPagedPool; without
+    // a cap, an unprivileged caller can drain non-paged pool with one
+    // syscall.  IOP_MAX_TRANSFER_LENGTH (32 MB) is several orders of
+    // magnitude beyond any legitimate single transfer.
+    //
+
+    if (requestorMode != KernelMode && Length > IOP_MAX_TRANSFER_LENGTH) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    //
     // Reference the file object so the target device can be found.  Note
     // that if the caller does not have read access to the file, the operation
     // will fail.

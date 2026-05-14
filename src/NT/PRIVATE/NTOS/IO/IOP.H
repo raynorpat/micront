@@ -61,6 +61,20 @@ typedef enum _TRANSFER_TYPE {
 #define IOP_MAXIMUM_LOG_ALLOCATION PAGE_SIZE
 
 //
+// Upper bound on per-call user-controlled lengths for I/O syscalls
+// that allocate from NonPagedPool to stage a transfer
+// (NtReadFile/NtWriteFile/NtDeviceIoControlFile/NtFsControlFile
+// buffered-I/O paths, NtQueryEaFile/NtSetEaFile,
+// NtQuery/SetInformationFile, NtQuery/SetVolumeInformationFile,
+// NtQueryDirectoryFile/NtNotifyChangeDirectoryFile).  Real workloads
+// don't approach this — the 32 MB ceiling prevents an unprivileged
+// caller from draining non-paged pool with one syscall.  Larger
+// transfers split into multiple IRPs.
+//
+
+#define IOP_MAX_TRANSFER_LENGTH (32 * 1024 * 1024)
+
+//
 // Define an error log entry.
 //
 

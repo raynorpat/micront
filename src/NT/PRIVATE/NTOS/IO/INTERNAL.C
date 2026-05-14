@@ -4804,6 +4804,20 @@ Return Value:
 
     requestorMode = KeGetPreviousMode();
 
+    //
+    // Reject obviously-huge user-supplied lengths up front.  Method-0
+    // IOCTLs stage max(InputBufferLength, OutputBufferLength) into
+    // NonPagedPool; unbounded, this drains the system non-paged pool.
+    // IOP_MAX_TRANSFER_LENGTH (32 MB) is several orders of magnitude
+    // beyond any legitimate single IOCTL.
+    //
+
+    if (requestorMode != KernelMode &&
+        (InputBufferLength > IOP_MAX_TRANSFER_LENGTH ||
+         OutputBufferLength > IOP_MAX_TRANSFER_LENGTH)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     if (requestorMode != KernelMode) {
 
         //

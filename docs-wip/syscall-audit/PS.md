@@ -151,20 +151,15 @@ context back to user.
 - [x] C9 Pool exhaustion via attacker-controlled allocation
   - `sizeof(GETSETCONTEXT)` non-paged pool per call — fixed
     size.  Quota debited.
-- [ ] C10 Uninitialized output / pool-contents leak
-  - `KeContextToKframes` (called inside the APC) writes only
-    fields requested by `ContextFlags`.  Fields *not*
-    requested are left untouched.  Since `Ctx->Context` lives
-    in a fresh pool allocation that is **not zero-initialized
-    by `ExAllocatePoolWithQuota`**, unrequested-field bytes
-    leak whatever was in that pool slot to user.
-  - Confirmed by inspection: the only zero-init at `:95` is
-    `RtlZeroMemory(&Ctx, sizeof(Ctx))` which zeros the
-    **pointer variable** (4 bytes), not the buffer.  Typo;
-    intent was probably `RtlZeroMemory(Ctx, sizeof(*Ctx))`
-    after the alloc.
-  - Fix shape: zero the `Ctx->Context` block after allocation
-    (or use `ExAllocatePoolWithQuotaTag`'s zero-init variant).
+- [x] C10 Uninitialized output / pool-contents leak *(closed: P10)*
+  - `KeContextToKframes` writes only fields requested by
+    `ContextFlags`; unrequested-field bytes used to leak the
+    pool slot's previous contents to user.  The cause was the
+    typo `RtlZeroMemory(&Ctx, sizeof(Ctx))` at `:95` zeroing the
+    4-byte pointer variable instead of the `GETSETCONTEXT` block.
+  - **Closed:** `PSCTX.C` now `RtlZeroMemory(Ctx, sizeof(GETSETCONTEXT))`
+    after the allocation (both `NtGetContextThread:95` and the
+    sibling at `NtSetContextThread:246` for consistency).
 - [x] C11 Reference-count discipline under error paths — **finding (minor)** *(closed: P1 handle-leak sweep)*
   - The user-write fault path at `:174-180` returns
     `STATUS_SUCCESS` even when the write faulted.  Caller
@@ -437,12 +432,10 @@ thread to apply it.
   - `sizeof(GETSETCONTEXT)` per call; fixed.
 - [x] C10 Uninitialized output / pool-contents leak — no output.
 - [x] C11 Reference-count discipline under error paths
-  - Same `RtlZeroMemory(&Ctx, sizeof(Ctx))` "zeros the pointer
-    variable, not the buffer" typo at `:246` — but here it
-    doesn't matter because the immediately-following
+  - The sibling of the P10 typo lived at `:246` (was benign:
     `RtlMoveMemory(&Ctx->Context, ThreadContext, sizeof(CONTEXT))`
-    at `:255` overwrites every byte of the context block from
-    user input.
+    at `:255` overwrote every byte from user input anyway).
+    Now fixed for consistency along with P10.
 - [x] C12 Kernel-address / kernel-pointer leak via info classes — none.
 - C13 Cancel / completion-routine races — N/A
 

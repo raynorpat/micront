@@ -92,8 +92,18 @@ Return Value:
 
     try {
 
-        RtlZeroMemory(&Ctx,sizeof(Ctx));
+        //
+        // Original code wrote `RtlZeroMemory(&Ctx, sizeof(Ctx))` which
+        // zeros the 4-byte pointer variable (clobbered by the assignment
+        // below) rather than the GETSETCONTEXT block.  Allocate first
+        // and zero the block itself so partial writes by
+        // KeContextToKframes (NtGetContextThread) don't leak adjacent
+        // pool slot contents.
+        //
         Ctx = ExAllocatePoolWithQuota(NonPagedPool,sizeof(GETSETCONTEXT));
+        if ( Ctx ) {
+            RtlZeroMemory(Ctx, sizeof(GETSETCONTEXT));
+        }
 
         if ( Mode != KernelMode) {
                 ProbeForWrite(ThreadContext, sizeof(CONTEXT), CONTEXT_ALIGN);
@@ -243,8 +253,18 @@ Return Value:
 
     try {
 
-        RtlZeroMemory(&Ctx,sizeof(Ctx));
+        //
+        // Original code wrote `RtlZeroMemory(&Ctx, sizeof(Ctx))` which
+        // zeros the 4-byte pointer variable (clobbered by the assignment
+        // below) rather than the GETSETCONTEXT block.  Allocate first
+        // and zero the block itself so partial writes by
+        // KeContextToKframes (NtGetContextThread) don't leak adjacent
+        // pool slot contents.
+        //
         Ctx = ExAllocatePoolWithQuota(NonPagedPool,sizeof(GETSETCONTEXT));
+        if ( Ctx ) {
+            RtlZeroMemory(Ctx, sizeof(GETSETCONTEXT));
+        }
 
         Ctx->Mode = Mode;
 

@@ -67,39 +67,57 @@ target.
 
 ### P2 — User-controlled `NonPagedPool` length
 
-**Shape.**  IRP-issuing syscalls in IO allocate a system buffer
-sized by the user's `Length` parameter via
-`ExAllocatePoolWithQuota(NonPagedPool, Length)`.  Length is
-bounded only by `MmUserProbeAddress` (~2 GB).  Quota tracking
-debits the caller process, but a single huge allocation can
-exhaust non-paged pool before quota throttles it — affecting
-every other process on the system.
+**Closed.**  `IOP_MAX_TRANSFER_LENGTH = 32 MB` defined in
+`IO/IOP.H`; every user-mode entry point in the reach list rejects
+out-of-cap lengths with `STATUS_INVALID_PARAMETER` before any
+allocation runs:
 
-**Reach (13 sites):**
+- `NtReadFile` / `NtWriteFile` — cap on `Length`.
+- `NtDeviceIoControlFile` / `NtFsControlFile` (via
+  `IopXxxControlFile`) — cap on both `InputBufferLength` and
+  `OutputBufferLength`.
+- `NtQueryEaFile` / `NtSetEaFile` — cap on `Length` (and
+  `EaListLength` on the query side).
+- `NtQueryInformationFile` / `NtSetInformationFile`,
+  `NtQueryVolumeInformationFile` / `NtSetVolumeInformationFile`,
+  `NtQueryDirectoryFile` / `NtNotifyChangeDirectoryFile` — cap
+  on `Length`.
+
+The simpler global-cap approach was chosen over the audit's
+per-driver `DriverMaxIoSize` proposal: no `DRIVER_OBJECT` layout
+change, no per-driver tuning surface, no I/O manager splitting
+logic.  32 MB is several orders of magnitude beyond any
+legitimate single transfer; larger transfers split into multiple
+syscalls naturally.  Per-process quota is unchanged.
+
+**Original shape.**  User-supplied `Length` /
+`{Input,Output}BufferLength` parameters fed straight to
+`ExAllocatePoolWithQuota` on `NonPagedPool` (or
+`NonPagedPoolCacheAligned`), bounded only by `MmUserProbeAddress`
+(~2 GB).  Quota tracking debited the caller's process, but a
+single huge allocation could exhaust the system pool before
+quota throttled it — affecting every other process.
+
+**Original reach list (now all closed):**
 
 | Syscall | Source |
 | --- | --- |
-| `NtDeviceIoControlFile` / `NtFsControlFile` | `INTERNAL.C:5166` (`IopXxxControlFile`) |
+| `NtDeviceIoControlFile` / `NtFsControlFile` | `INTERNAL.C` (`IopXxxControlFile`) |
 | `NtReadFile`, `NtWriteFile` | `READ.C` / `WRITE.C` system-buffer paths |
-| `NtQueryEaFile`, `NtSetEaFile` | `QSEA.C:469`, `QSEA.C:857` |
-| `NtQueryInformationFile`, `NtSetInformationFile` | `QSINFO.C:448`, `QSINFO.C:1120` |
-| `NtQueryVolumeInformationFile`, `NtSetVolumeInformationFile` | `QSFS.C:401`, `QSFS.C:715` |
-| `NtQueryDirectoryFile`, `NtNotifyChangeDirectoryFile` | `DIR.C:457`, `DIR.C:874` |
+| `NtQueryEaFile`, `NtSetEaFile` | `QSEA.C` |
+| `NtQueryInformationFile`, `NtSetInformationFile` | `QSINFO.C` |
+| `NtQueryVolumeInformationFile`, `NtSetVolumeInformationFile` | `QSFS.C` |
+| `NtQueryDirectoryFile`, `NtNotifyChangeDirectoryFile` | `DIR.C` |
 
-**Severity.**  System-wide DoS via non-paged pool exhaustion.
-Any process with a file/device handle (i.e. nearly all
-processes) can trigger.
+**Severity (when present).**  System-wide DoS via non-paged
+pool exhaustion.  Any process with a file/device handle (i.e.
+nearly all processes) could trigger.
 
-**Fix shape.**  Per-device `MAX_TRANSFER_SIZE` advertisement.
-The `DRIVER_OBJECT` gains a `DriverMaxIoSize` field; the I/O
-manager rejects calls that exceed it.  Default to a sane
-upper bound (e.g. 32 MB) for legacy drivers that don't set
-the field.  Splits large transfers across multiple IRPs in
-the I/O manager.
-
-Alternative: a tighter per-process aggregate non-paged-pool
-reservation throttle.  More invasive (touches quota
-machinery); less surgical.
+Alternatives considered but not chosen: per-device
+`DRIVER_OBJECT.DriverMaxIoSize` advertisement (more structural;
+adds driver-side ABI surface, splitting logic in the I/O
+manager).  Per-process aggregate non-paged-pool reservation
+throttle (more invasive; touches quota machinery).
 
 ---
 
@@ -349,36 +367,29 @@ status.  ~10-line reorder in `COMPLETE.C`.
 
 ### P10 — `NtGetContextThread` pool-block zero typo
 
-**Shape.**  `PSCTX.C:95-96`:
-
-```c
-RtlZeroMemory(&Ctx, sizeof(Ctx));   // zeros pointer variable (4 bytes!)
-Ctx = ExAllocatePoolWithQuota(NonPagedPool, sizeof(GETSETCONTEXT));
-```
-
-Intent was clearly to zero the allocated buffer after the
-alloc; actual effect is zeroing the local pointer variable
-before assignment (harmless but useless).  Combined with
-`KeContextToKframes` only writing fields requested by
-`ContextFlags`, unrequested-category bytes in the
-`Ctx->Context` block leak kernel pool slot contents to user.
-
-**Reach (1 site):** `NtGetContextThread`.
-
-**Severity.**  Per-`CONTEXT`-class kernel-pool disclosure.
-Reachable by any process with `THREAD_GET_CONTEXT` on a
-target thread.
-
-**Fix shape.**  Swap the order and fix the target:
+**Closed.**  Both occurrences of the typo in `PS/PSCTX.C`
+(`NtGetContextThread:95` and the benign sibling in
+`NtSetContextThread:246`) have been swapped to allocate-then-
+zero-the-block:
 
 ```c
 Ctx = ExAllocatePoolWithQuota(NonPagedPool, sizeof(GETSETCONTEXT));
-if (Ctx) RtlZeroMemory(Ctx, sizeof(*Ctx));
+if (Ctx) {
+    RtlZeroMemory(Ctx, sizeof(GETSETCONTEXT));
+}
 ```
 
-One-line fix in `PSCTX.C`.  The same typo exists at
-`PSCTX.C:246` in `NtSetContextThread` but is benign there
-(overwritten by the move).
+`KeContextToKframes` writes only fields requested by
+`ContextFlags`, so without the zero the unrequested
+fields used to leak kernel pool slot contents to user.
+
+**Original shape.**  `RtlZeroMemory(&Ctx, sizeof(Ctx))` zeroed
+the 4-byte pointer variable (immediately clobbered by the
+assignment below), not the `GETSETCONTEXT` allocation.
+
+**Severity (when present).**  Per-`CONTEXT`-class kernel-pool
+disclosure.  Reachable by any process with `THREAD_GET_CONTEXT`
+on a target thread.
 
 ---
 
@@ -498,7 +509,7 @@ disclosures elsewhere.
 | Pattern | Edits | Effort |
 | --- | --- | --- |
 | ~~P1 — Handle leak~~ (closed kernel-wide) | 22+ sites | done |
-| P2 — NonPaged length cap | 1 helper + 6 syscall edits | ~80 lines (with new field) |
+| ~~P2 — NonPaged length cap~~ (closed: `IOP_MAX_TRANSFER_LENGTH`) | 1 header + 6 syscall files | done |
 | ~~P3 — Capture overflow~~ (closed: cap in `CAPTURE.C`) | 2 helpers | done |
 | ~~P4 — Release NULL~~ (closed: NULL guards in `CAPTURE.C`) | 5 helpers | done |
 | ~~P5 — First-pass `__try`~~ (closed: both wrapped in `TOKENADJ.C`) | 2 sites | done |
@@ -506,7 +517,7 @@ disclosures elsewhere.
 | P7 — Kernel-pointer info | 2 sites, ~5 lines each | ~10 lines |
 | P8 — Phase-1 disclosure | 1 site, restructure | ~50 lines |
 | P9 — IOCP data-loss | 1 site, reorder | ~10 lines |
-| P10 — Pool zero typo | 1 site, 2 lines | ~2 lines |
+| ~~P10 — Pool zero typo~~ (closed: alloc-then-zero in `PSCTX.C`) | 2 sites | done |
 | P11 — Must-succeed fallback | 1 site, drop fallback | ~5 lines |
 | ~~P12 — `NtAccessCheck` adhoc~~ (closed: SE wrap-up commit) | 4 sites | done |
 | **Subtotal — direct fixes** | **~60 edits** | **~400 lines** |

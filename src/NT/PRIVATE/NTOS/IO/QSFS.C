@@ -98,6 +98,15 @@ Return Value:
 
     requestorMode = KeGetPreviousMode();
 
+    //
+    // Reject obviously-huge buffer lengths up front; FS-information
+    // arms below stage into NonPagedPool.
+    //
+
+    if (requestorMode != KernelMode && Length > IOP_MAX_TRANSFER_LENGTH) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     if (requestorMode != KernelMode) {
 
         //
@@ -525,6 +534,15 @@ Return Value:
     //
 
     requestorMode = KeGetPreviousMode();
+
+    //
+    // Reject obviously-huge buffer lengths up front; FS-information
+    // arms below stage into NonPagedPool.
+    //
+
+    if (requestorMode != KernelMode && Length > IOP_MAX_TRANSFER_LENGTH) {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     if (requestorMode != KernelMode) {
 
