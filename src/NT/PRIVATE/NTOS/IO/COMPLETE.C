@@ -543,21 +543,38 @@ Return Value:
                 //
 
                 Status = STATUS_SUCCESS;
+                Irp = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
+
+                LocalApcContext = Irp->Overlay.AsynchronousParameters.UserApcContext;
+                LocalKeyContext = (PVOID)Irp->Tail.CompletionKey;
+                LocalIoStatusBlock = Irp->IoStatus;
+
                 try {
-                    Irp = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
 
-                    LocalApcContext = Irp->Overlay.AsynchronousParameters.UserApcContext;
-                    LocalKeyContext = (PVOID)Irp->Tail.CompletionKey;
-                    LocalIoStatusBlock = Irp->IoStatus;
-
-                    IoFreeIrp(Irp);
+                    //
+                    // Deliver the completion to the user buffers before
+                    // releasing the IRP.  If a write faults, the entry has
+                    // not been consumed, so the IRP must stay intact for
+                    // the exception handler to re-queue it.
+                    //
 
                     *ApcContext = LocalApcContext;
                     *KeyContext = LocalKeyContext;
                     *IoStatusBlock = LocalIoStatusBlock;
 
+                    IoFreeIrp(Irp);
+
                 } except(ExSystemExceptionFilter()) {
-                    NOTHING;
+
+                    //
+                    // A user-buffer write faulted.  Put the completion
+                    // entry back on the queue (its IRP is still valid)
+                    // and fail the call, rather than silently dropping
+                    // the completion and returning STATUS_SUCCESS.
+                    //
+
+                    KeInsertQueue((PKQUEUE)IoCompletion, Entry);
+                    Status = GetExceptionCode();
                 }
             }
 

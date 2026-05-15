@@ -504,6 +504,7 @@ ULONG IopSetOperationAccess[FileMaximumInformation] =
             0,                      // mailslot set
             0,                      // compressed file sie - invalid for set
             0,                      // copy on write [any access to the file]
+            0,                      // completion [any access to the file]
             FILE_WRITE_DATA,        // move cluster [write access to the file]
             FILE_WRITE_ATTRIBUTES,  // storage
           };

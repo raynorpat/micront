@@ -76,6 +76,13 @@ typedef struct _FILE_DISPOSITION_INFORMATION {
     unsigned char DeleteFile;
 } FILE_DISPOSITION_INFORMATION;
 
+/* Flat (HANDLE + ULONG, both 4 bytes) — pack-agnostic, but it sits in
+ * the pack(4) block alongside the other FILE_*_INFORMATION types. */
+typedef struct _FILE_COMPLETION_INFORMATION {
+    HANDLE Port;
+    ULONG  Key;
+} FILE_COMPLETION_INFORMATION;
+
 #pragma pack(pop)
 
 /* FILE_RENAME_INFORMATION is variable-length: header + inline FileName.
@@ -318,6 +325,7 @@ local FileRenameInformation      = 10
 local FileDispositionInformation = 13
 local FilePositionInformation    = 14
 local FileEndOfFileInformation   = 20
+local FileCompletionInformation  = 30
 
 M.FileBasicInformation       = FileBasicInformation
 M.FileStandardInformation    = FileStandardInformation
@@ -325,6 +333,7 @@ M.FileRenameInformation      = FileRenameInformation
 M.FileDispositionInformation = FileDispositionInformation
 M.FilePositionInformation    = FilePositionInformation
 M.FileEndOfFileInformation   = FileEndOfFileInformation
+M.FileCompletionInformation  = FileCompletionInformation
 
 -- Query fixed-size file info. Returns a freshly-allocated cdata of the
 -- requested class. NT 3.5 strict-checks Length == sizeof for fixed
@@ -395,6 +404,26 @@ function M.set_end_of_file(h, length)
     M.NtSetInformationFile(h, info,
                            ffi.sizeof('FILE_END_OF_FILE_INFORMATION'),
                            FileEndOfFileInformation)
+end
+
+-- Associate `file_handle` with an I/O completion `port` so that
+-- completions of async I/O on the file queue a packet to the port.
+-- `port` is an NT_HANDLE for an IoCompletion object; `key` is an opaque
+-- ULONG echoed back as the KeyContext of every drained completion
+-- (default 0).
+--
+-- The file must have been opened for ASYNCHRONOUS I/O — the kernel
+-- (QSINFO.C:1393) rejects a synchronous handle (one opened with a
+-- FILE_SYNCHRONOUS_IO_* option) or a handle already associated with a
+-- port, both as STATUS_INVALID_PARAMETER. Note also that the kernel
+-- only queues a port packet for I/O that carried a non-NULL ApcContext.
+function M.set_completion_port(file_handle, port, key)
+    local info = ffi.new('FILE_COMPLETION_INFORMATION')
+    info.Port = handle.raw(port)
+    info.Key  = key or 0
+    M.NtSetInformationFile(file_handle, info,
+                           ffi.sizeof('FILE_COMPLETION_INFORMATION'),
+                           FileCompletionInformation)
 end
 
 -- Rename via FILE_RENAME_INFORMATION. `new_name` is a UTF-8 Lua string;

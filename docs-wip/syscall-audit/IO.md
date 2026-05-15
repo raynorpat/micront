@@ -776,24 +776,21 @@ writes the captured completion data to user.
 - C7 IOCTL access-bit encoding — N/A
 - C8 Output buffer aliasing / METHOD mismatch — N/A
 - [x] C9 Pool exhaustion via attacker-controlled allocation — none.
-- [ ] C11 Reference-count discipline under error paths — **finding (data-loss)**
-  - At `:534-549` the inner `try` writes
+- [x] C11 Reference-count discipline under error paths — **finding (data-loss)** *(closed: P9 reorder + re-queue)*
+  - Was: the inner `try` wrote
     `LocalApcContext` / `LocalKeyContext` / `LocalIoStatusBlock`
-    to user **after** `IoFreeIrp(Irp)` has already returned the
+    to user **after** `IoFreeIrp(Irp)` had already returned the
     IRP to the pool.  On `except NOTHING`, the completion
-    record is gone, `Status` remains `STATUS_SUCCESS` from
-    `:533`, and the caller receives success status with
-    uninitialized output pointers.
-  - The completion event is **consumed and lost** — the IRP
-    cannot be re-completed; the caller doesn't know the data
-    is gone.  Triggerable by guard-page-after-first-page on
-    any of the three output pointers; classic data-loss
-    primitive against IOCP-using servers.
-  - Fix shape: write the three outputs *before* `IoFreeIrp` (so
-    a fault leaves the IRP intact for re-completion), or
-    capture the IRP back into the queue under cancel.  Or set
-    `Status = STATUS_ACCESS_VIOLATION` in the except (and
-    re-queue or log the lost completion).
+    record was gone, `Status` stayed `STATUS_SUCCESS`, and the
+    caller received success status with uninitialized output
+    pointers — the completion event **consumed and lost**, a
+    classic data-loss primitive against IOCP-using servers.
+  - Fixed: the three user writes now happen *before* `IoFreeIrp`
+    (which only runs once the writes succeed).  On a faulted
+    write the `except` arm re-queues the still-intact IRP via
+    `KeInsertQueue((PKQUEUE)IoCompletion, Entry)` and returns
+    `GetExceptionCode()`, so the completion stays on the port
+    and the caller sees an error rather than false success.
 - [x] C10 Uninitialized output / pool-contents leak — outputs
   written from `LocalX` locals (initialized from the IRP).
 - [x] C12 Kernel-address / kernel-pointer leak via info classes
@@ -848,8 +845,12 @@ buffer, copies user data, dispatches `IRP_MJ_SET_INFORMATION`.
 - [x] C5 Integer overflow in size computation — none at this
   layer.
 - [x] C6 Semantic validation gaps — per-class access lookup
-  (`IoSetAccessRights[]`).  Rename/link operations capture
-  target paths under separate guards.
+  (`IopSetOperationAccess[]`).  Rename/link operations capture
+  target paths under separate guards.  **P13:** that table was
+  off-by-one — missing its `FileCompletionInformation` entry, so
+  classes 30+ checked the next class's access right (notably
+  `FileStorageInformation` fell off the end → required `0`).
+  Fixed in `IODATA.C`.
 - C7 IOCTL access-bit encoding — N/A
 - C8 Output buffer aliasing / METHOD mismatch — N/A
 - [ ] C9 Pool exhaustion via attacker-controlled allocation
@@ -999,15 +1000,19 @@ probe + IRP dispatch shape.
    `IoCreateFile` (to be confirmed when that helper is audited).
 
 3. **`NtRemoveIoCompletion` completion-data-loss on write fault**
-   — the inner `try { *KeyContext = ...; *ApcContext = ...;
-   *IoStatusBlock = ...; } except { NOTHING }` at
-   `COMPLETE.C:534-549` writes the three outputs **after**
-   `IoFreeIrp(Irp)` has already freed the IRP.  On fault, the
-   completion event is consumed and lost (IRP gone), caller
-   receives `STATUS_SUCCESS` from `:533` with uninitialized
-   output pointers.  Triggerable by guard-page-after-first-page
-   on any of the three output pointers — classic data-loss
-   primitive against IOCP-using servers.
+   *(closed)* — the inner `try { *KeyContext = ...;
+   *ApcContext = ...; *IoStatusBlock = ...; } except { NOTHING }`
+   at `COMPLETE.C:534-549` wrote the three outputs **after**
+   `IoFreeIrp(Irp)` had already freed the IRP.  On fault, the
+   completion event was consumed and lost (IRP gone), caller
+   received `STATUS_SUCCESS` with uninitialized output pointers.
+   The faulting write is a TOCTOU window: the outer probe
+   (`ProbeForWriteLong` / `ProbeForWriteIoStatus`) touches the
+   same bytes the inner write does, so a static bad page is
+   caught by the probe — the inner write faults only when a
+   concurrent thread re-protects or frees an output buffer
+   between probe and write.  Classic data-loss primitive
+   against IOCP-using servers.
 
 4. **Fast-IO path status-reporting inconsistency** in
    `IopXxxControlFile:5025-5030` — after `FastIoDeviceControl`
@@ -1015,6 +1020,16 @@ probe + IRP dispatch shape.
    only records the AV into `localIoStatus.Status`; the IRP
    work already completed and the user-event was signalled.
    Caller sees `STATUS_ACCESS_VIOLATION` despite success.
+
+5. **`NtSetInformationFile` access-table off-by-one** *(closed)*
+   — `IopSetOperationAccess[]` in `IODATA.C` was missing its
+   `FileCompletionInformation` initializer, so `NtSetInformationFile`
+   (`QSINFO.C:924`) checked the wrong required-access right for
+   every class from `FileCompletionInformation` (30) up.  Worst
+   effect: `FileStorageInformation` fell off the end of the
+   initializer and required `0` (any access) instead of
+   `FILE_WRITE_ATTRIBUTES`.  Caught against `IopSetOperationLength[]`,
+   the parallel table, which has all 33 entries.  See SUMMARY P13.
 
 ### Fix shape
 
@@ -1038,18 +1053,25 @@ probe + IRP dispatch shape.
    the handle is reaped on output-write fault.  Same fix as in
    SE / OB.
 
-3. **`NtRemoveIoCompletion` data-loss** — swap the order so
-   the user-side writes happen *before* `IoFreeIrp`, and on
-   except status from those writes, re-queue the entry back to
-   `IoCompletion` (or leave the IRP allocated and return an
-   error status so the caller can retry).  Two ~10-line edits
-   in `COMPLETE.C:534-549`.
+3. **`NtRemoveIoCompletion` data-loss** — **done.**  The
+   user-side writes now happen *before* `IoFreeIrp` (which only
+   runs once they succeed).  On a faulted write the `except`
+   arm re-queues the still-intact IRP via
+   `KeInsertQueue((PKQUEUE)IoCompletion, Entry)` and returns
+   `GetExceptionCode()`, so the completion stays on the port
+   and the caller sees an error instead of false success.
 
 4. **Fast-IO status inconsistency** — in
    `IopXxxControlFile:5025-5030`, on except, set the user-status
    return to `STATUS_ACCESS_VIOLATION` *and* avoid signalling
    the event, so the caller sees the failure consistently.
    Modest edit; preserves fast-IO performance.
+
+5. **SetInfo access-table off-by-one** — **done.**  Inserted the
+   missing `0,  // completion` initializer in
+   `IopSetOperationAccess[]` (`IODATA.C`), realigning the table
+   with the `FILE_INFORMATION_CLASS` enum and with
+   `IopSetOperationLength[]`.
 
 ### Deferred helper audits
 

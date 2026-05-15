@@ -181,26 +181,8 @@ t.test("event_pair: two threads rendezvous via set-and-wait atomics", function()
     ep:close()
 end)
 
--- ------------------------------------------------------------------
--- IoCompletion
--- ------------------------------------------------------------------
-
--- NT 3.5 has no NtSetIoCompletion — completions only land here via
--- file-handle association + async I/O. The tests below exercise what
--- we CAN do without that: create, query depth, remove-with-timeout
--- on an empty port (which returns nil, not an error).
-
-t.test("iocompletion: empty port has depth 0", function()
-    local c = ex.iocompletion{ concurrent_threads = 1 }
-    t.eq(c:depth(), 0)
-    c:close()
-end)
-
-t.test("iocompletion: remove on empty port times out and returns nil", function()
-    local c = ex.iocompletion{ concurrent_threads = 1 }
-    t.eq(c:remove(0.05), nil, "empty remove → nil on timeout")
-    c:close()
-end)
+-- IoCompletion has its own suite — see test/iocp.lua (idiomatic +
+-- concurrency) and test/fuzz/iocp.lua (raw-ntdll adversarial cases).
 
 -- Cross-thread Event signaling is covered implicitly: Event signal/wait
 -- semantics are tested same-thread above, and cross-thread sync is

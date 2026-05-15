@@ -344,24 +344,34 @@ and copy with a single `__try`.
 
 ### P9 — `NtRemoveIoCompletion` data-loss on user-write fault
 
-**Shape.**  At `COMPLETE.C:534-549`, the inner `try` writes
-`*KeyContext` / `*ApcContext` / `*IoStatusBlock` **after**
-`IoFreeIrp(Irp)` has returned the IRP to the pool.  On
-user-write fault, the completion event is consumed and gone;
-caller receives `STATUS_SUCCESS` (set unconditionally at
-`:533`) with uninitialized output pointers.
+**Closed.**  `NtRemoveIoCompletion` (`COMPLETE.C`) now writes
+the three user outputs (`*ApcContext` / `*KeyContext` /
+`*IoStatusBlock`) from kernel-side locals *before* calling
+`IoFreeIrp`, all inside the inner `try`.  If a user-buffer
+write faults, the `except` arm re-queues the still-intact IRP
+via `KeInsertQueue` and returns `GetExceptionCode()` instead of
+the previously-unconditional `STATUS_SUCCESS`.  The completion
+is no longer consumed-and-lost on a faulted delivery: the
+caller gets an error status and the entry stays on the port
+for a later `NtRemoveIoCompletion` to drain.
+
+**Original shape.**  At `COMPLETE.C:534-549`, the inner `try`
+wrote `*KeyContext` / `*ApcContext` / `*IoStatusBlock` **after**
+`IoFreeIrp(Irp)` had returned the IRP to the pool.  On
+user-write fault, the completion event was consumed and gone;
+the caller received `STATUS_SUCCESS` (set unconditionally)
+with uninitialized output pointers.
 
 **Reach (1 site):** `NtRemoveIoCompletion`.
 
-**Severity.**  Classic IOCP-server data-loss primitive.
-Triggerable via guard-page-after-first-page on any of the
-three output pointers.  Server thinks it processed the
-completion; the actual data is lost.
-
-**Fix shape.**  Write the three user outputs *before*
-`IoFreeIrp`.  On except, re-queue the entry to the completion
-or leave the IRP allocated and return a retryable error
-status.  ~10-line reorder in `COMPLETE.C`.
+**Severity (when present).**  Classic IOCP-server data-loss
+primitive: the server thinks it processed the completion while
+the actual data is lost.  The faulting write is a TOCTOU
+window — `COMPLETE.C`'s outer probe (`ProbeForWriteLong` /
+`ProbeForWriteIoStatus`) touches exactly the bytes the inner
+write touches, so a *static* bad page is caught by the probe;
+the inner write faults only when a concurrent thread
+re-protects or frees an output buffer between probe and write.
 
 ---
 
@@ -448,6 +458,37 @@ summary for the full closure list.
 
 ---
 
+### P13 — `NtSetInformationFile` access-table off-by-one
+
+**Closed.**  `IopSetOperationAccess[]` in `IODATA.C` — the
+per-`FILE_INFORMATION_CLASS` required-access table consulted by
+`NtSetInformationFile` (`QSINFO.C:924`) — was missing its
+`FileCompletionInformation` initializer.  The parallel
+`IopSetOperationLength[]` table has all 33 entries; the access
+table had only 32, so every class from `FileCompletionInformation`
+(30) upward inherited the *next* class's required access:
+
+- `FileCompletionInformation` → `FILE_WRITE_DATA` (move-cluster's)
+  instead of `0` — a read-only handle could not be associated
+  with a completion port.
+- `FileMoveClusterInformation` → `FILE_WRITE_ATTRIBUTES`
+  (storage's) instead of `FILE_WRITE_DATA` — cluster relocation,
+  which mutates file data, was gated on the wrong right.
+- `FileStorageInformation` → `0` (off the end of the initializer)
+  instead of `FILE_WRITE_ATTRIBUTES` — **under-protected**: any
+  handle could set storage information.
+
+**Reach (1 site):** `NtSetInformationFile`, three info classes.
+
+**Fixed.**  Inserted the missing `0,  // completion` initializer
+in `IopSetOperationAccess[]`, realigning every entry with the
+`FILE_INFORMATION_CLASS` enum and with `IopSetOperationLength[]`.
+Surfaced while building the IOCP completion-source test helper
+(`pkg/test/iosrc.lua`), which associates a file with a port via
+`FileCompletionInformation`.
+
+---
+
 ## Defense-in-depth roadmap
 
 Beyond the per-pattern fixes, the audit suggests a set of
@@ -527,10 +568,11 @@ disclosures elsewhere.
 | P6 — Padding zero | ~20 arms, 1 line each | ~20 lines |
 | P7 — Kernel-pointer info | 2 sites, ~5 lines each | ~10 lines |
 | P8 — Phase-1 disclosure | 1 site, restructure | ~50 lines |
-| P9 — IOCP data-loss | 1 site, reorder | ~10 lines |
+| ~~P9 — IOCP data-loss~~ (closed: reorder + re-queue in `COMPLETE.C`) | 1 site | done |
 | ~~P10 — Pool zero typo~~ (closed: alloc-then-zero in `PSCTX.C`) | 2 sites | done |
 | ~~P11 — Must-succeed fallback~~ (closed: fallback dropped in `READWRT.C`) | 1 site | done |
 | ~~P12 — `NtAccessCheck` adhoc~~ (closed: SE wrap-up commit) | 4 sites | done |
+| ~~P13 — SetInfo access-table off-by-one~~ (closed: missing entry inserted in `IODATA.C`) | 1 site | done |
 | **Subtotal — direct fixes** | **~60 edits** | **~400 lines** |
 | Primitives backport | 7 primitives | ~200-300 lines per primitive |
 

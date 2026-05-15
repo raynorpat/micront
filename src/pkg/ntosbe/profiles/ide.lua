@@ -473,11 +473,17 @@ function M.disk_files(paths, list_tree)
     -- The Lua application sets package.path = "\SystemRoot\lua\?.lua;..."
     -- so require('nt.dll.fs') resolves correctly.  list_tree is
     -- platform.list_tree, supplied by the orchestrator.
+    -- Markdown lives in the pkg tree for developers (plan notes and
+    -- design docs next to the code they describe) but is never
+    -- require()d at runtime — and doc names like `iocp-plan.md` blow
+    -- the FAT16 8.3 limit.  Stage only what the guest actually loads.
     for _, rel in ipairs(list_tree(paths.pkg_root)) do
-        files[#files + 1] = {
-            dest = "lua/" .. rel,
-            src  = paths.pkg_root .. "/" .. rel,
-        }
+        if not rel:match("%.md$") then
+            files[#files + 1] = {
+                dest = "lua/" .. rel,
+                src  = paths.pkg_root .. "/" .. rel,
+            }
+        end
     end
 
     -- ----------------------------------------------------------------
