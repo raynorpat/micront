@@ -125,6 +125,25 @@ NTSTATUS __stdcall NtCreateFile(HANDLE *FileHandle,
                                 void *EaBuffer,
                                 ULONG EaLength);
 
+/* Server end of a named pipe. Like NtCreateFile but carries the pipe-
+ * specific create parameters (type / read mode / completion mode,
+ * instance count, in/out quotas, default timeout). The client end
+ * opens an existing pipe with plain NtCreateFile / NtOpenFile. */
+NTSTATUS __stdcall NtCreateNamedPipeFile(HANDLE *FileHandle,
+                                         ULONG DesiredAccess,
+                                         OBJECT_ATTRIBUTES *ObjectAttributes,
+                                         IO_STATUS_BLOCK *IoStatusBlock,
+                                         ULONG ShareAccess,
+                                         ULONG CreateDisposition,
+                                         ULONG CreateOptions,
+                                         ULONG NamedPipeType,
+                                         ULONG ReadMode,
+                                         ULONG CompletionMode,
+                                         ULONG MaximumInstances,
+                                         ULONG InboundQuota,
+                                         ULONG OutboundQuota,
+                                         LARGE_INTEGER *DefaultTimeout);
+
 NTSTATUS __stdcall NtQueryInformationFile(HANDLE FileHandle,
                                           IO_STATUS_BLOCK *IoStatusBlock,
                                           void *FileInformation,
@@ -284,6 +303,75 @@ function M.NtOpenFile(access, oa, share, options)
     local iosb = ffi.new('IO_STATUS_BLOCK')
     local st   = ntdll.NtOpenFile(h, access, oa, iosb, share, options)
     if err.is_error(st) then err.raise('NtOpenFile', st) end
+    return handle.wrap(h[0]), iosb.Information
+end
+
+-- ------------------------------------------------------------------
+-- Named pipes — server endpoint creation.
+--
+-- The client end of an existing pipe opens with NtCreateFile /
+-- NtOpenFile on its \Device\NamedPipe\... path; only the server end
+-- needs the dedicated syscall and its pipe-specific parameters.
+-- ------------------------------------------------------------------
+
+-- Pipe type / mode constants (NTIOAPI.H) — named so callers don't pass
+-- bare 0/1.
+M.FILE_PIPE_BYTE_STREAM_TYPE    = 0x00000000
+M.FILE_PIPE_MESSAGE_TYPE        = 0x00000001
+M.FILE_PIPE_BYTE_STREAM_MODE    = 0x00000000
+M.FILE_PIPE_MESSAGE_MODE        = 0x00000001
+M.FILE_PIPE_QUEUE_OPERATION     = 0x00000000   -- completion: blocking
+M.FILE_PIPE_COMPLETE_OPERATION  = 0x00000001   -- completion: return immediately
+M.FILE_PIPE_UNLIMITED_INSTANCES = 0xFFFFFFFF
+
+-- 100-ns ticks in one second — NT's LARGE_INTEGER timeout unit.
+local NT_TICKS_PER_SEC = 10000000
+
+-- create_named_pipe(opts) -> (handle, disposition).  Creates (or opens
+-- another instance of) the server end of a named pipe.  opts:
+--   name             NT path, e.g. "\\Device\\NamedPipe\\foo"  (required)
+--   access           DesiredAccess         (default GENERIC_READ|WRITE)
+--   share            ShareAccess           (default SHARE_READ|WRITE)
+--   disposition      CreateDisposition     (default FILE_OPEN_IF)
+--   options          CreateOptions         (default 0)
+--   pipe_type        FILE_PIPE_*_TYPE      (default byte stream)
+--   read_mode        FILE_PIPE_*_MODE      (default byte stream)
+--   completion_mode  FILE_PIPE_*_OPERATION (default queue / blocking)
+--   max_instances    simultaneous instances (default 1)
+--   inbound_quota    pool bytes for inbound writes  (default 4096)
+--   outbound_quota   pool bytes for outbound writes (default 4096)
+--   timeout          default instance-wait timeout, seconds (default 5)
+-- Raises on failure, like the other fs creators.  `disposition` is the
+-- IoStatusBlock Information word (FILE_CREATED / FILE_OPENED).
+function M.create_named_pipe(opts)
+    opts = opts or {}
+    if not opts.name then
+        error("fs.create_named_pipe: opts.name is required", 2)
+    end
+    local noa  = oa.path(opts.name)
+    local h    = ffi.new('HANDLE[1]')
+    local iosb = ffi.new('IO_STATUS_BLOCK')
+
+    -- Relative (negative) timeout, in 100-ns ticks.
+    local timeout = ffi.new('LARGE_INTEGER')
+    timeout.QuadPart = -((opts.timeout or 5) * NT_TICKS_PER_SEC)
+
+    local st = ntdll.NtCreateNamedPipeFile(
+        h,
+        opts.access      or bit.bor(M.FILE_GENERIC_READ, M.FILE_GENERIC_WRITE),
+        noa.oa,
+        iosb,
+        opts.share       or bit.bor(M.FILE_SHARE_READ, M.FILE_SHARE_WRITE),
+        opts.disposition or M.FILE_OPEN_IF,
+        opts.options     or 0,
+        opts.pipe_type       or M.FILE_PIPE_BYTE_STREAM_TYPE,
+        opts.read_mode       or M.FILE_PIPE_BYTE_STREAM_MODE,
+        opts.completion_mode or M.FILE_PIPE_QUEUE_OPERATION,
+        opts.max_instances   or 1,
+        opts.inbound_quota   or 4096,
+        opts.outbound_quota  or 4096,
+        timeout)
+    if err.is_error(st) then err.raise('NtCreateNamedPipeFile', st) end
     return handle.wrap(h[0]), iosb.Information
 end
 
@@ -639,8 +727,8 @@ return M
 --   NtNotifyChangeDirectoryFile  dir watch — completes via APC/IOCP
 --
 -- Named object creation (distinct from NtCreateFile):
---   NtCreateNamedPipeFile        pipe server endpoint
 --   NtCreateMailslotFile         mailslot server endpoint
+--   (NtCreateNamedPipeFile is bridged above — see M.create_named_pipe.)
 --
 -- Scatter/gather (verify NT 3.5 ntdll actually exports — may be NT4+):
 --   NtReadFileScatter

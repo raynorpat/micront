@@ -107,12 +107,24 @@ buffers alive until completion, so the main thread owns the one source.
 The afd-socket second source from the original plan is dropped — a second
 single-threaded source adds little once real concurrency is covered here.
 
-### Phase 4 — named pipe (npfs)
+### Phase 4 — npfs create-surface fuzz *(done — verified)*
 
-Bind `NtCreateNamedPipeFile` (currently unbound — see the TODO list at the
-foot of `nt/dll/fs.lua`) and build a Lua-idiomatic named-pipe interface over
-npfs. Fully self-contained completion source (own both ends, write-then-read).
-The named-pipe API is a deliverable in its own right, useful beyond IOCP.
+`test/fuzz/npfs.lua`: raw-ntdll adversarial fuzz of `NtCreateNamedPipeFile`
+— malformed output pointers, bad `DefaultTimeout`, NULL / empty / oversized
+object names, out-of-range mode scalars, and instance/quota extremes
+(including a 4 GB pool-reservation probe). Invariant: clean NTSTATUS, never
+a bugcheck. `nt/dll/fs.lua` gained the `NtCreateNamedPipeFile` cdef plus an
+idiomatic `M.create_named_pipe` wrapper — the fuzz baseline is its first
+consumer (a fuzz/test reaching for a syscall *is* a real caller).
+
+`npfs.sys` is fully-privileged kernel code reachable straight from usermode,
+so this is the first slice of a broader **bugcheck-resistance** goal:
+usermode must never be able to crash the kernel.
+
+Future increments (each deepens the picture, none blocking): pipe client
+opens (`NtCreateFile` on `\Device\NamedPipe\…`), the pipe FSCTLs
+(`FSCTL_PIPE_*`), then the same treatment for `msfs`, `afd`, and the FS
+drivers — the driver dispatch surface the syscall audit deferred.
 
 ## Deferred
 
