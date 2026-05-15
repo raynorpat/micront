@@ -540,9 +540,15 @@ ObReferenceObjectByName(
 
     ObpValidateIrql( "ObReferenceObjectByName" );
 
-    if (!ObjectName || !ObjectName->Length ||
-        ObjectName->Length % sizeof( WCHAR )
-       ) {
+    //
+    // Reject an absent name without a dereference, then let
+    // ObpCaptureObjectName probe and capture the (possibly untrusted)
+    // descriptor.  The length checks must run on the *captured* name:
+    // dereferencing the raw caller pointer here would bugcheck on a
+    // kernel-range pointer, which a try/except cannot catch.
+    //
+
+    if (!ObjectName) {
         return( STATUS_OBJECT_NAME_INVALID );
         }
 
@@ -552,6 +558,16 @@ ObReferenceObjectByName(
                                  );
     if (!NT_SUCCESS( Status )) {
         return( Status );
+        }
+
+    //
+    // A zero-length name is invalid for a by-name reference; an odd
+    // length was already rejected by ObpCaptureObjectName.  Capture of
+    // an empty name leaves Buffer NULL, so there is nothing to free.
+    //
+
+    if (CapturedObjectName.Length == 0) {
+        return( STATUS_OBJECT_NAME_INVALID );
         }
 
     if (!ARGUMENT_PRESENT(PassedAccessState)) {

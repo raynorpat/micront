@@ -106,6 +106,7 @@ Return Value:
     KPROCESSOR_MODE PreviousMode;
     NTSTATUS Status;
     BOOLEAN UnNamedPort;
+    PUNICODE_STRING ObjectName;
 
     //
     // Get previous processor mode and probe output arguments if necessary.
@@ -117,11 +118,36 @@ Return Value:
         try {
             ProbeForWriteHandle( PortHandle );
 
-            if (ObjectAttributes->ObjectName == NULL ||
-                ObjectAttributes->ObjectName->Length == 0 ||
-                ObjectAttributes->ObjectName->Buffer == NULL
-               ) {
+            //
+            // Probe ObjectAttributes (and the embedded ObjectName)
+            // before touching them.  A try/except catches a fault on a
+            // user-mode address, but a fault on a kernel-mode address is
+            // an unconditional bugcheck -- so dereferencing an unprobed
+            // caller pointer that happens to be kernel-range crashes the
+            // system.  ProbeForRead rejects a non-user pointer up front
+            // with a catchable STATUS_ACCESS_VIOLATION.  ObCreateObject
+            // re-captures the structure properly below; this peek only
+            // decides named vs. unnamed port.
+            //
+
+            ProbeForRead( ObjectAttributes,
+                          sizeof( *ObjectAttributes ),
+                          sizeof( ULONG )
+                        );
+            ObjectName = ObjectAttributes->ObjectName;
+            if (ObjectName == NULL) {
                 UnNamedPort = TRUE;
+                }
+            else {
+                ProbeForRead( ObjectName,
+                              sizeof( *ObjectName ),
+                              sizeof( ULONG )
+                            );
+                if (ObjectName->Length == 0 ||
+                    ObjectName->Buffer == NULL
+                   ) {
+                    UnNamedPort = TRUE;
+                    }
                 }
             }
         except( EXCEPTION_EXECUTE_HANDLER ) {
