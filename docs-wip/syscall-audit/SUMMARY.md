@@ -500,7 +500,7 @@ Surfaced while building the IOCP completion-source test helper
 
 ### P14 — Untrusted-pointer deref without a preceding probe
 
-**LPC, SE, OB, IO, PS, MM swept; reach beyond unknown.**  Found
+**LPC, SE, OB, IO, PS, MM, CM swept; reach beyond unknown.**  Found
 post-audit by the `test/fuzz/*.lua` pointer-slot sweeps, not by the
 static pass.
 
@@ -548,11 +548,18 @@ had no P14 entry and the audit never swept for it.  A one-off that
 is really a pattern instance is a catalog gap.
 
 **Reach.**  Unknown by construction — the static pass did not look
-for this class.  LPC, SE, OB, IO, PS and MM have since been swept
+for this class.  LPC, SE, OB, IO, PS, MM and CM have since been swept
 with the per-subsystem `test/fuzz/*.lua` pointer-slot sweeps: SE, IO
-and PS audited clean, LPC, OB and MM one-plus fixes each.  CM/EX
-remain unswept — every `Nt*` syscall with an `IN` pointer is a
-candidate.
+and PS audited clean, LPC, OB and MM one-plus fixes each.  CM's
+retail prologues audited clean — every syscall probes its caller
+pointers or hands `OBJECT_ATTRIBUTES` to `ObOpenObjectByName` — but
+the per-prologue `CMLOG`/`KdPrint` argument-logging dereferenced
+caller pointers before any probe.  That is dead code in the shipped
+`DBG=0` build (`KdPrint` discards its arguments when `DBG=0`), so it
+is not a retail defect; it was a latent deref-before-probe for
+checked builds.  Stripped from `NTAPI.C` so CM is clean in both
+build flavours.  EX remains unswept — every `Nt*` syscall with an
+`IN` pointer is a candidate.
 
 **Severity.**  Local DoS — system bug-check from an unprivileged
 caller passing a kernel-range pointer.  No privilege required
@@ -672,7 +679,7 @@ pointer-slot fuzz sweep is the enforcement and regression net.
 | ~~P11 — Must-succeed fallback~~ (closed: fallback dropped in `READWRT.C`) | 1 site | done |
 | ~~P12 — `NtAccessCheck` adhoc~~ (closed: SE wrap-up commit) | 4 sites | done |
 | ~~P13 — SetInfo access-table off-by-one~~ (closed: missing entry inserted in `IODATA.C`) | 1 site | done |
-| P14 — Untrusted-pointer deref (LPC/SE/OB/IO/PS/MM swept; CM/EX TBD) | 6 sites done, rest pending fuzz | LPC/SE/OB/IO/PS/MM done |
+| P14 — Untrusted-pointer deref (LPC/SE/OB/IO/PS/MM/CM swept; EX TBD) | 6 sites done + CM CMLOG strip, rest pending fuzz | LPC/SE/OB/IO/PS/MM/CM done |
 | **Subtotal — direct fixes** | **~60 edits** | **~400 lines** |
 | Primitives backport | 7 primitives | ~200-300 lines per primitive |
 

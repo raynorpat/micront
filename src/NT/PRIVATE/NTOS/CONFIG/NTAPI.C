@@ -192,13 +192,6 @@ Return Value:
     HANDLE Handle = NULL;
 
     PAGED_CODE();
-    CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtCreateKey\n"));
-    CMLOG(CML_API_ARGS, CMS_NTAPI) {
-        KdPrint(("\tDesiredAccess=%08lx ", DesiredAccess));
-        KdPrint(("\tCreateOptions=%08lx\n", CreateOptions));
-        KdPrint(("\tRootHandle=%08lx\n", ObjectAttributes->RootDirectory));
-        KdPrint(("\tName='%wZ'\n", ObjectAttributes->ObjectName));
-    }
 
     mode = KeGetPreviousMode();
 
@@ -274,9 +267,6 @@ Return Value:
         }
 
     } except (CmpExceptionFilter(GetExceptionInformation())) {
-        CMLOG(CML_API, CMS_EXCEPTION) {
-            KdPrint(("!!NtCreateKey: code:%08lx\n", GetExceptionCode()));
-        }
         status = GetExceptionCode();
         //
         // If ObOpenObjectByName succeeded but a later user-buffer
@@ -326,10 +316,6 @@ Return Value:
     NTSTATUS    status;
 
     PAGED_CODE();
-    CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtDeleteKey\n"));
-    CMLOG(CML_API_ARGS, CMS_NTAPI) {
-        KdPrint(("\tKeyHandle=%08lx\n", KeyHandle));
-    }
 
     status = ObReferenceObjectByHandle(
                 KeyHandle,
@@ -390,11 +376,6 @@ Return Value:
     UNICODE_STRING LocalValueName;
 
     PAGED_CODE();
-    CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtDeleteValueKey\n"));
-    CMLOG(CML_API_ARGS, CMS_NTAPI) {
-        KdPrint(("\tKeyHandle=%08lx\n", KeyHandle));
-        KdPrint(("\tValueName='%wZ'\n", ValueName));
-    }
 
     mode = KeGetPreviousMode();
 
@@ -428,9 +409,6 @@ Return Value:
                         );
 
         } except (EXCEPTION_EXECUTE_HANDLER) {
-            CMLOG(CML_API, CMS_EXCEPTION) {
-               KdPrint(("!!NtDeleteValueKey: code:%08lx\n", GetExceptionCode()));
-            }
             status = GetExceptionCode();
         }
 
@@ -503,11 +481,6 @@ Return Value:
     KPROCESSOR_MODE mode;
 
     PAGED_CODE();
-    CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtEnumerateKey\n"));
-    CMLOG(CML_API_ARGS, CMS_NTAPI) {
-        KdPrint(("\tKeyHandle=%08lx Index=%08lx\n", KeyHandle, Index));
-    }
-
 
     if ((KeyInformationClass != KeyBasicInformation) &&
         (KeyInformationClass != KeyNodeInformation)  &&
@@ -549,9 +522,6 @@ Return Value:
                         );
 
         } except (EXCEPTION_EXECUTE_HANDLER) {
-            CMLOG(CML_API, CMS_EXCEPTION) {
-                KdPrint(("!!NtEnumerateKey: code:%08lx\n", GetExceptionCode()));
-            }
             status = GetExceptionCode();
         }
 
@@ -625,10 +595,6 @@ Return Value:
     KPROCESSOR_MODE mode;
 
     PAGED_CODE();
-    CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtEnumerateValueKey\n"));
-    CMLOG(CML_API_ARGS, CMS_NTAPI) {
-        KdPrint(("\tKeyHandle=%08lx Index=%08lx\n", KeyHandle, Index));
-    }
 
     if ((KeyValueInformationClass != KeyValueBasicInformation) &&
         (KeyValueInformationClass != KeyValueFullInformation)  &&
@@ -670,9 +636,6 @@ Return Value:
                         );
 
         } except (EXCEPTION_EXECUTE_HANDLER) {
-            CMLOG(CML_API, CMS_EXCEPTION) {
-                KdPrint(("!!NtEnumerateValueKey: code:%08lx\n", GetExceptionCode()));
-            }
             status = GetExceptionCode();
         }
 
@@ -717,7 +680,6 @@ Return Value:
 
 
     PAGED_CODE();
-    CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtFlushKey\n"));
 
     status = ObReferenceObjectByHandle(
                 KeyHandle,
@@ -950,11 +912,9 @@ Return Value:
     PCM_KEY_BODY        KeyBody;
     PKEVENT             UserEvent;
     PCM_POST_BLOCK      PostBlock;
-    KIRQL               OldIrql;
 
 
     PAGED_CODE();
-    CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtNotifyChangeKey\n"));
 
     //
     // Threads that are attached give us real grief, so disallow it.
@@ -977,9 +937,6 @@ Return Value:
                 );
             ProbeForWrite(Buffer, BufferSize, sizeof(ULONG));
         } except(EXCEPTION_EXECUTE_HANDLER) {
-            CMLOG(CML_API, CMS_EXCEPTION) {
-                KdPrint(("!!NtChangeNotifyKey: code:%08lx\n", GetExceptionCode()));
-            }
             return GetExceptionCode();
         }
     }
@@ -1196,12 +1153,6 @@ Return Value:
     HANDLE Handle = NULL;
 
     PAGED_CODE();
-    CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtOpenKey\n"));
-    CMLOG(CML_API_ARGS, CMS_NTAPI) {
-        KdPrint(("\tDesiredAccess=%08lx ", DesiredAccess));
-        KdPrint(("\tRootHandle=%08lx\n", ObjectAttributes->RootDirectory));
-        KdPrint(("\tName='%wZ'\n", ObjectAttributes->ObjectName));
-    }
 
 
     mode = KeGetPreviousMode();
@@ -1242,9 +1193,6 @@ Return Value:
         }
 
     } except (CmpExceptionFilter(GetExceptionInformation())) {
-        CMLOG(CML_API, CMS_EXCEPTION) {
-            KdPrint(("!!NtOpenKey: code:%08lx\n", GetExceptionCode()));
-        }
         status = GetExceptionCode();
         //
         // If ObOpenObjectByName succeeded but the *KeyHandle write
@@ -1325,7 +1273,6 @@ Return Value:
     KPROCESSOR_MODE mode;
 
     PAGED_CODE();
-    CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtQueryKey\n"));
 
     if ((KeyInformationClass != KeyBasicInformation) &&
         (KeyInformationClass != KeyNodeInformation)  &&
@@ -1366,9 +1313,6 @@ Return Value:
                         );
 
         } except (EXCEPTION_EXECUTE_HANDLER) {
-            CMLOG(CML_API, CMS_EXCEPTION) {
-                KdPrint(("!!NtQueryKey: code:%08lx\n", GetExceptionCode()));
-            }
             status = GetExceptionCode();
         }
 
@@ -1440,11 +1384,6 @@ Return Value:
     UNICODE_STRING LocalValueName;
 
     PAGED_CODE();
-    CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtQueryValueKey\n"));
-    CMLOG(CML_API_ARGS, CMS_NTAPI) {
-        KdPrint(("\tKeyHandle=%08lx\n", KeyHandle));
-        KdPrint(("\tValueName='%wZ'\n", ValueName));
-    }
 
     if ((KeyValueInformationClass != KeyValueBasicInformation) &&
         (KeyValueInformationClass != KeyValueFullInformation)  &&
@@ -1494,9 +1433,6 @@ Return Value:
                         );
 
         } except (EXCEPTION_EXECUTE_HANDLER) {
-            CMLOG(CML_API, CMS_EXCEPTION) {
-                KdPrint(("!!NtQueryValueKey: code:%08lx\n", GetExceptionCode()));
-            }
             status = GetExceptionCode();
         }
 
@@ -1574,7 +1510,6 @@ Return Value:
     KPROCESSOR_MODE mode;
 
     PAGED_CODE();
-    CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtRestoreKey\n"));
 
     mode = KeGetPreviousMode();
     //
@@ -1662,7 +1597,6 @@ Return Value:
     KPROCESSOR_MODE mode;
 
     PAGED_CODE();
-    CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtSaveKey\n"));
 
     mode = KeGetPreviousMode();
 
@@ -1758,11 +1692,6 @@ Return Value:
     UNICODE_STRING LocalValueName;
 
     PAGED_CODE();
-    CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtSetValueKey\n"));
-    CMLOG(CML_API_ARGS, CMS_NTAPI) {
-        KdPrint(("\tKeyHandle=%08lx\n", KeyHandle));
-        KdPrint(("\tValueName='%wZ'n", ValueName));
-    }
 
     mode = KeGetPreviousMode();
 
@@ -1805,9 +1734,6 @@ Return Value:
                         );
 
         } except (CmpExceptionFilter(GetExceptionInformation())) {
-            CMLOG(CML_API, CMS_EXCEPTION) {
-                KdPrint(("!!NtSetValueKey: code:%08lx\n", GetExceptionCode()));
-            }
             status = GetExceptionCode();
         }
 
@@ -1872,11 +1798,6 @@ Return Value:
     PSECURITY_DESCRIPTOR CapturedDescriptor;
 
     PAGED_CODE();
-    CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtLoadKey\n"));
-    CMLOG(CML_API_ARGS, CMS_NTAPI) {
-        KdPrint(("\tTargetKey ='%wZ'\n", TargetKey->ObjectName));
-        KdPrint(("\tSourceFile='%wZ'\n", SourceFile->ObjectName));
-    }
 
     FileName.Buffer = NULL;
     KeyBuffer = NULL;
@@ -1972,9 +1893,6 @@ Return Value:
         File.SecurityDescriptor = CapturedDescriptor;
 
     } except (EXCEPTION_EXECUTE_HANDLER) {
-        CMLOG(CML_API, CMS_EXCEPTION) {
-            KdPrint(("!!NtLoadKey: code:%08lx\n", GetExceptionCode()));
-        }
         Status = GetExceptionCode();
 
     }
@@ -2054,10 +1972,6 @@ Return Value:
     CM_PARSE_CONTEXT ParseContext;
 
     PAGED_CODE();
-    CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtUnloadKey\n"));
-    CMLOG(CML_API_ARGS, CMS_NTAPI) {
-        KdPrint(("\tTargetKey ='%wZ'\n", TargetKey->ObjectName));
-    }
 
     PreviousMode = KeGetPreviousMode();
 
@@ -2096,9 +2010,6 @@ Return Value:
 
     } except (EXCEPTION_EXECUTE_HANDLER) {
         Status = GetExceptionCode();
-        CMLOG(CML_API, CMS_EXCEPTION) {
-            KdPrint(("!!NtUnloadKey: code:%08lx\n", Status));
-        }
     }
 
     if (NT_SUCCESS(Status)) {
@@ -2137,11 +2048,6 @@ NtSetInformationKey(
     LARGE_INTEGER LocalWriteTime;
 
     PAGED_CODE();
-    CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtSetInformationKey\n"));
-    CMLOG(CML_API_ARGS, CMS_NTAPI) {
-        KdPrint(("\tKeyHandle=%08lx\n", KeyHandle));
-        KdPrint(("\tInfoClass=%08x\n", KeySetInformationClass));
-    }
 
     switch (KeySetInformationClass) {
     case KeyWriteTimeInformation:
@@ -2182,9 +2088,6 @@ NtSetInformationKey(
                         );
 
         } except (EXCEPTION_EXECUTE_HANDLER) {
-            CMLOG(CML_API, CMS_EXCEPTION) {
-                KdPrint(("!!NtSetInformationKey: code:%08lx\n", GetExceptionCode()));
-            }
             status = GetExceptionCode();
         }
 
@@ -2250,11 +2153,6 @@ Return Value:
     PCM_KEY_BODY KeyBody;
 
     PAGED_CODE();
-    CMLOG(CML_API, CMS_NTAPI) KdPrint(("NtReplaceKey\n"));
-    CMLOG(CML_API_ARGS, CMS_NTAPI) {
-        KdPrint(("\tNewFile ='%wZ'\n", NewFile->ObjectName));
-        KdPrint(("\tOldFile ='%wZ'\n", OldFile->ObjectName));
-    }
 
     PreviousMode = KeGetPreviousMode();
 
@@ -2441,9 +2339,6 @@ Return Value:
 
     } except (EXCEPTION_EXECUTE_HANDLER) {
         Status = GetExceptionCode();
-        CMLOG(CML_API, CMS_EXCEPTION) {
-            KdPrint(("!!CmpNameFromAttributes: code %08lx\n", Status));
-        }
     }
 
     return(Status);

@@ -508,6 +508,25 @@ Unloads a hive previously loaded with `NtLoadKey`.
    semantics when the key is deleted are non-trivial.  Same
    shape as `NtNotifyChangeDirectoryFile` in IO.
 
+4. **P14 deref-before-probe in `CMLOG` arg-logging** *(closed:
+   P14 deref-before-probe sweep)* — every syscall prologue
+   carried a `CMLOG(CML_API_ARGS, …)` block whose `KdPrint`
+   calls dereferenced caller pointers (`ObjectAttributes->`
+   `ObjectName`, `ValueName`, `TargetKey->ObjectName`, …)
+   *before* any probe.  8 syscalls: `NtCreateKey`,
+   `NtDeleteValueKey`, `NtOpenKey`, `NtQueryValueKey`,
+   `NtSetValueKey`, `NtLoadKey`, `NtUnloadKey`, `NtReplaceKey`.
+   In the shipped `DBG=0` build `KdPrint` discards its
+   arguments, so this is dead code — not a retail defect — but
+   a latent deref-before-probe for checked builds.  The retail
+   prologues themselves are clean: each probes its caller
+   pointers (`ProbeForWriteHandle`, `ProbeForWrite`,
+   `ProbeForWriteUlong`, `ProbeAndReadUnicodeString`) inside
+   the mode-checked `try`, or hands `OBJECT_ATTRIBUTES` to
+   `ObOpenObjectByName` / `CmpNameFromAttributes`.  Closed by
+   stripping all `CMLOG`/`KdPrint` from `NTAPI.C`.
+   `test/fuzz/cm.lua` is the 18-test confirm-net.
+
 ### Fix shape
 
 1. **`NtCreateKey` / `NtOpenKey` handle-leak** — explicit
