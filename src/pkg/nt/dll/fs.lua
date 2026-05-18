@@ -64,6 +64,48 @@ typedef struct _FILE_DIRECTORY_INFORMATION {
     wchar_t       FileName[1];
 } FILE_DIRECTORY_INFORMATION;
 
+/* The three richer enumeration projections.  All share the leading
+ * NextEntryOffset/FileIndex; FileNameLength and FileName sit at a
+ * class-specific offset, so iter_dir casts to the matching struct. */
+typedef struct _FILE_FULL_DIR_INFORMATION {
+    ULONG         NextEntryOffset;
+    ULONG         FileIndex;
+    LARGE_INTEGER CreationTime;
+    LARGE_INTEGER LastAccessTime;
+    LARGE_INTEGER LastWriteTime;
+    LARGE_INTEGER ChangeTime;
+    LARGE_INTEGER EndOfFile;
+    LARGE_INTEGER AllocationSize;
+    ULONG         FileAttributes;
+    ULONG         FileNameLength;
+    ULONG         EaSize;
+    wchar_t       FileName[1];
+} FILE_FULL_DIR_INFORMATION;
+
+typedef struct _FILE_BOTH_DIR_INFORMATION {
+    ULONG         NextEntryOffset;
+    ULONG         FileIndex;
+    LARGE_INTEGER CreationTime;
+    LARGE_INTEGER LastAccessTime;
+    LARGE_INTEGER LastWriteTime;
+    LARGE_INTEGER ChangeTime;
+    LARGE_INTEGER EndOfFile;
+    LARGE_INTEGER AllocationSize;
+    ULONG         FileAttributes;
+    ULONG         FileNameLength;
+    ULONG         EaSize;
+    signed char   ShortNameLength;  /* bytes */
+    wchar_t       ShortName[12];
+    wchar_t       FileName[1];
+} FILE_BOTH_DIR_INFORMATION;
+
+typedef struct _FILE_NAMES_INFORMATION {
+    ULONG         NextEntryOffset;
+    ULONG         FileIndex;
+    ULONG         FileNameLength;
+    wchar_t       FileName[1];
+} FILE_NAMES_INFORMATION;
+
 typedef struct _FILE_POSITION_INFORMATION {
     LARGE_INTEGER CurrentByteOffset;
 } FILE_POSITION_INFORMATION;
@@ -285,6 +327,11 @@ M.FILE_ATTRIBUTE_DIRECTORY     = 0x00000010
 -- raised, so callers that want to detect EOF need this constant.
 M.STATUS_END_OF_FILE           = 0xC0000011
 M.STATUS_NO_MORE_FILES         = 0x80000006
+-- A filtered NtQueryDirectoryFile whose pattern matched nothing at all
+-- returns this on the first call (vs NO_MORE_FILES once some entries
+-- have been returned).  Both are end-of-enumeration signals, not real
+-- errors — see NtQueryDirectoryFile below.
+M.STATUS_NO_SUCH_FILE          = 0xC000000F
 
 function M.NtCreateFile(access, oa, alloc_size, file_attrs, share,
                         disposition, options, ea_buffer, ea_length)
@@ -541,20 +588,48 @@ function M.set_rename(h, new_name, replace, root_handle)
     M.NtSetInformationFile(h, info, total_length, FileRenameInformation)
 end
 
+-- FileInformationClass values accepted by NtQueryDirectoryFile.  Each
+-- selects a different per-entry projection; iter_dir decodes whichever
+-- one was requested.
+M.FileDirectoryInformation     = 1   -- FILE_DIRECTORY_INFORMATION
+M.FileFullDirectoryInformation = 2   -- + EaSize
+M.FileBothDirectoryInformation = 3   -- + EaSize + ShortName (8.3)
+M.FileNamesInformation         = 12  -- name only (leanest)
+
 -- Directory enumeration. Caller provides buffer; each call returns one
--- or more FILE_DIRECTORY_INFORMATION records (linked via NextEntryOffset).
--- Returns (bytes_written, status). STATUS_NO_MORE_FILES (0x80000006) is
--- WARNING-severity so it passes through is_error; end-of-dir signal.
-function M.NtQueryDirectoryFile(h, buffer, length, restart_scan)
+-- or more FILE_*_DIR/NAMES_INFORMATION records (linked via
+-- NextEntryOffset). Returns (bytes_written, status). STATUS_NO_MORE_FILES
+-- (0x80000006) is WARNING-severity so it passes through is_error.
+--
+-- name_filter is an optional UTF-8 search pattern (NT wildcards * and ?
+-- allowed); nil enumerates everything. NT captures the pattern on the
+-- first (restart_scan) call and ignores it on continuations — pass it
+-- only with restart_scan=true, or NT treats it as "resume after this
+-- name" instead.
+--
+-- info_class selects the record shape (M.File*Information above);
+-- defaults to FileDirectoryInformation.
+function M.NtQueryDirectoryFile(h, buffer, length, restart_scan, name_filter,
+                                info_class)
     local iosb = ffi.new('IO_STATUS_BLOCK')
+    -- Held as a local so the fused UNICODE_STRING + wbuf stays alive
+    -- across the syscall; nil filter -> NULL FileName (enumerate all).
+    local filter = name_filter and str.to_utf16(name_filter) or nil
     local st = ntdll.NtQueryDirectoryFile(handle.raw(h), nil, nil, nil, iosb,
                                           buffer, length,
-                                          1 --[[ FileDirectoryInformation ]],
+                                          info_class or M.FileDirectoryInformation,
                                           0 --[[ ReturnSingleEntry=false ]],
-                                          nil --[[ no filter ]],
+                                          filter and ffi.cast('UNICODE_STRING *', filter.us)
+                                                 or nil,
                                           restart_scan and 1 or 0)
-    if err.is_error(st) then err.raise('NtQueryDirectoryFile', st) end
-    return iosb.Information, err.normalize(st)
+    local stn = err.normalize(st)
+    -- NO_SUCH_FILE means a filtered scan matched nothing — an empty
+    -- result, not a failure; surface it like NO_MORE_FILES so callers
+    -- (iter_dir) end the enumeration cleanly instead of raising.
+    if err.is_error(st) and stn ~= M.STATUS_NO_SUCH_FILE then
+        err.raise('NtQueryDirectoryFile', st)
+    end
+    return iosb.Information, stn
 end
 
 -- ------------------------------------------------------------------
@@ -611,36 +686,58 @@ function M.create_dir(path)
     return h, info == M.FILE_CREATED
 end
 
--- iter_dir(handle) → iterator yielding (name, info) pairs.
+-- Per-FileInformationClass record struct.  iter_dir casts the buffer
+-- cursor to the matching type so .FileName / .FileNameLength /
+-- .NextEntryOffset resolve at the right (class-specific) offsets.
+local DIR_INFO_STRUCT = {
+    [M.FileDirectoryInformation]     = 'FILE_DIRECTORY_INFORMATION *',
+    [M.FileFullDirectoryInformation] = 'FILE_FULL_DIR_INFORMATION *',
+    [M.FileBothDirectoryInformation] = 'FILE_BOTH_DIR_INFORMATION *',
+    [M.FileNamesInformation]         = 'FILE_NAMES_INFORMATION *',
+}
+
+-- iter_dir(handle [, name_filter [, info_class]]) → iterator yielding
+-- (name, info) pairs.
 --
 -- Wraps NtQueryDirectoryFile + linked-list parse over a single 8 KB
 -- buffer.  NextEntryOffset = 0 marks the last record in a buffer; we
 -- re-call NtQueryDirectoryFile (restart_scan=false) for the next
 -- batch, until STATUS_NO_MORE_FILES.
 --
--- `info` is a pointer into the buffer at the current
--- FILE_DIRECTORY_INFORMATION record — caller can read .FileAttributes,
--- .LastWriteTime, .EndOfFile inline without a second syscall.  Don't
--- store the pointer beyond one iteration; the next yield reuses the
--- buffer.
+-- name_filter is an optional UTF-8 search pattern (NT wildcards * / ?);
+-- nil enumerates everything.  It is handed to the kernel only on the
+-- restart call — see NtQueryDirectoryFile's contract.
+--
+-- info_class (M.File*Information) picks the record shape; defaults to
+-- FileDirectoryInformation.  `info` is a pointer into the buffer at the
+-- current record, cast to the matching struct — caller reads
+-- .FileAttributes / .ShortName / .EaSize etc. inline without a second
+-- syscall.  Don't store the pointer beyond one iteration; the next
+-- yield reuses the buffer.
 --
 -- "." and ".." are filtered out (callers never want them).
 local BUF_BYTES = 8 * 1024
 
-function M.iter_dir(h)
-    local buf       = ffi.new('uint8_t[?]', BUF_BYTES)
+function M.iter_dir(h, name_filter, info_class)
+    info_class = info_class or M.FileDirectoryInformation
+    local rec_ptr = DIR_INFO_STRUCT[info_class]
+    if rec_ptr == nil then
+        error("iter_dir: unsupported info_class " .. tostring(info_class), 2)
+    end
+
+    local buf        = ffi.new('uint8_t[?]', BUF_BYTES)
     local first_call = true
-    local cur        = nil       -- pointer to current FILE_DIRECTORY_INFORMATION
-    local end_ptr    = nil       -- buf + bytes_written
+    local cur        = nil       -- pointer to the current record
 
     local function refill()
-        local bytes, st = M.NtQueryDirectoryFile(h, buf, BUF_BYTES, first_call)
+        local bytes, st = M.NtQueryDirectoryFile(
+            h, buf, BUF_BYTES, first_call,
+            first_call and name_filter or nil, info_class)
         first_call = false
-        if st == M.STATUS_NO_MORE_FILES then
+        if st == M.STATUS_NO_MORE_FILES or st == M.STATUS_NO_SUCH_FILE then
             return false
         end
-        cur     = ffi.cast('FILE_DIRECTORY_INFORMATION *', buf)
-        end_ptr = ffi.cast('uint8_t *', buf) + bytes
+        cur = ffi.cast(rec_ptr, buf)
         return true
     end
 
@@ -662,7 +759,7 @@ function M.iter_dir(h)
         if info.NextEntryOffset == 0 then
             cur = nil       -- forces refill on next call
         else
-            cur = ffi.cast('FILE_DIRECTORY_INFORMATION *',
+            cur = ffi.cast(rec_ptr,
                            ffi.cast('uint8_t *', cur) + info.NextEntryOffset)
         end
 
@@ -673,15 +770,17 @@ function M.iter_dir(h)
     return next_entry
 end
 
--- Convenience: list_dir(path) opens, drains, closes.  Returns an array
--- of file names (no "." / "..").  Mirrors host platform.list_dir
--- exactly so callers don't have to branch.
+-- Convenience: list_dir(path [, name_filter]) opens, drains, closes.
+-- Returns an array of file names (no "." / "..").  Mirrors host
+-- platform.list_dir exactly so callers don't have to branch.
+-- name_filter is an optional UTF-8 search pattern (NT wildcards * / ?);
+-- nil lists everything.
 --
 -- pcall + always-close pattern: NtQueryDirectoryFile may raise on
 -- (e.g.) STATUS_INSUFFICIENT_RESOURCES; we still want the handle
 -- closed deterministically rather than waiting for __gc.  Same shape
 -- as ps.RtlCreateUserProcess's RtlDestroyProcessParameters guard.
-function M.list_dir(path)
+function M.list_dir(path, name_filter)
     local noa = oa.path(path)
     local h = M.NtOpenFile(
         bit.bor(M.FILE_GENERIC_READ, M.SYNCHRONIZE),
@@ -690,7 +789,7 @@ function M.list_dir(path)
         bit.bor(M.FILE_DIRECTORY_FILE, M.FILE_SYNCHRONOUS_IO_NONALERT))
     local ok, ret = pcall(function()
         local names = {}
-        for name, _info in M.iter_dir(h) do
+        for name, _info in M.iter_dir(h, name_filter) do
             names[#names + 1] = name
         end
         return names

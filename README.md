@@ -8,6 +8,7 @@ Implemented:
 
 - [x] Self-hosting — booted MicroNT image rebuilds its own
   kernel, drivers, and userland from source
+- [x] Kernel-level code coverage during selftest [![Coverage Status](https://coveralls.io/repos/github/HarryR/nt365/badge.svg?branch=main)](https://coveralls.io/github/HarryR/nt365?branch=main)
 - [x] `gdb` powered kernel & driver debugging
 - [x] 64-bit UEFI bootloader (`BOOTX64.EFI`, OVMF on qemu)
 - [x] 32-bit userland (no VDM, V86, WoW16 or 16-bit paths)
@@ -32,31 +33,6 @@ Coming next:
 - [ ] GPT partitions (currently MBR; partition format is FAT16 or NTFS)
 - [ ] Modern display path (Bochs VBE miniport works; need GOP-handoff loader path)
 
-## Self-host
-
-The booted MicroNT image can rebuild itself.  `test.ntosbe`'s
-`'full OS rebuild on guest'` selftest drives `ntosbe.build` (the same
-Lua orchestrator the host uses) inside the running guest:
-
-```
-NMAKE.EXE  →  cmd.exe /c …
-              ├── CL386 → CL → C1 → C2     (kernel/driver C compile)
-              ├── RC → CVTRES               (resource compile)
-              └── LINK -lib | LINK          (librarian + executable link)
-```
-
-…against our kernel32, ntdll, and the NT 3.5 toolchain binaries
-staged at `\SystemRoot\pkg\msvc20\`.  Output is a fresh
-`ntoskrnl.exe` + drivers + userland built entirely under the OS
-that's running.  No Wine, no wibo, no host-side participation
-beyond having previously built the image.
-
-The build orchestrator (`src/pkg/ntosbe/build.lua`) is a regular Lua
-package module — the *same* code runs on host (against the wibo PE
-loader) and on guest (native NT spawn).  All file I/O, process
-spawn, and codegen helpers route through `ntosbe.platform`, which
-has both backends.
-
 ## Lua as init
 
 The kernel spawns one user-mode process via `Control\Init\Exe` — the
@@ -76,7 +52,7 @@ src/NT/PUBLIC/          shipped headers + import libs + bootstrap binaries
 src/boot-efi/           UEFI loader (gnu-efi, x86_64; long-mode → 32-bit kernel)
 src/cr/                 native-NT LuaJIT runtime (run.exe + lua.dll + librt)
 src/pkg/                Lua tree staged at \SystemRoot\lua\ on disk
-src/pkg/ntosbe/         NT OS Build Environment (hive + disk + profiles)
+src/pkg/ntosbe/         NT OS Build Environment (build + hive + layered disk composition)
 src/cmd-stub/           minimal cmd.exe replacement for NMAKE
 src/tools/              utility scripts (gdb_nt, agent_run, decode_av, dumphive, …)
 src/wibo-tools/         symlinks into PUBLIC/OAK/BIN/I386 (built first-run)
@@ -100,30 +76,33 @@ for diffing.
 ```sh
 sudo apt install gcc gcc-multilib libc6-dev-i386 make gnu-efi \
                  gcc-mingw-w64-i686 binutils-mingw-w64-i686 \
-                 mingw-w64-i686-dev qemu-system-x86 ovmf
+                 mingw-w64-i686-dev qemu-system-x86 ovmf lcov
 
 git clone --recursive https://github.com/HarryR/nt365
 cd nt365
 curl -fL https://github.com/HarryR/wibo/releases/download/v1.1.0-micront.2/wibo-x86_64 -o wibo-x86_64 && chmod +x wibo-x86_64
-./src/build.sh                                # builds everything (auto-runs bootstrap.sh)
+./src/build.sh                                # builds all artifacts, no disk image (auto-runs bootstrap.sh)
 ```
 
 Three toolchains coexist:
 
-- **wibo** runs the original MS toolchain (CL 8.50, ML 6.11d, LINK 2.50, NMAKE). No Wine.
+- [**wibo**](https://github.com/HarryR/wibo) runs the original MS toolchain (CL 8.50, ML 6.11d, LINK 2.50, NMAKE). No Wine.
 - **gcc + gnu-efi** for the UEFI loader.
 - **mingw-w64 i686** for the cr testbed (LuaJIT cross-compiled for
   native-NT subsystem).
 
-Output lands in `build/disk/` (`esp.img`, `SYSTEM` hive).
+`build.sh` builds artifacts only — kernel, drivers, userland, `cr`,
+`BOOTX64.EFI`.  Composing a bootable disk image is a separate step: the
+`make` targets below each bake their own (see **Run**).
 
 ## Run
 
 ```sh
 make -C src boot                 # canonical: q35 + NVMe (modern PCIe)
 make -C src boot MACHINE=pc DISK=ide   # legacy fallback shape
-make -C src selftest             # boot, run selftest.lua, shut down (CI signal)
 make -C src smoketest            # ~10 s "did it boot?" smoke
+make -C src selftest             # boot the kernel + fuzz test suites
+make -C src selfhost             # boot the in-OS self-build (rebuilds itself)
 ```
 
 `src/boot.sh` (next to `build.sh`) wraps QEMU directly — never invoke

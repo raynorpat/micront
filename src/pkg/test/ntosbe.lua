@@ -163,41 +163,6 @@ t.test("rtl.getcwd: non-empty current directory", function()
          "getcwd returned non-empty string: " .. tostring(cwd))
 end)
 
-local ps = require('nt.dll.ps')
-
-t.test("ps.wait_exit: replaces manual resume+wait+query", function()
-    -- ML.EXE /? is the same target msvc.lua's manual sequence uses;
-    -- here we exercise the helper that promotes that pattern to ps.
-    local proc = ps.spawn{
-        exe     = "\\SystemRoot\\pkg\\msvc20\\ML.EXE",
-        cmdline = "ML.EXE /?",
-    }
-    local exit_status = ps.wait_exit(proc)
-    -- ML.EXE /? prints usage and exits with status 0 or 1; either is
-    -- a successful "process ran and exited" signal.  STATUS_PENDING
-    -- (0x103) would mean wait_exit returned before the child finished.
-    t.ok(exit_status ~= 0x103, "child exited (not STATUS_PENDING)")
-end)
-
-t.test("ps.spawn{env}: explicit env block delivered to child", function()
-    -- ML.EXE doesn't read user-set env vars in a way we can probe
-    -- without parsing its output.  The point of this test is the
-    -- env-block path doesn't crash and the child still runs cleanly.
-    -- A future extension can spawn a tiny test exe that echoes
-    -- getenv("X") to stdout and assert the value.
-    local proc = ps.spawn{
-        exe     = "\\SystemRoot\\pkg\\msvc20\\ML.EXE",
-        cmdline = "ML.EXE /?",
-        env     = {
-            "FOO=bar",
-            "BAZ=qux=embedded-equals",
-            "EMPTY=",
-        },
-    }
-    local exit_status = ps.wait_exit(proc)
-    t.ok(exit_status ~= 0x103, "spawn{env=...} child ran to completion")
-end)
-
 -- ------------------------------------------------------------------
 -- Round 3: platform.lua NT branch wired end-to-end.  These tests
 -- exercise the consumer surface — read/list/spawn round-trips
@@ -245,13 +210,89 @@ end)
 t.test("platform.mkdir_p: deep path", function()
     -- Build runs always create obj/i386 under each component dir.
     -- Exercise the same shape with a throwaway path under SystemRoot.
-    local deep = "/SystemRoot/ntosbe_mkdir_test/a/b/c"
-    platform.mkdir_p(deep)
-    t.ok(platform.is_dir(deep), "deep path created")
-    -- Cleanup.
-    platform.rmrf("/SystemRoot/ntosbe_mkdir_test")
-    t.ok(not platform.file_exists("/SystemRoot/ntosbe_mkdir_test"),
-         "rmrf cleaned up")
+    --
+    -- platform.rmrf has failed here while separate tests proved both
+    -- its list_dir/is_dir walk and the rmdir primitive sound -- a
+    -- paradox.  So this test is self-diagnosing: it reproduces rmrf's
+    -- walk inline (confirming the dir count), runs the real rmrf, and
+    -- on failure enumerates exactly what rmrf left behind.
+    local root = "/SystemRoot/ntosbe_mkdir_test"
+    platform.mkdir_p(root .. "/a/b/c")
+    t.ok(platform.is_dir(root .. "/a/b/c"), "deep path created")
+
+    -- rmrf's own walk, inline: collect directories pre-order.
+    local dirs = {}
+    local function walk(p)
+        dirs[#dirs + 1] = p
+        for _, name in ipairs(platform.list_dir(p)) do
+            local sub = p .. "/" .. name
+            if platform.is_dir(sub) then walk(sub) end
+        end
+    end
+    walk(root)
+    t.eq(#dirs, 4, "rmrf-style walk collected 4 dirs, got " .. #dirs)
+
+    platform.rmrf(root)
+
+    -- If rmrf left anything, enumerate the survivors for the message.
+    local report = "clean"
+    if platform.file_exists(root) then
+        local left = {}
+        local function dump(p)
+            left[#left + 1] = p
+            for _, name in ipairs(platform.list_dir(p)) do
+                local sub = p .. "/" .. name
+                if platform.is_dir(sub) then dump(sub)
+                else left[#left + 1] = sub .. " (file)" end
+            end
+        end
+        dump(root)
+        report = "rmrf left " .. #left .. ": " .. table.concat(left, ", ")
+    end
+    t.ok(report == "clean", "rmrf cleaned up -- " .. report)
+
+    -- Teardown regardless, via the proven rmdir primitive.
+    if platform.file_exists(root) then
+        for _, d in ipairs({ root .. "/a/b/c", root .. "/a/b",
+                             root .. "/a", root }) do
+            platform.rmdir(d)
+        end
+    end
+end)
+
+local ps = require('nt.dll.ps')
+
+t.test("ps.wait_exit: replaces manual resume+wait+query", function()
+    -- ML.EXE /? is the same target msvc.lua's manual sequence uses;
+    -- here we exercise the helper that promotes that pattern to ps.
+    local proc = ps.spawn{
+        exe     = "\\SystemRoot\\pkg\\msvc20\\ML.EXE",
+        cmdline = "ML.EXE /?",
+    }
+    local exit_status = ps.wait_exit(proc)
+    -- ML.EXE /? prints usage and exits with status 0 or 1; either is
+    -- a successful "process ran and exited" signal.  STATUS_PENDING
+    -- (0x103) would mean wait_exit returned before the child finished.
+    t.ok(exit_status ~= 0x103, "child exited (not STATUS_PENDING)")
+end)
+
+t.test("ps.spawn{env}: explicit env block delivered to child", function()
+    -- ML.EXE doesn't read user-set env vars in a way we can probe
+    -- without parsing its output.  The point of this test is the
+    -- env-block path doesn't crash and the child still runs cleanly.
+    -- A future extension can spawn a tiny test exe that echoes
+    -- getenv("X") to stdout and assert the value.
+    local proc = ps.spawn{
+        exe     = "\\SystemRoot\\pkg\\msvc20\\ML.EXE",
+        cmdline = "ML.EXE /?",
+        env     = {
+            "FOO=bar",
+            "BAZ=qux=embedded-equals",
+            "EMPTY=",
+        },
+    }
+    local exit_status = ps.wait_exit(proc)
+    t.ok(exit_status ~= 0x103, "spawn{env=...} child ran to completion")
 end)
 
 t.test("platform.spawn_wait: ML.EXE through platform layer", function()

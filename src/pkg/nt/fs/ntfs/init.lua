@@ -227,9 +227,16 @@ end
 -- Build the $MFT $BITMAP value: one bit per MFT record, set if the
 -- record is in use.
 --
--- System records 0-10 except 9 ($Quota, unused in v1.1).
+-- Reserved records 0..FIRST_USER_FILE_NUMBER-1 (0..15) are ALL marked
+-- allocated, including the ones this composer leaves empty ($Quota at
+-- 9, the spares at 11-15).  The kernel MFT allocator hands out the
+-- lowest free bit; if any reserved record reads free, a user file
+-- lands below FIRST_USER_FILE_NUMBER -- and NtfsFileIsInExpression
+-- (NTFS/COLATSUP.C) treats FRS < FIRST_USER_FILE_NUMBER as a system
+-- file and hides it from wildcard directory enumeration, so the file
+-- becomes invisible to NtQueryDirectoryFile though still openable by
+-- name.  format.exe reserves the whole range the same way.
 -- User records 16..16+n_files-1.
--- Records 11-15 reserved (unused).
 --
 -- Bit layout: byte 0 bit 0 = file 0; byte 0 bit 7 = file 7;
 -- byte 1 bit 0 = file 8; etc.  Pad to 8 bytes minimum (NTFS
@@ -245,9 +252,9 @@ local function build_mft_bitmap(total_records, n_user_files)
             bit.lshift(1, file_num % 8))
     end
 
-    -- System files 0..10 minus 9.
-    for i = 0, 10 do
-        if i ~= 9 then set(i) end
+    -- The full reserved range 0..FIRST_USER_FILE_NUMBER-1.
+    for i = 0, M.FIRST_USER_FILE_NUMBER - 1 do
+        set(i)
     end
     -- User files 16..16+n-1.
     for i = 0, n_user_files - 1 do

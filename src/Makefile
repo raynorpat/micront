@@ -274,9 +274,7 @@ coverage: $(QCOV_SO) disk
 # genhtml resolves the repo-relative SF paths from the repo root; CRT /
 # compiler-runtime files carry their original build paths and have no
 # repo source, so missing-source is downgraded to a warning.
-coverage-html:
-	@test -f $(COV_INFO) || { \
-	    echo "no $(COV_INFO) — run 'make coverage' first" >&2; exit 1; }
+coverage-html: coverage
 	cd $(REPO) && genhtml $(COV_INFO) \
 	    --output-directory $(COV_HTML) \
 	    --title "MicroNT kernel coverage" \

@@ -403,6 +403,64 @@ t.test("Subdirectory tree: nested dir's $INDEX_ROOT independent of parent", func
     t.eq(parent_listed[1], "inner")
 end)
 
+t.test("Recursive delete: rmrf-style list_dir walk + post-order rmdir", function()
+    -- The direct-delete form of this (open(DELETE)+set_disposition per
+    -- known path) passes, so basic nested-empty-dir removal is sound.
+    -- This mirrors platform.rmrf instead: enumerate every directory
+    -- with list_dir during a walk, THEN delete bottom-up -- isolating
+    -- the list_dir-then-delete interaction the selfhost ntosbe.lua
+    -- failure points at.  Each rmdir is reported by level.
+    local base = fresh_dir("__rmrf")
+    local a    = base .. "\\a"
+    local b    = a .. "\\b"
+    local c    = b .. "\\c"
+    for _, d in ipairs({ a, b, c }) do
+        local h = fs.create_dir(d)
+        h:close()
+    end
+
+    local function is_dir(p)
+        local i = fs.query_attributes(p)
+        return i ~= nil
+           and bit.band(i.FileAttributes, fs.FILE_ATTRIBUTE_DIRECTORY) ~= 0
+    end
+
+    -- Walk like platform.rmrf: list_dir each directory, collect
+    -- pre-order, recurse into subdirectories.
+    local dirs = {}
+    local function walk(p)
+        dirs[#dirs + 1] = p
+        for _, name in ipairs(fs.list_dir(p)) do
+            local sub = p .. "\\" .. name
+            if is_dir(sub) then walk(sub) end
+        end
+    end
+    walk(base)
+    t.eq(#dirs, 4, "walk found base + a + b + c")
+
+    -- rmdir = open(DELETE) + set_disposition + close; pcall so a raised
+    -- NTSTATUS is reported rather than aborting the test.
+    local function rmdir(path)
+        return pcall(function()
+            local h = fs.NtOpenFile(
+                bit.bor(fs.DELETE, fs.SYNCHRONIZE),
+                oa.path(path).oa,
+                bit.bor(fs.FILE_SHARE_READ, fs.FILE_SHARE_WRITE),
+                fs.FILE_SYNCHRONOUS_IO_NONALERT)
+            fs.set_disposition(h, true)
+            h:close()
+        end)
+    end
+
+    -- Post-order: deepest dir first, each empty at its turn.
+    for i = #dirs, 1, -1 do
+        local ok, err = rmdir(dirs[i])
+        t.ok(ok, "rmdir " .. dirs[i]
+                 .. (ok and "" or " raised " .. tostring(err)))
+    end
+    t.ok(fs.query_attributes(base) == nil, "whole tree removed")
+end)
+
 t.test("MFT bitmap nonresident-extend: 200 file creations in fresh dir", function()
     -- Coverage for the path the 0xCAFE5E7B stub used to guard.  mkntfs
     -- writes $MFT/$BITMAP nonresident at format time, but the kernel
@@ -444,4 +502,228 @@ t.test("Re-create after delete: same name slot reusable", function()
     write_file(PATH, "second")
     t.eq(read_file(PATH), "second",
          "recreated file holds new content (not stale)")
+end)
+
+t.test("Recursive delete: fresh tree with records in nonresident $MFT", function()
+    -- Transposes the selfhost rmrf failure (ntosbe.lua) into selftest.
+    -- On selfhost the volume is large, so a freshly-created directory's
+    -- file record lands in the nonresident-extended $MFT region; the
+    -- lean selftest volume otherwise keeps fresh records resident, and
+    -- the bug does not show.  Force the selfhost shape here: bulk-create
+    -- files so $MFT extends well past the resident threshold, THEN build
+    -- a deep dir tree whose records land in the extended region, and
+    -- walk it with list_dir.  If enumerating a fresh directory whose
+    -- record lives in nonresident $MFT misses a just-inserted entry,
+    -- the walk under-collects -- exactly the selfhost symptom, where
+    -- platform.rmrf's walk collected only the root (#dirs == 1).
+    local pad = fresh_dir("__mftpad")
+    for i = 1, 256 do
+        write_file(string.format("%s\\p_%04d.tmp", pad, i), "")
+    end
+    -- The tree's directories now allocate MFT records past the batch.
+    local base = fresh_dir("__rmrf_mft")
+    local a, b, c = base .. "\\a", base .. "\\a\\b", base .. "\\a\\b\\c"
+    for _, d in ipairs({ a, b, c }) do
+        local h = fs.create_dir(d)
+        h:close()
+    end
+
+    local function is_dir(p)
+        local info = fs.query_attributes(p)
+        return info ~= nil
+           and bit.band(info.FileAttributes, fs.FILE_ATTRIBUTE_DIRECTORY) ~= 0
+    end
+    local dirs = {}
+    local function walk(p)
+        dirs[#dirs + 1] = p
+        for _, name in ipairs(fs.list_dir(p)) do
+            local sub = p .. "\\" .. name
+            if is_dir(sub) then walk(sub) end
+        end
+    end
+    walk(base)
+    t.eq(#dirs, 4,
+         "list_dir walk of fresh tree collected base+a+b+c, got " .. #dirs)
+
+    -- Bottom-up teardown via known paths (independent of what walk found).
+    for _, d in ipairs({ c, b, a, base }) do
+        local h = fs.NtOpenFile(
+            bit.bor(fs.DELETE, fs.SYNCHRONIZE),
+            oa.path(d).oa,
+            bit.bor(fs.FILE_SHARE_READ, fs.FILE_SHARE_WRITE),
+            fs.FILE_SYNCHRONOUS_IO_NONALERT)
+        fs.set_disposition(h, true)
+        h:close()
+    end
+end)
+
+-- ----------------------------------------------------------------
+-- Directory enumeration with a search pattern.  list_dir's optional
+-- name_filter threads a UTF-8 pattern to NtQueryDirectoryFile, which
+-- drives the kernel's wildcard / exact-name match path (NTFS
+-- NtfsFileIsInExpression, NtfsFileIsEqual, NtfsFileContainsWildcards
+-- and the COLATSUP collation routines) — code the unfiltered listing
+-- never reaches.
+-- ----------------------------------------------------------------
+
+t.test("Directory filter: exact-name pattern matches one entry", function()
+    local DIR = fresh_dir("__flt1")
+    for _, n in ipairs({ "aa.txt", "ab.txt", "ac.dat" }) do
+        write_file(DIR .. "\\" .. n, "x")
+    end
+    local got = fs.list_dir(DIR, "ab.txt")
+    t.eq(#got, 1, "exact pattern returned a single match")
+    t.eq(got[1], "ab.txt", "and it is the requested entry")
+end)
+
+t.test("Directory filter: '*' lists every entry, like no filter", function()
+    local DIR = fresh_dir("__flt2")
+    for _, n in ipairs({ "aa.txt", "ab.txt", "ac.dat" }) do
+        write_file(DIR .. "\\" .. n, "x")
+    end
+    local all  = fs.list_dir(DIR)
+    local star = fs.list_dir(DIR, "*")
+    t.eq(#star, #all, "'*' filter count equals unfiltered count")
+    t.eq(#star, 3, "all three entries returned")
+end)
+
+t.test("Directory filter: extension wildcard '*.txt'", function()
+    local DIR = fresh_dir("__flt3")
+    for _, n in ipairs({ "aa.txt", "ab.txt", "ac.dat" }) do
+        write_file(DIR .. "\\" .. n, "x")
+    end
+    local txt = fs.list_dir(DIR, "*.txt")
+    table.sort(txt)
+    t.eq(#txt, 2, "*.txt matched the two .txt entries")
+    t.eq(txt[1], "aa.txt")
+    t.eq(txt[2], "ab.txt")
+end)
+
+t.test("Directory filter: non-matching pattern yields empty list", function()
+    local DIR = fresh_dir("__flt4")
+    write_file(DIR .. "\\aa.txt", "x")
+    -- A pattern matching nothing: NtQueryDirectoryFile reports
+    -- STATUS_NO_SUCH_FILE; list_dir surfaces it as an empty result,
+    -- not a raise.
+    local got = fs.list_dir(DIR, "zz*")
+    t.eq(#got, 0, "non-matching pattern returned no entries")
+end)
+
+t.test("Directory filter: '?' matches exactly one character", function()
+    -- "?" is a distinct branch in the expression matcher from "*".
+    local DIR = fresh_dir("__flt5")
+    for _, n in ipairs({ "x1.dat", "x2.dat", "xxx.dat" }) do
+        write_file(DIR .. "\\" .. n, "x")
+    end
+    local got = fs.list_dir(DIR, "x?.dat")
+    table.sort(got)
+    t.eq(#got, 2, "x?.dat matched the two single-char-stem entries")
+    t.eq(got[1], "x1.dat")
+    t.eq(got[2], "x2.dat")
+end)
+
+t.test("Directory enumeration: long name with generated 8.3 short name", function()
+    -- A name that does not fit 8.3 makes NTFS store TWO $FILE_NAME
+    -- index entries -- the long (NTFS-namespace) name and a generated
+    -- short (DOS-namespace) name.  Enumeration walks both and must
+    -- return the long name exactly once -- exercising the DOS-name
+    -- pairing path (NtfsRetrieveOtherIndexEntry, DIRCTRL.C ~894-948)
+    -- that an all-8.3 directory never reaches.
+    local DIR  = fresh_dir("__long")
+    local LONG = "this_is_a_long_filename.txt"
+    write_file(DIR .. "\\" .. LONG, "x")
+    local got = fs.list_dir(DIR)
+    t.eq(#got, 1, "one entry -- the long name, not also its 8.3 alias")
+    t.eq(got[1], LONG, "the long name is the entry returned")
+end)
+
+t.test("Directory filter: pattern survives multi-buffer enumeration", function()
+    -- iter_dir's 8 KB buffer holds far fewer than 150 records, so this
+    -- spans several NtQueryDirectoryFile calls.  The search pattern is
+    -- captured on the restart call only; a continuation must NOT re-send
+    -- it (the kernel would read it as resume-after-name).  The .dat
+    -- entries confirm the filter actually excludes non-matches.
+    local DIR = fresh_dir("__fltbig")
+    local N = 150
+    for i = 1, N do
+        write_file(string.format("%s\\m_%04d.tmp", DIR, i), "")
+        write_file(string.format("%s\\o_%04d.dat", DIR, i), "")
+    end
+    local tmp = fs.list_dir(DIR, "*.tmp")
+    t.eq(#tmp, N, "all " .. N .. " .tmp entries returned across refills")
+end)
+
+-- ----------------------------------------------------------------
+-- The richer FileInformationClass projections.  iter_dir's info_class
+-- argument drives NtQueryDirectoryFile's class-specific fill paths in
+-- DIRCTRL.C — the BaseLength switch and the per-class record builders
+-- — that the default FileDirectoryInformation listing never reaches.
+-- ----------------------------------------------------------------
+
+t.test("Directory enumeration: FileBothDirectoryInformation projection", function()
+    local DIR = fresh_dir("__both")
+    -- A plain 8.3 name plus a long (non-8.3) name: the "both" class
+    -- carries each entry's generated short name when one exists.
+    for _, n in ipairs({ "plain.txt", "a_long_both_name.dat" }) do
+        write_file(DIR .. "\\" .. n, "x")
+    end
+    local h = fs.create_dir(DIR)
+    local seen = {}
+    local ok, e = pcall(function()
+        for name, info in fs.iter_dir(h, nil, fs.FileBothDirectoryInformation) do
+            seen[name] = true
+            -- ShortNameLength is bytes; > 0 when NTFS generated a
+            -- separate 8.3 alias.  Decode-check it when present.
+            local nshort = math.floor(info.ShortNameLength / 2)
+            if nshort > 0 then
+                local sn = str.from_wchars(
+                    ffi.cast('uint16_t *', info.ShortName), nshort)
+                t.ok(#sn > 0 and #sn <= 12,
+                     "short name '" .. sn .. "' is 8.3-sized")
+            end
+        end
+    end)
+    h:close()
+    if not ok then error(e, 0) end
+    t.ok(seen["plain.txt"] and seen["a_long_both_name.dat"],
+         "both entries enumerated via FileBothDirectoryInformation")
+end)
+
+t.test("Directory enumeration: FileFullDirectoryInformation projection", function()
+    local DIR = fresh_dir("__full")
+    for _, n in ipairs({ "f1.txt", "f2.txt" }) do
+        write_file(DIR .. "\\" .. n, "data")
+    end
+    local h = fs.create_dir(DIR)
+    local count = 0
+    local ok, e = pcall(function()
+        for name, info in fs.iter_dir(h, nil, fs.FileFullDirectoryInformation) do
+            count = count + 1
+            -- EaSize is this class's extra field; the files carry no
+            -- extended attributes, so it reads back zero.
+            t.eq(tonumber(info.EaSize), 0, name .. " reports no EAs")
+        end
+    end)
+    h:close()
+    if not ok then error(e, 0) end
+    t.eq(count, 2, "both entries enumerated via FileFullDirectoryInformation")
+end)
+
+t.test("Directory enumeration: FileNamesInformation projection", function()
+    local DIR = fresh_dir("__names")
+    for _, n in ipairs({ "n1.txt", "n2.txt", "n3.txt" }) do
+        write_file(DIR .. "\\" .. n, "x")
+    end
+    local h = fs.create_dir(DIR)
+    local names = {}
+    local ok, e = pcall(function()
+        for name in fs.iter_dir(h, nil, fs.FileNamesInformation) do
+            names[#names + 1] = name
+        end
+    end)
+    h:close()
+    if not ok then error(e, 0) end
+    table.sort(names)
+    t.eq(#names, 3, "all entries enumerated via FileNamesInformation")
+    t.eq(names[1], "n1.txt")
 end)
