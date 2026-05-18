@@ -324,3 +324,12 @@ t.test("NtExtendSection rejects kernel-range NewSectionSize", function()
         section_raw(), KERNEL_PTR))
     rejects(st, "NtExtendSection/NewSectionSize")
 end)
+
+-- ---- No pointer-slot sweep for the cache-flush / paging-file trio ----
+-- NtFlushWriteBuffer takes no arguments. NtFlushInstructionCache's
+-- BaseAddress is an address value, not a structure the kernel
+-- dereferences. NtCreatePagingFile is kernel-stubbed (MicroNT is
+-- pagefile-less; MM/MODWRITE.C returns STATUS_NOT_IMPLEMENTED before
+-- touching any argument). None has a probed-pointer surface, so none
+-- has a confirm-net entry here; their happy-path coverage is in
+-- test/mm.lua.

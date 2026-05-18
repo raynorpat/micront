@@ -1,4 +1,6 @@
--- test.fuzz.io — kernel-range pointer-slot sweep for IO syscalls.
+-- test.fuzz.io — IO syscall hardening fuzz suites.
+--
+-- Suite 1 — kernel-range pointer-slot sweep for IO syscalls.
 --
 -- Part of the deref-before-probe sweep (the bug class written up as
 -- NT-BUGS.md entry #5): a syscall that reads a field of an untrusted
@@ -337,4 +339,84 @@ t.test("NtQueryAttributesFile rejects kernel-range ObjectAttributes", function()
     local st = err.normalize(ntdll.NtQueryAttributesFile(
         KERNEL_PTR, fbi))
     rejects(st, "NtQueryAttributesFile/ObjectAttributes")
+end)
+
+-- ===================================================================
+-- Suite 2 — oversized transfer-length cap (audit pattern P2).
+--
+-- The buffered-I/O paths stage the caller's whole transfer length
+-- into NonPagedPool. Before the fix an unprivileged caller could
+-- drain the system pool with one oversized syscall (a system-wide
+-- DoS). IOP_MAX_TRANSFER_LENGTH (32 MiB, IO/IOP.H) caps it: each
+-- length-bearing entry point rejects an over-cap length with
+-- STATUS_INVALID_PARAMETER *up front* -- before the file handle is
+-- referenced, before the buffer is probed, before any allocation
+-- (confirmed in READ.C/WRITE.C/QSINFO.C/DIR.C/INTERNAL.C).
+--
+-- This suite hands each bridged length-bearing IO syscall a 64 MiB
+-- length and asserts that exact status. The assertion is deliberately
+-- strict (== STATUS_INVALID_PARAMETER, not the generic >= error
+-- check): a regressed cap would surface as a *different* failure --
+-- an ACCESS_VIOLATION from probing the now-enormous buffer, or a hang
+-- as the kernel attempts the 64 MiB pool allocation -- and a loose
+-- check would miss it.
+
+t.suite("io: hardening (oversized transfer-length cap)")
+
+-- 64 MiB -- twice IOP_MAX_TRANSFER_LENGTH. The cap fires before the
+-- buffer is touched, so the small scratch buffer passed alongside is
+-- never read.
+local OVERSIZED = 0x04000000
+local STATUS_INVALID_PARAMETER = 0xC000000D
+
+-- Assert the length cap rejected with STATUS_INVALID_PARAMETER.
+local function capped(st, slot)
+    t.ok(st == STATUS_INVALID_PARAMETER,
+         slot .. ": expected STATUS_INVALID_PARAMETER, got "
+         .. string.format("0x%08x", st))
+end
+
+t.test("NtReadFile caps oversized Length", function()
+    local st = err.normalize(ntdll.NtReadFile(
+        null_raw(), nil, nil, nil, iosb(), bytes(64), OVERSIZED, nil, nil))
+    capped(st, "NtReadFile/Length")
+end)
+
+t.test("NtWriteFile caps oversized Length", function()
+    local st = err.normalize(ntdll.NtWriteFile(
+        null_raw(), nil, nil, nil, iosb(), bytes(64), OVERSIZED, nil, nil))
+    capped(st, "NtWriteFile/Length")
+end)
+
+t.test("NtDeviceIoControlFile caps oversized InputBufferLength", function()
+    local st = err.normalize(ntdll.NtDeviceIoControlFile(
+        null_raw(), nil, nil, nil, iosb(), 0,
+        bytes(16), OVERSIZED, bytes(16), 16))
+    capped(st, "NtDeviceIoControlFile/InputBufferLength")
+end)
+
+t.test("NtDeviceIoControlFile caps oversized OutputBufferLength", function()
+    local st = err.normalize(ntdll.NtDeviceIoControlFile(
+        null_raw(), nil, nil, nil, iosb(), 0,
+        bytes(16), 16, bytes(16), OVERSIZED))
+    capped(st, "NtDeviceIoControlFile/OutputBufferLength")
+end)
+
+t.test("NtQueryInformationFile caps oversized Length", function()
+    local st = err.normalize(ntdll.NtQueryInformationFile(
+        null_raw(), iosb(), bytes(64), OVERSIZED, 5))
+    capped(st, "NtQueryInformationFile/Length")
+end)
+
+t.test("NtSetInformationFile caps oversized Length", function()
+    local st = err.normalize(ntdll.NtSetInformationFile(
+        null_raw(), iosb(), bytes(64), OVERSIZED, 5))
+    capped(st, "NtSetInformationFile/Length")
+end)
+
+t.test("NtQueryDirectoryFile caps oversized Length", function()
+    local st = err.normalize(ntdll.NtQueryDirectoryFile(
+        null_raw(), nil, nil, nil, iosb(), bytes(256), OVERSIZED, 1,
+        0, nil, 1))
+    capped(st, "NtQueryDirectoryFile/Length")
 end)

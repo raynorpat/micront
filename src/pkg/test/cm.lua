@@ -96,3 +96,28 @@ t.test("NtQueryValueKey on missing value raises", function()
     end)
     k:close()
 end)
+
+t.test("set_write_time round-trips on a volatile scratch key", function()
+    -- KEY_ALL_ACCESS so the handle carries KEY_SET_VALUE (which
+    -- NtSetInformationKey references) and KEY_QUERY_VALUE (the
+    -- read-back). REG_OPTION_VOLATILE keeps the key out of the on-disk
+    -- hive — it vanishes on reboot — and NtDeleteKey drops it now.
+    local KEY_ALL_ACCESS      = 0xF003F
+    local REG_OPTION_VOLATILE = 1
+    local k = cm.NtCreateKey(KEY_ALL_ACCESS,
+        oa.path("\\Registry\\Machine\\System\\CurrentControlSet\\Control\\MicroNTCmTest").oa,
+        0, nil, REG_OPTION_VOLATILE)
+
+    local wt = ffi.new('LARGE_INTEGER')
+    wt.QuadPart = 0x01BF53EB256D4000LL   -- arbitrary plausible NT timestamp
+    cm.set_write_time(k, wt)
+
+    local buf = ffi.new('char[256]')
+    cm.NtQueryKey(k, cm.KeyBasicInformation, buf, 256)
+    local info = ffi.cast('KEY_BASIC_INFORMATION *', buf)
+    t.ok(info.LastWriteTime.QuadPart == wt.QuadPart,
+         "LastWriteTime round-trips through set_write_time")
+
+    cm.NtDeleteKey(k)
+    k:close()
+end)

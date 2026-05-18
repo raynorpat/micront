@@ -78,3 +78,20 @@ t.test("section two independent views share pages", function()
     mm.NtUnmapViewOfSection(nil, b)
     sec:close()
 end)
+
+t.test("NtFlushWriteBuffer succeeds", function()
+    t.ok(pcall(mm.NtFlushWriteBuffer), "NtFlushWriteBuffer succeeded")
+end)
+
+t.test("NtFlushInstructionCache flushes a committed region", function()
+    local base, size = mm.NtAllocateVirtualMemory(nil, nil, 4096,
+        mm.MEM_COMMIT + mm.MEM_RESERVE, mm.PAGE_EXECUTE_READWRITE)
+    local ok = pcall(mm.NtFlushInstructionCache, nil, base, size)
+    mm.NtFreeVirtualMemory(nil, base, 0, mm.MEM_RELEASE)
+    t.ok(ok, "NtFlushInstructionCache succeeded over the region")
+end)
+
+t.test("NtCreatePagingFile is kernel-stubbed (pagefile-less by design)", function()
+    -- MicroNT runs pagefile-less; MM/MODWRITE.C stubs NtCreatePagingFile.
+    t.eq(mm.NtCreatePagingFile(), 0xC0000002 --[[ STATUS_NOT_IMPLEMENTED ]])
+end)

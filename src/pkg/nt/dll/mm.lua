@@ -115,6 +115,20 @@ NTSTATUS __stdcall NtUnmapViewOfSection(HANDLE ProcessHandle,
 
 NTSTATUS __stdcall NtExtendSection(HANDLE SectionHandle,
                                    LARGE_INTEGER *NewSectionSize);
+
+NTSTATUS __stdcall NtFlushWriteBuffer(void);
+
+NTSTATUS __stdcall NtFlushInstructionCache(HANDLE ProcessHandle,
+                                           void *BaseAddress,
+                                           ULONG Length);
+
+/* NtCreatePagingFile is kernel-stubbed: MicroNT runs pagefile-less by
+ * design (MM/MODWRITE.C returns STATUS_NOT_IMPLEMENTED). Declared for
+ * FFI-surface completeness. */
+NTSTATUS __stdcall NtCreatePagingFile(UNICODE_STRING *PageFileName,
+                                      LARGE_INTEGER *MinimumSize,
+                                      LARGE_INTEGER *MaximumSize,
+                                      ULONG Priority);
 ]]
 
 local M = {}
@@ -371,6 +385,39 @@ function M.NtExtendSection(section, new_size)
     local st = ntdll.NtExtendSection(handle.raw(section), size)
     if err.is_error(st) then err.raise('NtExtendSection', st) end
     return size.QuadPart
+end
+
+-- ------------------------------------------------------------------
+-- Cache / write-buffer flush
+-- ------------------------------------------------------------------
+
+-- Drain the current processor's write buffer (pending writes -> memory).
+function M.NtFlushWriteBuffer()
+    local st = ntdll.NtFlushWriteBuffer()
+    if err.is_error(st) then err.raise('NtFlushWriteBuffer', st) end
+end
+
+-- Flush the instruction cache for a process's address space — needed
+-- after writing code into memory (JITs, trampolines). `proc` is nil
+-- for the current process; `base`/`length` bound the range, or pass
+-- nil/0 to flush the whole cache.
+function M.NtFlushInstructionCache(proc, base, length)
+    local st = ntdll.NtFlushInstructionCache(proc_raw(proc),
+                                             base, length or 0)
+    if err.is_error(st) then err.raise('NtFlushInstructionCache', st) end
+end
+
+-- ------------------------------------------------------------------
+-- Paging file
+-- ------------------------------------------------------------------
+
+-- NtCreatePagingFile is kernel-stubbed: MicroNT runs pagefile-less by
+-- design — the commit limit is physical-RAM-only — and MM/MODWRITE.C
+-- returns STATUS_NOT_IMPLEMENTED. Bridged for FFI-surface completeness;
+-- returns the raw NTSTATUS (does not raise) so a caller can observe the
+-- stub. The kernel ignores every argument, so this wrapper passes none.
+function M.NtCreatePagingFile()
+    return err.normalize(ntdll.NtCreatePagingFile(nil, nil, nil, 0))
 end
 
 return M

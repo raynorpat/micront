@@ -15,6 +15,9 @@
 #   make gdb          — launch gdb with ntoskrnl + hal .dwf loaded
 #                       and attach to a running boot.sh --gdb session
 #                       (builds the .dwf files on demand if missing)
+#   make coverage     — boot the selftest under the qcov TCG plugin and
+#                       emit build/cov/coverage.info (lcov line coverage)
+#   make coverage-html— render that .info to HTML with genhtml
 #
 # Hardware shape — flags pass through to boot.sh:
 #   make boot MACHINE=q35 DISK=nvme            # canonical (default)
@@ -44,7 +47,7 @@ BOOT_EFI    := $(SRC)/boot-efi
 BUILD       := $(REPO)/build/disk
 HOST_LUAJIT := $(REPO)/build/host-tools/luajit
 
-.PHONY: cr disk boot selftest selfhost smoketest smoke-disk gdb
+.PHONY: cr disk boot selftest selfhost smoketest smoke-disk gdb qcov coverage coverage-html
 
 # ---------------- cr binaries (run.exe + lua.dll) -------------------
 #
@@ -212,3 +215,70 @@ gdb: $(NTOSKRNL_DWF) $(HAL_DWF)
 	  -ex 'source $(GDB_INIT)' \
 	  -ex 'source $(GDB_NT)' \
 	  -ex 'target remote :1234'
+
+# ---------------- coverage instrumentation --------------------------
+#
+# qcov is a QEMU TCG plugin (src/tools/qcov.c) that records a per-block
+# execution histogram of NT kernel-space code.  It needs no QEMU headers
+# — it declares the version-1 plugin API itself, and QEMU resolves the
+# qemu_plugin_* symbols at dlopen time — so a plain host gcc builds it,
+# and the resulting .so loads on any plugin-enabled QEMU regardless of
+# the version CI or a developer happens to have.
+#
+# `boot.sh --coverage <out>` loads the .so; cov2lcov.py later joins its
+# histogram against the serial log's `staged` lines and each module's
+# .dwf to emit lcov.  `make qcov` builds just the plugin.
+QCOV_SRC := $(SRC)/tools/qcov.c
+QCOV_SO  := $(REPO)/build/host-tools/qcov.so
+
+$(QCOV_SO): $(QCOV_SRC)
+	mkdir -p $(dir $@)
+	gcc -O2 -fPIC -shared -Wall -Wextra -o $@ $<
+
+qcov: $(QCOV_SO)
+
+# `make coverage` — instrumented selftest run + lcov.  Composes and boots
+# the selftest profile (same disk as `make selftest`) with the qcov TCG
+# plugin loaded, then turns the captured histogram into an lcov .info:
+#
+#   build/cov/qcov.trace    — per-block execution histogram (qcov plugin)
+#   build/cov/serial.log    — boot output; its IOSYS lines are the module
+#                             load map cov2lcov.py joins the trace against
+#   build/cov/coverage.info — lcov line coverage for the kernel + drivers
+#
+# `make coverage-html` renders that .info to browsable HTML via genhtml.
+#
+# The boot is tee'd: visible live and saved.  The selftest powers off via
+# isa-debug-exit (a non-zero QEMU exit), so the run goes through `tee`,
+# whose own exit status keeps `make` from flagging that as a failure.
+COV_DIR   := $(REPO)/build/cov
+COV_TRACE := $(COV_DIR)/qcov.trace
+COV_LOG   := $(COV_DIR)/serial.log
+COV_INFO  := $(COV_DIR)/coverage.info
+COV_HTML  := $(COV_DIR)/html
+
+coverage: PROFILE_FLAG := --profile selftest
+coverage: INIT_ARGS_FLAG :=
+coverage: BUILD := $(REPO)/build/disk-selftest
+coverage: LAYOUT_FLAG := --layout=$(or $(LAYOUT),split-ntfs)
+coverage: $(QCOV_SO) disk
+	mkdir -p $(COV_DIR)
+	$(SRC)/boot.sh --disk-image $(BUILD)/esp.img \
+	    --coverage $(COV_TRACE) 2>&1 | tee $(COV_LOG)
+	python3 $(SRC)/tools/cov2lcov.py \
+	    --trace $(COV_TRACE) --serial $(COV_LOG) --out $(COV_INFO)
+	@echo "[coverage] lcov → $(COV_INFO)   (run 'make coverage-html' to render)"
+
+# `make coverage-html` — render the last `make coverage` .info to HTML.
+# Standalone: it does not re-boot, so HTML can be regenerated cheaply.
+# genhtml resolves the repo-relative SF paths from the repo root; CRT /
+# compiler-runtime files carry their original build paths and have no
+# repo source, so missing-source is downgraded to a warning.
+coverage-html:
+	@test -f $(COV_INFO) || { \
+	    echo "no $(COV_INFO) — run 'make coverage' first" >&2; exit 1; }
+	cd $(REPO) && genhtml $(COV_INFO) \
+	    --output-directory $(COV_HTML) \
+	    --title "MicroNT kernel coverage" \
+	    --legend --ignore-errors source
+	@echo "[coverage-html] → $(COV_HTML)/index.html"

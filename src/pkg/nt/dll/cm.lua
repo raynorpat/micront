@@ -96,6 +96,11 @@ NTSTATUS __stdcall NtSetValueKey(HANDLE KeyHandle,
 
 NTSTATUS __stdcall NtDeleteValueKey(HANDLE KeyHandle,
                                     UNICODE_STRING *ValueName);
+
+NTSTATUS __stdcall NtSetInformationKey(HANDLE KeyHandle,
+                                       int KeySetInformationClass,
+                                       void *KeySetInformation,
+                                       ULONG KeySetInformationLength);
 ]]
 
 local M = {}
@@ -130,6 +135,11 @@ M.REG_MULTI_SZ                   = 7
 M.REG_RESOURCE_LIST              = 8
 M.REG_FULL_RESOURCE_DESCRIPTOR   = 9
 M.REG_RESOURCE_REQUIREMENTS_LIST = 10
+
+-- KEY_SET_INFORMATION_CLASS values (for NtSetInformationKey).
+-- NT 3.5 implements only KeyWriteTimeInformation — the data buffer is
+-- a KEY_WRITE_TIME_INFORMATION, i.e. a bare LARGE_INTEGER LastWriteTime.
+M.KeyWriteTimeInformation = 0
 
 function M.NtOpenKey(access, oa)
     local h = ffi.new('HANDLE[1]')
@@ -218,6 +228,22 @@ function M.NtDeleteValueKey(h, value_name)
     local ns = str.to_utf16(value_name)
     local st = ntdll.NtDeleteValueKey(handle.raw(h), ns.us)
     if err.is_error(st) then err.raise('NtDeleteValueKey', st) end
+end
+
+-- Set a registry key's last-write timestamp. `write_time` is a
+-- LARGE_INTEGER cdata — the same form a key's write time reads back as
+-- (KEY_BASIC_INFORMATION.LastWriteTime), so set and get round-trip.
+--
+-- This is the single operation NtSetInformationKey offers on NT 3.5:
+-- its only info class is KeyWriteTimeInformation. A caller wanting the
+-- raw multiplexed syscall can invoke ntdll.NtSetInformationKey via FFI.
+function M.set_write_time(h, write_time)
+    local wt = ffi.new('LARGE_INTEGER[1]')
+    wt[0].QuadPart = write_time.QuadPart
+    local st = ntdll.NtSetInformationKey(handle.raw(h),
+                                         M.KeyWriteTimeInformation,
+                                         wt, ffi.sizeof('LARGE_INTEGER'))
+    if err.is_error(st) then err.raise('NtSetInformationKey', st) end
 end
 
 return M

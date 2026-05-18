@@ -46,7 +46,7 @@ jobs:
             gnu-efi \
             gcc-mingw-w64-i686 binutils-mingw-w64-i686 \
             mingw-w64-i686-dev \
-            python3 \
+            python3 lcov \
             qemu-system-x86 ovmf
 
       - uses: actions/checkout@v4
@@ -133,29 +133,51 @@ jobs:
           done
           exit $fail
 
-      - name: run selftest under QEMU
+      - name: run selftest under QEMU with coverage
         # Boot micront under OVMF/QEMU with the `selftest` ntosbe
         # profile — the lean disk: kernel + driver + fuzz suites, no NT
-        # source tree, no in-OS rebuild.  The Lua harness prints a
-        # summary and shuts down cleanly.  Fast: composes a small disk
-        # and runs the suites in a single boot.
+        # source tree, no in-OS rebuild — under the qcov TCG plugin.
+        # `make coverage` runs the same selftest suites instrumented,
+        # then cov2lcov.py turns the per-block execution histogram into
+        # an lcov .info; `make coverage-html` renders it with genhtml.
         #
         # Runs AFTER the smoke matrix (a boot-side regression fails the
         # workflow first) and BEFORE selfhost (the expensive in-OS
         # rebuild).
         #
-        # Tee to selftest.log and grep for the harness's ALL PASSED
-        # sentinel. A failed suite prints FAILURES instead, so grep -q
-        # returns non-zero and the step fails.
+        # `make coverage` tees the boot to build/cov/serial.log; the
+        # harness's ALL PASSED sentinel is grepped from there, last, so
+        # the coverage artifacts are produced even when a suite fails
+        # (a failed suite prints FAILURES, grep -q returns non-zero,
+        # and the step fails — after coverage has been captured).
+        #
+        # The plugin's per-block callback roughly doubles the ~4 min
+        # selftest, and cov2lcov adds ~1 min — 20 min wall is headroom.
         #
         # </dev/null: boot.sh uses -chardev stdio,mux=on for the VM's
         # serial console. Under `act`-style Docker containers without
         # an interactive TTY, qemu can block waiting on stdin. Feeding
         # /dev/null closes the input stream so the mux doesn't stall.
-        timeout-minutes: 15
+        timeout-minutes: 20
         run: |
-          make -C src selftest < /dev/null 2>&1 | tee selftest.log
-          grep -q '^ALL PASSED' selftest.log
+          make -C src coverage < /dev/null
+          make -C src coverage-html
+          grep -q '^ALL PASSED' build/cov/serial.log
+
+      - name: upload coverage to Coveralls
+        # Publish cov2lcov's lcov .info to Coveralls.  Runs even when the
+        # ALL PASSED grep above failed, so a failing run's coverage is
+        # still reported.  Authenticated with the COVERALLS_REPO_TOKEN
+        # repo secret — the Coveralls GitHub App is not in use, so the
+        # token is passed as github-token (the action forwards it to the
+        # reporter as --repo-token).  SF paths in the .info are already
+        # repo-relative, so no base-path mapping is needed.
+        if: always()
+        uses: coverallsapp/github-action@v2
+        with:
+          file: build/cov/coverage.info
+          format: lcov
+          github-token: ${{ secrets.COVERALLS_REPO_TOKEN }}
 
       - name: run selfhost (in-OS self-build) under QEMU
         # Boot the `selfhost` ntosbe profile — the full disk: NT source

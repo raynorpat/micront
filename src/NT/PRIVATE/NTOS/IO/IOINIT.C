@@ -4241,12 +4241,16 @@ Return Value:
 }
 
 /*++
- * IopDumpModuleVersion -- print BaseDllName + FileVersion + PE checksum.
+ * IopDumpModuleVersion -- print BaseDllName + FileVersion + PE checksum
+ * + the runtime load extent.
  *
- *   IOSYS: 'serial.sys' 3.50.2604.0 (0x001a2b3c)
+ *   IOSYS: 'serial.sys' 3.50.2604.0 (0x001a2b3c) base=0x80120000 size=0x9000
  *
  * FileVersion is pulled from the RT_VERSION resource (VS_FIXEDFILEINFO).
- * Checksum is OptionalHeader.CheckSum, set by `link -release`.
+ * Checksum is OptionalHeader.CheckSum, set by `link -release` (a 32-bit
+ * field -- the folded 16-bit word sum plus the file length).
+ * base/size are the LDR entry's runtime DllBase + SizeOfImage, so each
+ * line is a self-contained module load-map entry.
  *
  * Must be called while the full image is still mapped — i.e. right after
  * MmLoadSystemImage creates the LDR entry, BEFORE DriverEntry runs and
@@ -4319,11 +4323,13 @@ IopDumpModuleVersion(
         }
     }
 
-    DbgPrint("IOSYS: '%wZ' %u.%u.%u.%u (0x%08lx)\n",
+    DbgPrint("IOSYS: '%wZ' %u.%u.%u.%u (0x%08lx) base=0x%08lx size=0x%lx\n",
              &LdrEntry->BaseDllName,
              (FileVerMS >> 16) & 0xFFFF, FileVerMS & 0xFFFF,
              (FileVerLS >> 16) & 0xFFFF, FileVerLS & 0xFFFF,
-             CheckSum);
+             CheckSum,
+             (ULONG)LdrEntry->DllBase,
+             LdrEntry->SizeOfImage);
 }
 
 

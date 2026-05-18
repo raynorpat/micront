@@ -239,3 +239,14 @@ t.test("NtDeleteValueKey rejects kernel-range ValueName", function()
         key_raw(), KERNEL_PTR))
     rejects(st, "NtDeleteValueKey/ValueName")
 end)
+
+-- ---- NtSetInformationKey -- IN KeySetInformation ----
+-- Like NtSetValueKey, the kernel references the key with KEY_SET_VALUE
+-- before the probe; the read-only scaffold handle lacks it, so the
+-- access check is the rejecting condition -- survival is the assertion.
+
+t.test("NtSetInformationKey rejects kernel-range KeySetInformation", function()
+    local st = err.normalize(ntdll.NtSetInformationKey(
+        key_raw(), cm.KeyWriteTimeInformation, KERNEL_PTR, 8))
+    rejects(st, "NtSetInformationKey/KeySetInformation")
+end)

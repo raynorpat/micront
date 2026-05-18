@@ -128,6 +128,15 @@ adds driver-side ABI surface, splitting logic in the I/O
 manager).  Per-process aggregate non-paged-pool reservation
 throttle (more invasive; touches quota machinery).
 
+**Regression coverage.**  `test/fuzz/io.lua` suite 2 ("oversized
+transfer-length cap") hands each bridged length-bearing IO syscall
+(`NtReadFile`, `NtWriteFile`, `NtDeviceIoControlFile` ×2,
+`NtQueryInformationFile`, `NtSetInformationFile`,
+`NtQueryDirectoryFile`) a 64 MiB length and asserts exactly
+`STATUS_INVALID_PARAMETER` — a strict check, so a regressed cap
+(which would instead fault the buffer probe or attempt the 64 MiB
+allocation) is caught.
+
 ---
 
 ### P3 — Capture-helper overflow (`SeCapture*AndAttributesArray`)

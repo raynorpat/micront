@@ -4,7 +4,8 @@
 #
 # Usage: boot.sh [--machine pc|q35] [--disk ide|nvme|virtio-blk]
 #                [--disk-image PATH] [--vga] [--gdb] [--trace]
-#                [--netdump] [--mem MB] [--kernel-opts STRING]
+#                [--netdump] [--coverage PATH] [--mem MB]
+#                [--kernel-opts STRING]
 #   --disk-image PATH
 #               Boot this ESP image instead of the default
 #               build/disk/esp.img.  The Makefile passes per-profile
@@ -24,6 +25,12 @@
 #               (loads ntoskrnl + hal .dwf, sources tools/gdb.init).
 #   --trace     Log int / cpu_reset / in_asm to ./qemu.log.
 #               Produces a large file; opt-in for exception debugging.
+#   --coverage PATH
+#               Load the qcov TCG plugin and write its per-block
+#               execution histogram (NT kernel space) to PATH at guest
+#               exit.  Pins the TCG accelerator — plugins don't run
+#               under KVM.  Build the plugin first: `make -C src qcov`.
+#               cov2lcov.py turns the histogram into lcov coverage.
 #   --netdump   Dump every virtio-net frame to ./vionet.pcap (override
 #               with NETDUMP_FILE=...). Open with wireshark/tshark to
 #               see ARP, DHCP, outbound IP exactly as it leaves the guest.
@@ -62,6 +69,7 @@ DISPLAY_FLAGS="-display none"
 GDB_FLAGS=""
 TRACE_FLAGS=""
 NETDUMP_FLAGS=""
+COVERAGE_FLAGS=""
 EXTRA_DRIVE_FLAGS=""
 KERNEL_OPTS=""
 MEM=128
@@ -95,6 +103,16 @@ while [ $# -gt 0 ]; do
         --trace)
             TRACE_FLAGS="-d int,cpu_reset,in_asm -D qemu.log"
             echo "[boot.sh] tracing int,cpu_reset,in_asm to ./qemu.log"
+            shift
+            ;;
+        --coverage)
+            shift
+            QCOV_SO="$REPO_ROOT/build/host-tools/qcov.so"
+            # TCG plugins only instrument under the TCG accelerator, so
+            # pin -accel tcg — otherwise a KVM-capable host could pick
+            # KVM and the histogram would come back empty.
+            COVERAGE_FLAGS="-accel tcg -plugin $QCOV_SO,out=$1"
+            echo "[boot.sh] coverage: qcov histogram -> $1"
             shift
             ;;
         --netdump)
@@ -165,6 +183,11 @@ done
 
 if [ ! -f "$ESP_IMG" ]; then
     echo "ERROR: $ESP_IMG not found. Run: src/build.sh disk" >&2
+    exit 1
+fi
+
+if [ -n "$COVERAGE_FLAGS" ] && [ ! -f "$QCOV_SO" ]; then
+    echo "ERROR: qcov plugin $QCOV_SO not found. Run: make -C src qcov" >&2
     exit 1
 fi
 
@@ -313,4 +336,4 @@ exec qemu-system-x86_64 $MACHINE_FLAGS -m "$MEM" \
     -no-reboot \
     $EXTRA_DRIVE_FLAGS \
     $KERNEL_OPTS_FLAGS \
-    $DISPLAY_FLAGS $GDB_FLAGS $TRACE_FLAGS $NETDUMP_FLAGS
+    $DISPLAY_FLAGS $GDB_FLAGS $TRACE_FLAGS $NETDUMP_FLAGS $COVERAGE_FLAGS
