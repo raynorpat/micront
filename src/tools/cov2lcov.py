@@ -110,7 +110,8 @@ class Module:
     its .dwf path, PE ImageBase and parsed line table."""
 
     __slots__ = ("name", "stem", "base", "size", "checksum",
-                 "dwf", "imagebase", "lines", "table", "addrs")
+                 "dwf", "imagebase", "lines", "table", "addrs",
+                 "funcs", "func_los", "func_count")
 
     def __init__(self, name, base, size, checksum=None):
         self.name      = name
@@ -300,6 +301,43 @@ def lookup_line(table, addrs, addr):
 
 
 # ---------------------------------------------------------------------------
+# DWARF function symbols -- via `readelf -sW`
+# ---------------------------------------------------------------------------
+
+def read_symbols(dwf_path):
+    """FUNC symbols from the .dwf ELF -> sorted [(lo, hi, name)].
+
+    dbg2dwf emits one FUNC symbol per kernel/driver function, in the
+    same ImageBase-relative address space as the line table.  A symbol
+    range therefore looks up against the line table (for its source
+    file + opening line) and against dwf-space hit addresses (for
+    execution).  Size-0 symbols -- bare asm labels -- carry no range
+    and are skipped.
+    """
+    # errors="replace": a stray non-ASCII byte in a mangled symbol name
+    # must not abort the whole symbol scan.
+    out = subprocess.run(
+        ["readelf", "-sW", dwf_path],
+        capture_output=True, text=True, errors="replace", check=True).stdout
+
+    funcs = {}
+    for raw in out.splitlines():
+        # Num: Value Size Type Bind Vis Ndx Name
+        toks = raw.split()
+        if len(toks) < 8 or not toks[0].rstrip(":").isdigit():
+            continue
+        if toks[3] != "FUNC":
+            continue
+        try:
+            lo, size = int(toks[1], 16), int(toks[2])
+        except ValueError:
+            continue
+        if size > 0:
+            funcs[(toks[7], lo)] = (lo, lo + size, toks[7])
+    return sorted(funcs.values())
+
+
+# ---------------------------------------------------------------------------
 # qcov trace
 # ---------------------------------------------------------------------------
 
@@ -363,6 +401,9 @@ def main():
                       % mod.name, file=sys.stderr)
             continue
         mod.table, mod.addrs, mod.lines = read_line_table(mod.dwf)
+        mod.funcs      = read_symbols(mod.dwf)
+        mod.func_los   = [f[0] for f in mod.funcs]
+        mod.func_count = [0] * len(mod.funcs)
         resolved.append(mod)
         if args.verbose:
             print("  %-16s base=0x%08x ImageBase=0x%08x slide=0x%08x  %s"
@@ -387,6 +428,15 @@ def main():
             continue
         mod = resolved[i]
         dwf_addr = (addr - mod.base + mod.imagebase) & 0xFFFFFFFF
+
+        # Function attribution: the FUNC symbol whose range covers this
+        # address ran.  Done independently of line resolution -- a
+        # prologue address with no line row still proves the function
+        # executed.
+        j = bisect.bisect_right(mod.func_los, dwf_addr) - 1
+        if j >= 0 and dwf_addr < mod.funcs[j][1] and count > mod.func_count[j]:
+            mod.func_count[j] = count
+
         hit = lookup_line(mod.table, mod.addrs, dwf_addr)
         if hit is None:
             n_no_line += 1                  # in module, no line info (asm/INIT)
@@ -400,6 +450,25 @@ def main():
         for path, line in mod.lines:
             line_cov.setdefault(path, {}).setdefault(line, 0)
 
+    # Project per-symbol execution onto source files.  A function's FN
+    # line is the source line of its entry address (reusing the line
+    # table); its FNDA count is the max seen anywhere in its range, so
+    # FNDA > 0 exactly when the function executed.
+    func_cov = {}                       # path -> {name: [line, count]}
+    for mod in resolved:
+        for j, (lo, _hi, name) in enumerate(mod.funcs):
+            loc = lookup_line(mod.table, mod.addrs, lo)
+            if loc is None:
+                continue                # entry in a line-table gap (asm)
+            path, line = loc
+            slot = func_cov.setdefault(path, {})
+            cnt  = mod.func_count[j]
+            prev = slot.get(name)
+            if prev is None:
+                slot[name] = [line, cnt]
+            elif cnt > prev[1]:         # same name twice -- keep the hit
+                prev[1] = cnt
+
     # Emit lcov.  Files with no source on disk -- CRT and compiler-
     # runtime carry their original build paths, absent from this repo --
     # are dropped from the .info: they aren't MicroNT code, genhtml
@@ -408,6 +477,7 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     nosrc = []                          # (path, lf, lh) -- no source in repo
     total_lf = total_lh = 0
+    total_fnf = total_fnh = 0
     with open(args.out, "w") as f:
         f.write("TN:qcov\n")
         for path in sorted(line_cov):
@@ -420,11 +490,22 @@ def main():
                 nosrc.append((path, lf, lh))
                 continue
             f.write("SF:%s\n" % path)
+            # Functions first (FN/FNDA/FNF/FNH), ordered by source line.
+            fns = func_cov.get(path, {})
+            for name in sorted(fns, key=lambda n: (fns[n][0], n)):
+                f.write("FN:%d,%s\n" % (fns[name][0], name))
+            for name in sorted(fns, key=lambda n: (fns[n][0], n)):
+                f.write("FNDA:%d,%s\n" % (fns[name][1], name))
+            fnf = len(fns)
+            fnh = sum(1 for v in fns.values() if v[1] > 0)
+            f.write("FNF:%d\nFNH:%d\n" % (fnf, fnh))
             for line in sorted(counts):
                 f.write("DA:%d,%d\n" % (line, counts[line]))
             f.write("LF:%d\nLH:%d\nend_of_record\n" % (lf, lh))
-            total_lf += lf
-            total_lh += lh
+            total_lf  += lf
+            total_lh  += lh
+            total_fnf += fnf
+            total_fnh += fnh
 
     # Sidecar: code that executed but has no source in the repo (mostly
     # the prebuilt CRT under /nt/private/crt32nt + compiler-runtime asm).
@@ -442,7 +523,8 @@ def main():
                 f.write("%6d %5d  %s\n" % (lf, lh, path))
 
     # Summary.
-    pct = (100.0 * total_lh / total_lf) if total_lf else 0.0
+    pct  = (100.0 * total_lh  / total_lf)  if total_lf  else 0.0
+    fpct = (100.0 * total_fnh / total_fnf) if total_fnf else 0.0
     print("cov2lcov: %d modules in map, %d resolved (.dwf + ImageBase)"
           % (len(modules), len(resolved)), file=sys.stderr)
     print("cov2lcov: %d blocks, %d distinct addrs -- %d resolved to a line, "
@@ -452,6 +534,8 @@ def main():
     print("cov2lcov: %.1f%% line coverage (%d / %d) across %d files -> %s"
           % (pct, total_lh, total_lf, len(line_cov) - len(nosrc), args.out),
           file=sys.stderr)
+    print("cov2lcov: %.1f%% function coverage (%d / %d)"
+          % (fpct, total_fnh, total_fnf), file=sys.stderr)
     if nosrc:
         print("cov2lcov: %d files executed but excluded (no source) -> %s"
               % (len(nosrc), nosrc_path), file=sys.stderr)
