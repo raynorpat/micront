@@ -47,7 +47,7 @@ BOOT_EFI    := $(SRC)/boot-efi
 BUILD       := $(REPO)/build/disk
 HOST_LUAJIT := $(REPO)/build/host-tools/luajit
 
-.PHONY: cr disk boot selftest selfhost smoketest smoke-disk gdb qcov coverage coverage-html
+.PHONY: cr disk boot selftest selfhost smoketest smoke-disk iprepro gdb qcov coverage coverage-html
 
 # ---------------- cr binaries (run.exe + lua.dll) -------------------
 #
@@ -103,6 +103,15 @@ endif
 ifdef GDB
 BOOT_FLAGS += --gdb
 endif
+# NET_HARNESS=PORT — swap QEMU's user-mode SLIRP NIC backend for a
+# socket netdev (QEMU listens on 127.0.0.1:PORT) so the host-side
+# packet harness (src/tools/netharness/) is the guest's network.
+# SLIRP's built-in DHCP goes away; the harness serves it instead.
+# Composes with selftest:  make selftest NET_HARNESS=5555
+#   then in another shell:  python3 src/tools/netharness/harness.py --port 5555
+ifdef NET_HARNESS
+BOOT_FLAGS += --net-harness $(NET_HARNESS)
+endif
 # SERIAL_LOG=/path — redirect both stdout and stderr to a file instead
 # of flooding the terminal.  Useful when main.lua's output scrolls past
 # scrollback and you want to grep for boot-efi BXLOG lines (e.g. the
@@ -131,6 +140,20 @@ selftest: LAYOUT_FLAG := --layout=$(or $(LAYOUT),split-ntfs)
 # Wireshark / tshark when a test misbehaves.
 selftest: BOOT_FLAGS += --netdump
 selftest: boot
+
+# iprepro — the IP-stack hardening reproducer target.  Composes the
+# lean `iprepro` profile (same disk as selftest, no NT source tree)
+# but boots straight into iprepro.lua: a minimal network endpoint, no
+# test suite.  The host-side packet harness drives per-finding
+# reproducers against it.  Pair with NET_HARNESS=PORT:
+#   make -C src iprepro NET_HARNESS=5555
+#   then:  python3 src/tools/netharness/repro/h012.py --port 5555
+# See docs-wip/IPSTACK-HARDENING.md §5 and src/tools/netharness/.
+iprepro: PROFILE_FLAG := --profile iprepro
+iprepro: INIT_ARGS_FLAG :=
+iprepro: BUILD := $(REPO)/build/disk-iprepro
+iprepro: BOOT_FLAGS += --netdump
+iprepro: boot
 
 # Selfhost — the full disk: NT source tree + MS toolchain.  Exercises
 # the in-OS rebuild path which drives NMAKE.  NMAKE's mtime comparison

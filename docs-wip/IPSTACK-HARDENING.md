@@ -93,6 +93,25 @@ Conventions:
   remote can drive the input. "Reachable, post-bind" means a listening
   service is required.
 
+Priority ordering, when scheduling hardening work:
+
+- **Remote exploits rank above L2-local rank above local-only.**
+  T1 (off-path internet) and T4 (rate-bound DoS from any reachable
+  source) are top priority. T2 (semi-blind reflective probing)
+  follows. T3 (L2 neighbour) ranks below T1/T2/T4 even though the
+  cheap-VPS tier exposes us to it, because hostile L2 is contingent
+  on the deployment target while T1 is universal across all
+  deployments.
+- The infra-provided firewall (cloud security group, hypervisor
+  packet filter, WAF) does **not** reorder this priority. Filters
+  fail open under misconfiguration, can be bypassed by adjacent-
+  tenant access on cheap tiers, and don't protect workloads that
+  legitimately accept hostile input by design (public HTTP servers).
+  The stack maintains a baseline as if no filter were present.
+- Within a tier, severity (CRIT > HIGH > MED > LOW) is the
+  tiebreaker. Within a severity, fewer pre-conditions (pre-bind
+  reachable > post-bind reachable) ranks higher.
+
 ## 4. Cross-cutting invariants
 
 Properties we want to assert and keep asserted. Each is its own work item;
@@ -134,28 +153,86 @@ more of these invariants.
 
 ## 5. Test infrastructure
 
-To be filled in. Sketch:
+Host-side packet harness driving the guest over QEMU's socket netdev.
+Rootless, deterministic, point-to-point: the harness *is* the guest's
+entire network. Per-finding reproducers are surgical, edit-and-rerun
+Python on top of one minimal guest target — no boot of the full
+selftest suite per iteration.
 
-- Send side: Linux host with scapy, generating one finding's worth of
-  packets per script. Each script self-documents the finding ID and the
-  expected target behaviour ("BSOD on unpatched", "drop+counter on patched").
-- Receive side: MicroNT under QEMU/KVM with virtio-net, kernel debug serial
-  captured, pool counters and IP stat counters exported.
-- Oracle: per-finding observable. BSOD = guest dies. Pool DoS = nonpaged pool
-  watermark crosses threshold. Route hijack = routing table changes. Reject =
-  specific stat counter increments and packet does not reach upper layer.
-- Regression: golden traffic suite (TCP echo, HTTP fetch, DNS over UDP,
-  ICMP echo at sizes that fit a single MTU) passes on patched build.
-  Fragmented payloads and >MTU ICMP are deliberately excluded — the
-  stack drops them post-strip and that is the intended behaviour.
+### 5.1 Transport
 
-Open questions:
+`boot.sh --net-harness PORT` swaps QEMU's user-mode SLIRP backend for
 
-- Q1. Do we drive reproducers from the same Linux host or a second guest?
-  (Same-host is faster to wire up; second-guest matches T3 better.)
-- Q2. How do we observe nonpaged pool from outside the guest reliably?
-- Q3. What's our acceptance criterion for "rate" when we cap things — chosen
-  by measurement on the smallest target VPS, or fixed conservative number?
+    -netdev socket,id=n0,listen=127.0.0.1:PORT
+
+so the guest's virtio-net sits on a plain TCP socket instead of SLIRP
+NAT. The harness connects from the host. Default SLIRP boots are
+untouched — `--net-harness` is purely additive. `--netdump` continues
+to work alongside (filter-dump attaches to the netdev by id, not the
+backend), so `vionet.pcap` is unchanged.
+
+Wire framing on the socket netdev: 4-byte big-endian length prefix +
+raw Ethernet frame (`net/socket.c`), both directions.
+`src/tools/netharness/qlink.py` reframes the TCP stream into Ethernet
+frames; scapy builds and parses the contents.
+
+### 5.2 Bring-up — harness-served DHCP, ARP, ICMP
+
+With SLIRP gone there is no built-in DHCP/DNS, so the harness serves
+them. `src/tools/netharness/dhcpd.py` leases the guest a single fixed
+address (10.0.2.15, gateway/server 10.0.2.2 — matches what SLIRP used
+to hand out, so the in-tree `dhcp.lua` suite stays valid against the
+harness). `src/tools/netharness/harness.py` wires DHCP + ARP +
+ICMP-echo responders into a dispatch loop on the qlink and exposes a
+frame-level API (`send_ip`, `pump`, observer callbacks) that
+per-finding reproducers compose on. `selftest.py` exercises the
+qlink reframer + responder logic offline — no boot needed for a quick
+sanity check after touching the harness.
+
+### 5.3 Guest target — the `iprepro` profile
+
+`src/pkg/ntosbe/profiles/iprepro.lua` composes the same lean disk as
+`selftest` (drivers + Lua + nt.net.*; no NT source tree, no MS
+toolchain) but `init.args` points at `src/pkg/iprepro.lua`: bring up
+DHCP, open one TCP listener on `tcp/9` with a deep backlog, idle on an
+accept-with-timeout. No `test.*` suites run — surgical reproduction
+wants a fast boot into one network endpoint, not the whole regression
+run. Headerless heartbeat lines on serial give liveness.
+
+`make -C src iprepro NET_HARNESS=PORT` composes + boots; the `boot.sh`
+flag is threaded through automatically.
+
+### 5.4 Per-finding reproducers
+
+`src/tools/netharness/repro/<h-NNN>.py` — one file per finding. Each
+runs against the iprepro target, drives the finding's packet scenario,
+prints PASS/FAIL with the underlying measurement, and exits 0/1 for
+use as a regression check (`--expect vuln` to confirm a finding on the
+unpatched stack; `--expect capped` (or finding-specific) to verify
+a fix). Edit and rerun without a rebuild.
+
+### 5.5 Oracles
+
+External wherever possible. For H-012 the oracle is host-side: the
+count of *distinct* spoofed sources that received a SYN-ACK is exactly
+the half-open census, no in-guest counter required. SYN-ACK / RST /
+ICMP / TCP-state behaviour are all externally visible from the
+harness side; that covers the TCP findings in the §6a queue. If a
+later finding genuinely needs a kernel-internal counter, extending
+`nt.net.info` with the TCP connection table is the path — deferred
+until needed (see OQ-4).
+
+### 5.6 Running a reproducer
+
+  Shell 1:  `make -C src iprepro NET_HARNESS=5555`
+  Shell 2 (start when `boot.sh` prints `listening on 127.0.0.1:5555`):
+            `python3 src/tools/netharness/repro/h012.py --port 5555 --expect vuln`
+
+Start shell 2 promptly: the harness must be connected before the
+guest's DHCP retry window expires (12×5s = 60s in `iprepro.lua`).
+`vionet.pcap` is written if you pass `--netdump` (the `iprepro` make
+target already does), so every frame is recoverable in Wireshark when
+a reproducer surprises.
 
 ## 6. Findings
 
@@ -402,18 +479,153 @@ pinned on first analysis.
 
 ### H-012 — SYN flood / unbounded half-open
 
-- **Where:** `TCPRCV.C` `FindListenConn` ~554-660; `AllocTCB` at ~652;
-  `TCB.C` `MaxTCBs` ~47.
+- **Where:** `TCPRCV.C` `FindListenConn` ~554-660; SYN/no-TCB branch
+  ~1795-1843; `AllocTCB` `TCB.C` ~1172, `MaxTCBs` `TCB.C:47`.
+  Pinned at `1a6f43b`.
 - **Class:** Resource exhaustion (TCB / nonpaged pool).
 - **Severity:** HIGH.
-- **Reachable:** T1, T4. Post-bind for actual exhaustion to land on a
-  listener; pre-bind exhaustion of global TCB pool also possible.
+- **Reachable:** T1, T4 — post-bind (a listening TCP service is
+  required; see the reachability note in the analysis).
 - **Invariant violated:** I6.
-- **Analysis:** TBD. Behaviour at MaxTCBs ceiling, per-listener accounting
-  feasibility, drop-oldest vs drop-new policy.
-- **Reproducer:** TBD.
-- **Decision:** TBD.
-- **Status:** LOGGED.
+- **Analysis:** 2026-05-19 — pinned at `1a6f43b`.
+
+  *Path.* An inbound segment with SYN set, ACK clear, and no matching
+  TCB is handled at `TCPRCV.C:1795-1832`. `GetBestAddrObj` finds the
+  listening `AddrObj`; `FindListenConn` (`TCPRCV.C:554-660`) yields a
+  TCB for the half-open connection by one of two routes:
+  - a pre-posted `TCB_LISTEN` TCB on the AO's `ao_tc` list
+    (`FoundConn` branch, `:613-630`) — one the app already supplied;
+  - the connect-indication handler (`ao_connect != NULL`, `:634-652`):
+    `AllocTCB()` mints a fresh TCB, the handler is indicated to the
+    upper layer, and on acceptance `InitTCBFromConn` ties it to a
+    connection. AFD registers a connect event handler, so this is the
+    live path for an AFD `listen()` socket.
+
+  Either way `TCPRcv` initialises the TCB with the 4-tuple, drives it
+  to `TCB_SYN_RCVD` at `:1827`, `InsertTCB`s it, and sends a SYN-ACK.
+  The TCB then sits half-open until the handshake completes or the
+  SYN-ACK rexmit timer gives up.
+
+  *No cap.* `MaxTCBs` is `0xffffffff` (`TCB.C:47`) — the
+  `CurrentTCBs < MaxTCBs` gate in `AllocTCB` (`TCB.C:1203`) never
+  fires; the global TCB pool is effectively unbounded. No per-listener
+  accounting of half-open TCBs exists today: `AddrObj.ao_synrcvd_count`
+  was added as scaffolding (commit `ce56681`) but nothing reads or
+  maintains it. Invariant I6 is unmet.
+
+  *Cost and lifetime.* Each half-open connection holds one `TCB`
+  (`CTEAllocMem(sizeof(TCB))`, nonpaged pool) plus, on the
+  connect-handler path, a `TCPConnReq`. It is freed only when the
+  SYN-ACK rexmit timer exhausts `MaxDataRexmitCount` retransmits
+  (`TCB.C:508-547`; SYN_RCVD uses `MaxDataRexmitCount` — the
+  `MaxConnectRexmitCount` branch is gated on `TCB_SYN_SENT` only,
+  `:517`) with exponential backoff capped at `MAX_REXMIT_TO` (240 s,
+  `TCP.H:27`). A half-open TCB therefore survives on the order of
+  minutes with no peer cooperation.
+
+  *Failure mode.* A SYN flood — sustained SYNs to an open TCP port, no
+  ACK ever returned, source addresses/ports varied so each mints a
+  distinct TCB — allocates nonpaged pool without bound. Nonpaged pool
+  is a kernel-wide resource, so this is not a TCP-only DoS: exhaustion
+  bugchecks or wedges the whole guest. T1 (off-path, spoofed sources)
+  drives breadth; T4 drives volume.
+
+  *Exit transitions (where a decrement must fire).* A TCB leaves
+  `TCB_SYN_RCVD` at exactly these sites:
+  - → `TCB_ESTAB` via `GoToEstab` (`TCPSEND.C:969`, from
+    `TCPRCV.C:2365`) when a valid ACK completes the handshake — the
+    success transition; the TCB is *not* freed, so a free-time
+    decrement alone would miss it;
+  - → closed on RST (`TryToCloseTCB`, `TCPRCV.C:2325`);
+  - → closed on a duplicate SYN (`TCPRCV.C:2344`);
+  - → closed on an out-of-range ACK (`DerefTCB` + RST,
+    `TCPRCV.C:2370`);
+  - → closed on SYN-ACK rexmit timeout (`TimeoutTCB`, `TCB.C:534`);
+  - → aborted when `InsertTCB` fails (`TCPRCV.C:1837-1843`).
+
+  *Reachability correction.* The original stub claimed a pre-bind
+  angle ("global TCB pool exhaustion also possible" before a service
+  binds). It does not hold: a SYN to a port with no listening AO takes
+  neither `FindListenConn` route — `GetBestAddrObj` returns NULL, or
+  `FindListenConn` returns NULL — and `TCPRcv` sends a RST without
+  allocating a TCB. No listener, no TCB. H-012 is **post-bind only**.
+
+  *AFD-backlog reality (2026-05-20 correction — refutes the
+  kernel-side unboundedness above).* The kernel's `AllocTCB` in
+  `FindListenConn`'s connect-handler branch only fires when AFD
+  accepts the connect indication. `AfdConnectEventHandler`
+  (`src/NT/PRIVATE/NTOS/AFD/LISTEN.C:617-645`) pulls one connection
+  object from a fixed pre-allocated pool of `MaximumConnectionQueue`
+  (= the app's `listen()` backlog) objects, set up at listen time by
+  `AfdStartListen` (`LISTEN.C:130-137`); when the pool is empty it
+  returns `STATUS_INSUFFICIENT_RESOURCES` and the kernel TCP layer
+  RSTs the SYN.  Over-backlog SYNs therefore trigger `AllocTCB` →
+  immediate `FreeTCB` with no SYN_RCVD accumulation. The half-open
+  count per listener is hard-bounded by the AFD backlog the app
+  requested; `MaxTCBs = 0xffffffff` is moot because AFD gates first.
+
+  The reproducer below confirmed this empirically: 4096 SYNs at a
+  listener with `backlog=1024` produced exactly 1023 distinct
+  half-opens (= backlog − 1 probe) and 3041 RSTs. The original
+  "unbounded half-open" framing is **refuted**.  The real finding is
+  the classic connection-slot SYN-flood denial — an attacker fills
+  all `backlog` slots with half-opens that hold their slot for the
+  full SYN-ACK rexmit lifetime (minutes, per the rexmit analysis
+  above), during which legitimate clients are refused with RST.
+  Bounded, but a real T1+T4 service-denial DoS — and *not* addressed
+  by a per-listener drop-new cap, which is the wrong shape (see
+  Decision).
+- **Reproducer:** confirmed 2026-05-20 via
+  `src/tools/netharness/repro/h012.py` (see §5). Floods N SYNs at
+  the iprepro target's `tcp/9` listener from distinct off-subnet
+  spoofed sources (198.18.0.0/15) and counts the distinct sources
+  that receive a SYN-ACK — exactly the half-open census, no in-guest
+  counter needed. Reading on `iprepro.lua` `BACKLOG=1024`,
+  `--count 4096`:
+
+      SYNs sent ............ 4096
+      distinct half-opens .. 1023
+      SYN-ACK frames ....... 1023   (no retransmits)
+      RSTs from guest ...... 3041
+      verdict .............. CAPPED at ~1023
+
+  Plateau == AFD backlog (1024) − 1 probe SYN.  Usable both as a
+  confirmation tool (`--expect vuln`, against a stack that would let
+  half-opens grow unbounded — which this one doesn't) and a
+  post-fix verification tool (`--expect capped`) once a real
+  SYN-flood mitigation lands.
+- **Decision:** 2026-05-20 — direction = **SYN cookies**, deferred
+  as a larger structural change.
+
+  The pre-committed drop-new per-AO cap (`TCP_MAX_SYNRCVD_PER_AO` /
+  `ao_synrcvd_count`, scaffolded in `ce56681`) is **rejected** and the
+  scaffolding has been reverted in a follow-up commit. The reasoning:
+  a hard drop-new cap *below* the app's listen backlog shrinks usable
+  capacity (attacker fills the cap instead of the backlog) and,
+  being drop-new, refuses legitimate SYNs once attacker half-opens
+  hold the cap slots.  It also second-guesses the app's deliberate
+  `listen()` backlog.  And it doesn't address the actual failure
+  mode — slots held for minutes by stale half-opens — so it spends
+  complexity for no defensive gain.
+
+  The fixes that do address connection-slot SYN-flood denial:
+  - **SYN cookies** (preferred). The stack allocates no SYN_RCVD
+    state on receipt of a SYN; it encodes the connection state into
+    the SYN-ACK's initial sequence number and reconstructs the TCB
+    only when the client's ACK comes back validated. Eliminates the
+    attack surface — no slot to hold. Requires real state-machine
+    work in `TCPRCV.C`'s SYN-from-listener path.
+  - **Drop-oldest in the AFD pool**, as a smaller fallback — recycle
+    the stalest half-open on a new SYN so legitimate clients survive
+    even when the backlog is "full" of attacker half-opens.
+  - **Shorter SYN-ACK rexmit** for `TCB_SYN_RCVD` — slots free up in
+    seconds rather than minutes; doesn't solve, but raises the bar.
+
+  SYN cookies is the right destination; size and risk put the
+  implementation on a separate work item, not bundled with the rest
+  of the §6a queue.
+- **Status:** DEFERRED — direction decided (SYN cookies); the patch
+  is a separate, larger work item.
 
 ### H-013 — Per-TCB out-of-order reassembly unbounded
 
@@ -616,6 +828,33 @@ pinned on first analysis.
   harness.
 - **Status:** INVALID — code path removed.
 
+## 6a. LOGGED priority queue
+
+The findings still in LOGGED status, ranked per the §3 priority
+rules (T1/T4 > T2 > T3; CRIT > HIGH > MED > LOW; pre-bind > post-bind
+within a severity). All are T1 — the firewall does not reorder the
+ranking. (H-012 left this queue on 2026-05-20: status DEFERRED after
+the reproducer refuted its original framing — see H-012's analysis +
+decision and the §9 entry.)
+
+1. **H-013** — Per-TCB out-of-order reassembly unbounded. T1
+   post-bind, HIGH. Same Class 9 shape (attacker-controlled pool
+   allocation) H-012 was *thought* to have, at finer scope —
+   per-connection rather than per-listener. The H-012 lesson applies:
+   check up-front whether a higher-layer pool / queue already gates
+   this allocation before claiming unboundedness.
+2. **H-014** — Idle-ESTABLISHED reaper (Naptha). T1 post-bind, MED.
+   First step is a verify-and-decide pass (is `tcb_alive` armed
+   automatically on ESTABLISHED transition or only with the
+   `KEEPALIVE` sockopt?).
+3. **H-016** — TCP options parser audit. T1, LOW. Parser correctness
+   — Class 4 (length-field trust) + Class 6 (semantic validation)
+   territory. Smallest expected delta.
+
+The B pass starts at H-013 unless something changes the
+prioritisation (a new finding lands, or a deployment shift puts T3
+back on top).
+
 ## 7. Decision log
 
 Decisions made about scope, methodology, or whole-class triage. One line
@@ -671,8 +910,15 @@ Tracked separately from per-finding TBDs because they cut across findings.
 - OQ-3. Are we willing to diverge from on-the-wire RFC behaviour where the
   RFC mandates we accept something we'd rather drop (e.g., source-routed
   packets, ICMP redirects)? Default: yes, document each divergence here.
-- OQ-4. How do we observe pool / TCB / RH counters from outside the guest
-  for automated regression?
+- OQ-4. ~~How do we observe pool / TCB / RH counters from outside the
+  guest for automated regression?~~ Largely resolved 2026-05-20: for
+  the TCP findings the externally visible behaviour (SYN-ACK count,
+  RST count, TCP-state transitions on the wire) is itself the oracle
+  — see §5 and the H-012 reproducer. A kernel-internal counter is
+  not needed for H-012/013/014/016. If a later finding genuinely
+  requires reading nonpaged-pool or a kernel-only counter, extending
+  `nt.net.info` with the relevant TDI MIB table (e.g. the TCP
+  connection table) is the path.
 - OQ-5. What is the smallest target VPS profile (RAM, nonpaged pool size)
   we calibrate caps against?
 
@@ -776,3 +1022,54 @@ Tracked separately from per-finding TBDs because they cut across findings.
   client at `nt.net.dhcp` carries the flag and continues to work
   unchanged. Build verified clean (`tdi_tcpip_tcp`). Multicast
   unaffected.
+
+- 2026-05-19 — Priority framework added: §3 gains a scheduling
+  order (remote > L2-local > local-only; the infra firewall does not
+  reorder it; severity then pre-conditions as tiebreakers), and §6a
+  ranks the LOGGED queue against it. **H-012** (SYN flood / unbounded
+  half-open) analysed and pinned at `1a6f43b`: the SYN-to-listener
+  path traced through `FindListenConn` → `TCB_SYN_RCVD`; `MaxTCBs`
+  confirmed disabled (`0xffffffff`, `TCB.C:47`); the six SYN_RCVD exit
+  sites enumerated for the `LeaveSynRcvd` decrement. Reproducer
+  drafted. The stub's pre-bind reachability claim retired — a SYN to a
+  port with no listener is RST'd without allocating a TCB, so H-012 is
+  post-bind only. Status LOGGED → ANALYSED; §6a item 1 corrected. No
+  code changes — patch pends a confirmed reproducer per §3.
+
+- 2026-05-20 — **§5 packet harness landed.** `boot.sh` gains
+  `--net-harness PORT`, which swaps QEMU's user-mode SLIRP backend
+  for a socket netdev so the host-side `src/tools/netharness/`
+  becomes the guest's entire network (DHCP + ARP + ICMP responders;
+  scapy for packet build/parse, no other Python deps). A new ntosbe
+  profile `iprepro` boots `src/pkg/iprepro.lua` — a
+  finding-agnostic minimal TCP target — via
+  `make -C src iprepro NET_HARNESS=PORT`. Per-finding reproducers
+  under `src/tools/netharness/repro/` are surgical, edit-and-rerun
+  Python; offline `selftest.py` covers the qlink reframer +
+  responder logic without a boot. §5 rewritten to describe the
+  as-built harness. **OQ-1** (same host vs second guest) resolved:
+  same host, rootless socket netdev — T3 reproducers can still craft
+  any source MAC, indistinguishable to the guest from a real L2
+  neighbour. **OQ-4** largely sidestepped for the TCP findings:
+  SYN-ACK / RST / segment behaviour is externally observable from
+  the harness, so an in-guest kernel counter is not needed for
+  H-012/013/014/016 (extend `nt.net.info` if a later finding does).
+
+- 2026-05-20 — **H-012 reproducer ran** (`repro/h012.py`) against the
+  unpatched stack. Result: half-opens plateau at the AFD listen
+  backlog (1023 distinct sources accepted into SYN_RCVD out of 4096
+  SYNs; 3041 RSTs). AFD's pre-allocated connection pool
+  (`AfdStartListen` / `AfdConnectEventHandler`, `AFD/LISTEN.C:130-137,
+  617-645`) gates the kernel SYN path: over-backlog SYNs hit
+  `STATUS_INSUFFICIENT_RESOURCES` and are RST'd, with no SYN_RCVD
+  accumulation. The "unbounded half-open" framing is **refuted**.
+  Real finding = classic connection-slot SYN-flood denial (slots
+  held for minutes by stale half-opens; legitimate clients refused
+  with RST while the backlog is full). Decision: the pre-committed
+  drop-new per-AO cap is **rejected** (wrong shape — shrinks
+  capacity, doesn't free lingering slots, second-guesses the app's
+  backlog). The `ce56681` ADDR.H scaffolding
+  (`TCP_MAX_SYNRCVD_PER_AO` + `ao_synrcvd_count`) is reverted in a
+  separate commit. Direction = **SYN cookies**, deferred as a larger
+  structural work item. H-012 status ANALYSED → DEFERRED, out of the
+  §6a queue; new head = H-013.

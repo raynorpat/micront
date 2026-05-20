@@ -5,7 +5,7 @@
 # Usage: boot.sh [--machine pc|q35] [--disk ide|nvme|virtio-blk]
 #                [--disk-image PATH] [--vga] [--gdb] [--trace]
 #                [--netdump] [--coverage PATH] [--mem MB]
-#                [--kernel-opts STRING]
+#                [--kernel-opts STRING] [--net-harness PORT]
 #   --disk-image PATH
 #               Boot this ESP image instead of the default
 #               build/disk/esp.img.  The Makefile passes per-profile
@@ -34,6 +34,14 @@
 #   --netdump   Dump every virtio-net frame to ./vionet.pcap (override
 #               with NETDUMP_FILE=...). Open with wireshark/tshark to
 #               see ARP, DHCP, outbound IP exactly as it leaves the guest.
+#   --net-harness PORT
+#               Replace QEMU's user-mode SLIRP NIC backend with a socket
+#               netdev: QEMU listens on 127.0.0.1:PORT and the host-side
+#               packet harness (src/tools/netharness/) connects to it,
+#               becoming the guest's entire network.  No SLIRP means no
+#               built-in DHCP/DNS — the harness serves DHCP itself.
+#               --netdump still captures every frame (filter-dump
+#               attaches to the netdev by id, not to the backend).
 #   --mem MB    Guest RAM in megabytes. Default 128.
 #   --kernel-opts STRING
 #               LOADER_PARAMETER_BLOCK.LoadOptions string (NT-style,
@@ -71,6 +79,11 @@ TRACE_FLAGS=""
 NETDUMP_FLAGS=""
 COVERAGE_FLAGS=""
 EXTRA_DRIVE_FLAGS=""
+# Default NIC backend: QEMU user-mode SLIRP (NAT + built-in DHCP/DNS).
+# --net-harness swaps this for a socket netdev driven by the host-side
+# packet harness.  The -device virtio-net-pci line is unchanged either
+# way — only the backend feeding netdev id n0 differs.
+NETDEV_BACKEND="-netdev user,id=n0"
 KERNEL_OPTS=""
 MEM=128
 # Canonical modern shape: q35 + NVMe, true PCIe topology, no legacy
@@ -122,6 +135,19 @@ while [ $# -gt 0 ]; do
             NETDUMP_FILE="${NETDUMP_FILE:-./vionet.pcap}"
             NETDUMP_FLAGS="-object filter-dump,id=netdump0,netdev=n0,file=$NETDUMP_FILE"
             echo "[boot.sh] capturing virtio-net traffic to $NETDUMP_FILE"
+            shift
+            ;;
+        --net-harness)
+            shift
+            case "$1" in
+                ''|*[!0-9]*)
+                    echo "[boot.sh] --net-harness needs a numeric PORT" >&2
+                    exit 2
+                    ;;
+            esac
+            NETDEV_BACKEND="-netdev socket,id=n0,listen=127.0.0.1:$1"
+            echo "[boot.sh] net-harness: virtio-net on a socket netdev;" \
+                 "QEMU listening on 127.0.0.1:$1 (SLIRP off, no built-in DHCP)"
             shift
             ;;
         --mem)
@@ -330,7 +356,7 @@ exec qemu-system-x86_64 $MACHINE_FLAGS -m "$MEM" \
     -device virtconsole,chardev=vcon0 \
     -device virtio-keyboard-pci \
     -device virtio-mouse-pci \
-    -netdev user,id=n0 \
+    $NETDEV_BACKEND \
     -device virtio-net-pci,netdev=n0 \
     -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
     -no-reboot \
