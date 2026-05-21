@@ -186,11 +186,12 @@ M.MEM_PRIVATE   = 0x20000
 M.MEM_MAPPED    = 0x40000
 M.MEM_IMAGE     = 0x1000000
 
--- Pseudo-handle for the current process. NT's NtCurrentProcess() is
--- the kernel-internal (HANDLE)-1; ntdll re-exports this as an inline
--- wherever needed. Keep a precomputed cdata so every helper doesn't
--- re-cast.
-local CURRENT_PROCESS = ffi.cast('HANDLE', ffi.cast('intptr_t', -1))
+-- Pseudo-handle for the current process.  Sourced from nt.dll.handle
+-- (the canonical NT_HANDLE wrapper for (HANDLE)-1); kept here as a
+-- precomputed raw HANDLE because every internal use passes it directly
+-- to a raw ntdll.* call.  External callers that want the wrapper go
+-- through handle.NtCurrentProcess().
+local CURRENT_PROCESS = handle.raw(handle.NtCurrentProcess())
 
 -- Resolve a process-handle argument to a raw HANDLE. nil → current
 -- process pseudo-handle; NT_HANDLE → its kernel handle value.
@@ -198,8 +199,6 @@ local function proc_raw(h)
     if h == nil then return CURRENT_PROCESS end
     return handle.raw(h)
 end
-
-M.NtCurrentProcess = function() return CURRENT_PROCESS end
 
 -- ------------------------------------------------------------------
 -- Virtual memory

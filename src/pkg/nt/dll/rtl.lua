@@ -33,10 +33,11 @@
 -- internal — Lua code paths use the table API above and never
 -- ffi.new('TIME_FIELDS') directly.
 
-local ffi   = require('ffi')
-local ntdll = require('nt.dll')
-local err   = require('nt.dll.errors')
-local str   = require('nt.dll.str')
+local ffi    = require('ffi')
+local ntdll  = require('nt.dll')
+local err    = require('nt.dll.errors')
+local str    = require('nt.dll.str')
+local handle = require('nt.dll.handle')
 
 ffi.cdef[[
 typedef struct _TIME_FIELDS {
@@ -303,11 +304,10 @@ local function get_pp_header()
     if pp_header_ptr ~= nil then return pp_header_ptr end
     local pbi = ffi.new('PROCESS_BASIC_INFORMATION')
     local ret = ffi.new('ULONG[1]')
-    -- Pseudo-handle for current process is (HANDLE)-1.  Inline the
-    -- cast so we don't pull in ps.NtCurrentProcess at module load.
-    local CURRENT_PROCESS = ffi.cast('HANDLE', ffi.cast('intptr_t', -1))
+    -- handle.NtCurrentProcess() is the canonical NT_HANDLE wrapper;
+    -- pull the raw value out for the ntdll FFI call.
     local st = ntdll.NtQueryInformationProcess(
-        CURRENT_PROCESS, 0,                   -- ProcessBasicInformation
+        handle.raw(handle.NtCurrentProcess()), 0,  -- ProcessBasicInformation
         pbi, ffi.sizeof('PROCESS_BASIC_INFORMATION'), ret)
     if err.is_error(st) then
         err.raise('NtQueryInformationProcess(self) for PEB', st)

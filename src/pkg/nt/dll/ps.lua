@@ -233,6 +233,122 @@ NTSTATUS __stdcall NtQueryInformationProcess(
     void  *ProcessInformation,
     ULONG  ProcessInformationLength,
     ULONG *ReturnLength);
+
+NTSTATUS __stdcall NtSetInformationProcess(
+    HANDLE ProcessHandle,
+    int    ProcessInformationClass,
+    void  *ProcessInformation,
+    ULONG  ProcessInformationLength);
+
+NTSTATUS __stdcall NtQueryInformationThread(
+    HANDLE ThreadHandle,
+    int    ThreadInformationClass,
+    void  *ThreadInformation,
+    ULONG  ThreadInformationLength,
+    ULONG *ReturnLength);
+
+NTSTATUS __stdcall NtSetInformationThread(
+    HANDLE ThreadHandle,
+    int    ThreadInformationClass,
+    void  *ThreadInformation,
+    ULONG  ThreadInformationLength);
+
+#pragma pack(push, 4)
+/* KERNEL_USER_TIMES — ProcessTimes / ThreadTimes. NT 3.5 stores as
+ * LARGE_INTEGER (8-byte). pack(4) so LARGE_INTEGER stays 4-aligned
+ * (matches /Zp4 in the NT 3.5 build). */
+typedef struct _KERNEL_USER_TIMES {
+    LARGE_INTEGER CreateTime;
+    LARGE_INTEGER ExitTime;
+    LARGE_INTEGER KernelTime;
+    LARGE_INTEGER UserTime;
+} KERNEL_USER_TIMES;
+
+/* VM_COUNTERS — ProcessVmCounters. All ULONG so layout is plain. */
+typedef struct _VM_COUNTERS {
+    ULONG PeakVirtualSize;
+    ULONG VirtualSize;
+    ULONG PageFaultCount;
+    ULONG PeakWorkingSetSize;
+    ULONG WorkingSetSize;
+    ULONG QuotaPeakPagedPoolUsage;
+    ULONG QuotaPagedPoolUsage;
+    ULONG QuotaPeakNonPagedPoolUsage;
+    ULONG QuotaNonPagedPoolUsage;
+    ULONG PagefileUsage;
+    ULONG PeakPagefileUsage;
+} VM_COUNTERS;
+
+/* QUOTA_LIMITS — ProcessQuotaLimits. PagedPoolLimit / NonPagedPoolLimit
+ * are SIZE_T (ULONG on x86), PagefileLimit is SIZE_T, TimeLimit is a
+ * LARGE_INTEGER (relative thread quantum). */
+typedef struct _QUOTA_LIMITS {
+    ULONG          PagedPoolLimit;
+    ULONG          NonPagedPoolLimit;
+    ULONG          MinimumWorkingSetSize;
+    ULONG          MaximumWorkingSetSize;
+    ULONG          PagefileLimit;
+    LARGE_INTEGER  TimeLimit;
+} QUOTA_LIMITS;
+
+/* POOLED_USAGE_AND_LIMITS — ProcessPooledUsageAndLimits. */
+typedef struct _POOLED_USAGE_AND_LIMITS {
+    ULONG PeakPagedPoolUsage;
+    ULONG PagedPoolUsage;
+    ULONG PagedPoolLimit;
+    ULONG PeakNonPagedPoolUsage;
+    ULONG NonPagedPoolUsage;
+    ULONG NonPagedPoolLimit;
+    ULONG PeakPagefileUsage;
+    ULONG PagefileUsage;
+    ULONG PagefileLimit;
+} POOLED_USAGE_AND_LIMITS;
+
+/* CLIENT_ID — already defined elsewhere; re-declared here for clarity
+ * is not needed (oa.lua provides it). THREAD_BASIC_INFORMATION uses
+ * it for ClientId. */
+
+typedef struct _THREAD_BASIC_INFORMATION {
+    NTSTATUS  ExitStatus;
+    PVOID     TebBaseAddress;
+    CLIENT_ID ClientId;
+    ULONG     AffinityMask;
+    long      Priority;
+    long      BasePriority;
+} THREAD_BASIC_INFORMATION;
+
+/* LDT_ENTRY — i386 segment descriptor.  Matches winnt.h's bitfield
+ * layout but expressed as raw ULONGs for FFI portability — readers
+ * synthesize Base/Limit from the high two ULONGs themselves. */
+typedef struct _LDT_ENTRY {
+    USHORT LimitLow;
+    USHORT BaseLow;
+    ULONG  HighWord;     /* BaseMid:8 | Flags1:8 | Flags2:8 | BaseHi:8 */
+} LDT_ENTRY;
+
+/* PROCESS_LDT_INFORMATION — variable-length LDT descriptor block. */
+typedef struct _PROCESS_LDT_INFORMATION {
+    ULONG     Start;
+    ULONG     Length;
+    LDT_ENTRY LdtEntries[1];   /* in_band; Length bytes total */
+} PROCESS_LDT_INFORMATION;
+
+typedef struct _PROCESS_LDT_SIZE {
+    ULONG Length;
+} PROCESS_LDT_SIZE;
+
+typedef struct _PROCESS_ACCESS_TOKEN {
+    HANDLE Token;
+    HANDLE Thread;           /* obsolete; ignored by NT 3.5 */
+} PROCESS_ACCESS_TOKEN;
+
+/* ThreadDescriptorTableEntry — caller fills Selector, kernel fills
+ * the rest. */
+typedef struct _DESCRIPTOR_TABLE_ENTRY {
+    ULONG     Selector;
+    LDT_ENTRY Descriptor;
+} DESCRIPTOR_TABLE_ENTRY;
+#pragma pack(pop)
 ]]
 
 -- NT 3.5 OS structs use #pragma pack(2): the leading BOOLEAN
@@ -305,13 +421,67 @@ M.THREAD_IMPERSONATE            = 0x0100
 M.THREAD_DIRECT_IMPERSONATION   = 0x0200
 M.THREAD_ALL_ACCESS             = 0x001F03FF
 
--- Pseudo-handles (NtCurrentProcess / NtCurrentThread). Kernel
--- recognizes these as "operate on the caller" — never leave the
--- process boundary.
-local CURRENT_PROCESS = ffi.cast('HANDLE', ffi.cast('intptr_t', -1))
-local CURRENT_THREAD  = ffi.cast('HANDLE', ffi.cast('intptr_t', -2))
-M.NtCurrentProcess = function() return CURRENT_PROCESS end
-M.NtCurrentThread  = function() return CURRENT_THREAD  end
+-- ProcessInformationClass — NtQueryInformationProcess /
+-- NtSetInformationProcess.  Only the classes the NT 3.5 kernel
+-- actually references are exposed; PROCESSINFOCLASS in PUBLIC/SDK/
+-- INC/NTPSAPI.H also reserves ProcessIoPortHandlers (=13, "kernel
+-- mode only") but the kernel has no case arm for it, so the syscall
+-- returns STATUS_INVALID_INFO_CLASS — omitted here.
+--
+-- See NTOS/PS/PSQUERY.C for the Query/Set switches:
+--   Query-only: BasicInformation, PooledUsageAndLimits, VmCounters,
+--               Times, IoCounters (case arm returns STATUS_NOT_SUPPORTED).
+--   Set-only:   BasePriority, RaisePriority, ExceptionPort,
+--               AccessToken, LdtSize, UserModeIOPL,
+--               EnableAlignmentFaultFixup.
+--   Both:       WorkingSetWatch, DefaultHardErrorMode, QuotaLimits,
+--               DebugPort, LdtInformation.
+M.ProcessBasicInformation              = 0
+M.ProcessQuotaLimits                   = 1
+M.ProcessIoCounters                    = 2
+M.ProcessVmCounters                    = 3
+M.ProcessTimes                         = 4
+M.ProcessBasePriority                  = 5
+M.ProcessRaisePriority                 = 6
+M.ProcessDebugPort                     = 7
+M.ProcessExceptionPort                 = 8
+M.ProcessAccessToken                   = 9
+M.ProcessLdtInformation                = 10
+M.ProcessLdtSize                       = 11
+M.ProcessDefaultHardErrorMode          = 12
+M.ProcessPooledUsageAndLimits          = 14
+M.ProcessWorkingSetWatch               = 15
+M.ProcessUserModeIOPL                  = 16
+M.ProcessEnableAlignmentFaultFixup     = 17
+
+-- ThreadInformationClass — NtQueryInformationThread /
+-- NtSetInformationThread.  See NTOS/PS/PSQUERY.C switches:
+--   Query-only: BasicInformation, Times, DescriptorTableEntry,
+--               PerformanceCount.
+--   Set-only:   Priority, BasePriority, AffinityMask,
+--               ImpersonationToken, EventPair,
+--               EnableAlignmentFaultFixup, ZeroTlsCell.
+--   Both:       QuerySetWin32StartAddress.
+M.ThreadBasicInformation               = 0
+M.ThreadTimes                          = 1
+M.ThreadPriority                       = 2
+M.ThreadBasePriority                   = 3
+M.ThreadAffinityMask                   = 4
+M.ThreadImpersonationToken             = 5
+M.ThreadDescriptorTableEntry           = 6
+M.ThreadEnableAlignmentFaultFixup      = 7
+M.ThreadEventPair                      = 8
+M.ThreadQuerySetWin32StartAddress      = 9
+M.ThreadZeroTlsCell                    = 10
+M.ThreadPerformanceCount               = 11
+
+-- Pseudo-handles (NtCurrentProcess / NtCurrentThread).  Kept as raw
+-- HANDLE cdata here because every internal use feeds them directly to
+-- a raw ntdll.* call (no handle.raw step).  The canonical NT_HANDLE
+-- accessors live in nt.dll.handle — use handle.NtCurrentProcess() if
+-- you need a wrapped instance for the nt.dll.* surface.
+local CURRENT_PROCESS = handle.raw(handle.NtCurrentProcess())
+local CURRENT_THREAD  = handle.raw(handle.NtCurrentThread())
 
 local function proc_or_current(h)
     if h == nil then return CURRENT_PROCESS end
@@ -728,8 +898,6 @@ end
 -- with the fields decoded.  Most-used field is `exit_status`, which
 -- after NtWaitForSingleObject(process) holds the process's exit code
 -- (or STATUS_PENDING if the process is still running).
-M.ProcessBasicInformation = 0
-
 function M.NtQueryInformationProcess_Basic(h)
     local pbi = ffi.new('PROCESS_BASIC_INFORMATION')
     local ret = ffi.new('ULONG[1]')
@@ -744,6 +912,113 @@ function M.NtQueryInformationProcess_Basic(h)
         base_priority    = pbi.BasePriority,
         pid              = pbi.UniqueProcessId,
         ppid             = pbi.InheritedFromUniqueProcessId,
+    }
+end
+
+-- ------------------------------------------------------------------
+-- Raw Query/Set wrappers for Process and Thread information.
+--
+-- These return the raw NTSTATUS plus return-length rather than raising,
+-- so callers (mainly test suites) can distinguish "this class isn't
+-- implemented" / "wrong length" from a real fault.  The buffer is the
+-- caller's — the test layer is what knows the right size for each class.
+--
+-- For decoded convenience helpers, see process_times / process_vm_counters
+-- / thread_basic_info / thread_times below.
+-- ------------------------------------------------------------------
+function M.NtQueryInformationProcess(h, cls, buf, len)
+    local ret = ffi.new('ULONG[1]')
+    local st  = ntdll.NtQueryInformationProcess(
+                    handle.raw(h), cls, buf, len, ret)
+    return err.normalize(st), ret[0]
+end
+
+function M.NtSetInformationProcess(h, cls, buf, len)
+    return err.normalize(ntdll.NtSetInformationProcess(
+        handle.raw(h), cls, buf, len))
+end
+
+function M.NtQueryInformationThread(h, cls, buf, len)
+    local ret = ffi.new('ULONG[1]')
+    local st  = ntdll.NtQueryInformationThread(
+                    handle.raw(h), cls, buf, len, ret)
+    return err.normalize(st), ret[0]
+end
+
+function M.NtSetInformationThread(h, cls, buf, len)
+    return err.normalize(ntdll.NtSetInformationThread(
+        handle.raw(h), cls, buf, len))
+end
+
+-- Decoded Process/Thread query helpers.  Each raises on error so the
+-- caller doesn't have to repeat the err.is_error dance.
+
+local function _largeint_to_qwords(li)
+    -- LARGE_INTEGER → 2 ULONGs.  Tests usually only care that the
+    -- values are non-negative; expose both halves for completeness.
+    return {low = li.LowPart, high = li.HighPart}
+end
+
+function M.process_times(h)
+    local kut = ffi.new('KERNEL_USER_TIMES')
+    local st, _ = M.NtQueryInformationProcess(
+        h, M.ProcessTimes, kut, ffi.sizeof('KERNEL_USER_TIMES'))
+    if err.is_error(st) then err.raise('NtQueryInformationProcess(Times)', st) end
+    return {
+        create = _largeint_to_qwords(kut.CreateTime),
+        exit   = _largeint_to_qwords(kut.ExitTime),
+        kernel = _largeint_to_qwords(kut.KernelTime),
+        user   = _largeint_to_qwords(kut.UserTime),
+    }
+end
+
+function M.process_vm_counters(h)
+    local vmc = ffi.new('VM_COUNTERS')
+    local st, _ = M.NtQueryInformationProcess(
+        h, M.ProcessVmCounters, vmc, ffi.sizeof('VM_COUNTERS'))
+    if err.is_error(st) then err.raise('NtQueryInformationProcess(VmCounters)', st) end
+    return {
+        peak_virtual_size              = vmc.PeakVirtualSize,
+        virtual_size                   = vmc.VirtualSize,
+        page_fault_count               = vmc.PageFaultCount,
+        peak_working_set_size          = vmc.PeakWorkingSetSize,
+        working_set_size               = vmc.WorkingSetSize,
+        quota_peak_paged_pool_usage    = vmc.QuotaPeakPagedPoolUsage,
+        quota_paged_pool_usage         = vmc.QuotaPagedPoolUsage,
+        quota_peak_non_paged_pool_usage= vmc.QuotaPeakNonPagedPoolUsage,
+        quota_non_paged_pool_usage     = vmc.QuotaNonPagedPoolUsage,
+        pagefile_usage                 = vmc.PagefileUsage,
+        peak_pagefile_usage            = vmc.PeakPagefileUsage,
+    }
+end
+
+function M.thread_basic_info(h)
+    local tbi = ffi.new('THREAD_BASIC_INFORMATION')
+    local st, _ = M.NtQueryInformationThread(
+        h, M.ThreadBasicInformation, tbi,
+        ffi.sizeof('THREAD_BASIC_INFORMATION'))
+    if err.is_error(st) then err.raise('NtQueryInformationThread(Basic)', st) end
+    return {
+        exit_status   = tbi.ExitStatus,
+        teb           = tbi.TebBaseAddress,
+        pid           = tonumber(ffi.cast('intptr_t', tbi.ClientId.UniqueProcess)),
+        tid           = tonumber(ffi.cast('intptr_t', tbi.ClientId.UniqueThread)),
+        affinity_mask = tbi.AffinityMask,
+        priority      = tbi.Priority,
+        base_priority = tbi.BasePriority,
+    }
+end
+
+function M.thread_times(h)
+    local kut = ffi.new('KERNEL_USER_TIMES')
+    local st, _ = M.NtQueryInformationThread(
+        h, M.ThreadTimes, kut, ffi.sizeof('KERNEL_USER_TIMES'))
+    if err.is_error(st) then err.raise('NtQueryInformationThread(Times)', st) end
+    return {
+        create = _largeint_to_qwords(kut.CreateTime),
+        exit   = _largeint_to_qwords(kut.ExitTime),
+        kernel = _largeint_to_qwords(kut.KernelTime),
+        user   = _largeint_to_qwords(kut.UserTime),
     }
 end
 

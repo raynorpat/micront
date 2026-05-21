@@ -720,10 +720,12 @@ M.ALIAS_BACKUP_OPS_SID    = M.sid(5, 32, 551)
 M.SYSTEM_AUTH_ID = { low = 0x3E7, high = 0 }
 
 -- =====================================================================
--- Pseudo-handles for current process / thread
+-- Pseudo-handles for current process / thread.  Sourced from
+-- nt.dll.handle (the canonical NT_HANDLE wrappers); kept here as raw
+-- HANDLEs because every internal use feeds them straight to ntdll.*.
 -- =====================================================================
-local CURRENT_PROCESS = ffi.cast('HANDLE', ffi.cast('intptr_t', -1))
-local CURRENT_THREAD  = ffi.cast('HANDLE', ffi.cast('intptr_t', -2))
+local CURRENT_PROCESS = handle.raw(handle.NtCurrentProcess())
+local CURRENT_THREAD  = handle.raw(handle.NtCurrentThread())
 
 local function proc_or_current(h)
     if h == nil then return CURRENT_PROCESS end

@@ -138,4 +138,19 @@ function M.raw(h)
     return h.__raw
 end
 
+-- Canonical pseudo-handle accessors.  NT's NtCurrentProcess() /
+-- NtCurrentThread() values are the magic sentinels (HANDLE)-1 /
+-- (HANDLE)-2 that the kernel special-cases as "the caller" without
+-- ever indexing the handle table.  Wrap them through borrow() so they
+-- have the NT_HANDLE shape every nt.dll.* call expects; the wrappers
+-- carry __owned=0, so :close() / __gc are no-ops (you can't close a
+-- pseudo-handle).  Lives in nt.dll.handle (the bottom layer that owns
+-- NT_HANDLE itself) so every other module gets the same canonical
+-- instance instead of rolling its own bare ffi.cast.
+local CURRENT_PROCESS = M.borrow(ffi.cast('HANDLE', ffi.cast('intptr_t', -1)))
+local CURRENT_THREAD  = M.borrow(ffi.cast('HANDLE', ffi.cast('intptr_t', -2)))
+
+function M.NtCurrentProcess() return CURRENT_PROCESS end
+function M.NtCurrentThread()  return CURRENT_THREAD  end
+
 return M

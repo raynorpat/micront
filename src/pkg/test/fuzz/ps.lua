@@ -175,3 +175,40 @@ t.test("NtQueryInformationProcess rejects kernel-range ReturnLength", function()
         CURRENT_PROCESS, 0, bytes(64), 64, KERNEL_PTR))
     rejects(st, "NtQueryInformationProcess/ReturnLength")
 end)
+
+-- ---- NtSetInformationProcess -- IN ProcessInformation ----
+-- The prologue probes ProcessInformation with ProbeForRead at an
+-- alignment that depends on the class.  Class 0 (BasicInformation)
+-- uses sizeof(ULONG) alignment.
+
+t.test("NtSetInformationProcess rejects kernel-range ProcessInformation", function()
+    local st = err.normalize(ntdll.NtSetInformationProcess(
+        CURRENT_PROCESS, 0, KERNEL_PTR, 64))
+    rejects(st, "NtSetInformationProcess/ProcessInformation")
+end)
+
+-- ---- NtQueryInformationThread -- OUT ThreadInformation, OUT ReturnLength ----
+
+t.test("NtQueryInformationThread rejects kernel-range ThreadInformation", function()
+    local st = err.normalize(ntdll.NtQueryInformationThread(
+        CURRENT_THREAD, 0, KERNEL_PTR, 64, ulong()))
+    rejects(st, "NtQueryInformationThread/ThreadInformation")
+end)
+
+t.test("NtQueryInformationThread rejects kernel-range ReturnLength", function()
+    local st = err.normalize(ntdll.NtQueryInformationThread(
+        CURRENT_THREAD, 0, bytes(64), 64, KERNEL_PTR))
+    rejects(st, "NtQueryInformationThread/ReturnLength")
+end)
+
+-- ---- NtSetInformationThread -- IN ThreadInformation ----
+-- The prologue's mode-switched ProbeForRead runs before the dispatch
+-- switch, so even a class with no caller buffer (no class has that
+-- shape currently, but defending against future classes) is covered
+-- by the alignment probe on the buffer pointer.
+
+t.test("NtSetInformationThread rejects kernel-range ThreadInformation", function()
+    local st = err.normalize(ntdll.NtSetInformationThread(
+        CURRENT_THREAD, 0, KERNEL_PTR, 64))
+    rejects(st, "NtSetInformationThread/ThreadInformation")
+end)

@@ -103,6 +103,115 @@ typedef struct _RTL_PROCESS_MODULES {
     ULONG NumberOfModules;
     RTL_PROCESS_MODULE_INFORMATION Modules[1];
 } RTL_PROCESS_MODULES;
+
+/* Small SYSTEM_*INFORMATION structs the test surface validates field-
+ * by-field.  Big variable-length classes (Handle / Object / Process /
+ * Module / PoolTag) are exercised via raw-buffer query_buffer + the
+ * existing each_* iterators.  All under pack(4) — matches NT 3.5's
+ * /Zp4 LARGE_INTEGER alignment, same rationale as ps.lua. */
+
+/* SYSTEM_BASIC_INFORMATION and the two TIME_ADJUST structs end on a
+ * sub-alignment field (CCHAR / BOOLEAN), so their tail pad depends
+ * on struct alignment.  NT 3.5 compiles them under leaked pack(2)
+ * (POPPACK.H bug — see docs-wip/POPPACK-LEAK.md), giving 42 / 10 / 6
+ * bytes respectively.  Mirror that on our side until the NT-side
+ * fix lands.  Other structs in this block are unaffected: they
+ * either end on natural alignment (all-ULONG / LARGE_INTEGER) or are
+ * all-BOOLEAN (no pad either way). */
+#pragma pack(pop)
+#pragma pack(push, 2)
+typedef struct _SYSTEM_BASIC_INFORMATION {
+    ULONG    OemMachineId;
+    ULONG    TimerResolution;
+    ULONG    PageSize;
+    ULONG    NumberOfPhysicalPages;
+    ULONG    LowestPhysicalPageNumber;
+    ULONG    HighestPhysicalPageNumber;
+    ULONG    AllocationGranularity;
+    ULONG    MinimumUserModeAddress;
+    ULONG    MaximumUserModeAddress;
+    ULONG    ActiveProcessorsAffinityMask;   /* KAFFINITY */
+    char     NumberOfProcessors;             /* CCHAR */
+} SYSTEM_BASIC_INFORMATION;
+
+typedef struct _SYSTEM_QUERY_TIME_ADJUST_INFORMATION {
+    ULONG         TimeAdjustment;
+    ULONG         TimeIncrement;
+    unsigned char Enable;
+} SYSTEM_QUERY_TIME_ADJUST_INFORMATION;
+
+typedef struct _SYSTEM_SET_TIME_ADJUST_INFORMATION {
+    ULONG         TimeAdjustment;
+    unsigned char Enable;
+} SYSTEM_SET_TIME_ADJUST_INFORMATION;
+#pragma pack(pop)
+#pragma pack(push, 4)
+
+typedef struct _SYSTEM_PROCESSOR_INFORMATION {
+    ULONG ProcessorType;
+    ULONG Reserved1;
+    ULONG Reserved2;
+} SYSTEM_PROCESSOR_INFORMATION;
+
+typedef struct _SYSTEM_TIMEOFDAY_INFORMATION {
+    LARGE_INTEGER BootTime;
+    LARGE_INTEGER CurrentTime;
+    LARGE_INTEGER TimeZoneBias;
+    ULONG         TimeZoneId;
+    ULONG         Reserved;
+} SYSTEM_TIMEOFDAY_INFORMATION;
+
+typedef struct _SYSTEM_DEVICE_INFORMATION {
+    ULONG NumberOfDisks;
+    ULONG NumberOfFloppies;
+    ULONG NumberOfCdRoms;
+    ULONG NumberOfTapes;
+    ULONG NumberOfSerialPorts;
+    ULONG NumberOfParallelPorts;
+} SYSTEM_DEVICE_INFORMATION;
+
+typedef struct _SYSTEM_EXCEPTION_INFORMATION {
+    ULONG AlignmentFixupCount;
+    ULONG ExceptionDispatchCount;
+    ULONG FloatingEmulationCount;
+} SYSTEM_EXCEPTION_INFORMATION;
+
+typedef struct _SYSTEM_CRASH_DUMP_INFORMATION {
+    HANDLE CrashDumpSection;
+} SYSTEM_CRASH_DUMP_INFORMATION;
+
+typedef struct _SYSTEM_CRASH_STATE_INFORMATION {
+    ULONG ValidCrashDump;
+} SYSTEM_CRASH_STATE_INFORMATION;
+
+typedef struct _SYSTEM_KERNEL_DEBUGGER_INFORMATION {
+    unsigned char KernelDebuggerEnabled;
+    unsigned char KernelDebuggerNotPresent;
+} SYSTEM_KERNEL_DEBUGGER_INFORMATION;
+
+typedef struct _SYSTEM_FLAGS_INFORMATION {
+    ULONG Flags;
+} SYSTEM_FLAGS_INFORMATION;
+
+typedef struct _SYSTEM_FILECACHE_INFORMATION {
+    ULONG CurrentSize;
+    ULONG PeakSize;
+    ULONG PageFaultCount;
+} SYSTEM_FILECACHE_INFORMATION;
+
+typedef struct _SYSTEM_CONTEXT_SWITCH_INFORMATION {
+    ULONG ContextSwitches;
+    ULONG FindAny;
+    ULONG FindLast;
+    ULONG IdleAny;
+    ULONG IdleCurrent;
+    ULONG IdleLast;
+    ULONG PreemptAny;
+    ULONG PreemptCurrent;
+    ULONG PreemptLast;
+    ULONG SwitchToIdle;
+} SYSTEM_CONTEXT_SWITCH_INFORMATION;
+
 #pragma pack(pop)
 
 NTSTATUS __stdcall NtQuerySystemInformation(
@@ -111,14 +220,55 @@ NTSTATUS __stdcall NtQuerySystemInformation(
     ULONG SystemInformationLength,
     ULONG *ReturnLength);
 
+NTSTATUS __stdcall NtSetSystemInformation(
+    int SystemInformationClass,
+    void *SystemInformation,
+    ULONG SystemInformationLength);
+
 NTSTATUS __stdcall NtShutdownSystem(int Action);
 ]]
 
-local SystemProcessInformation    = 5
-local SystemModuleInformation     = 11
-local STATUS_INFO_LENGTH_MISMATCH = 0xC0000004
-
+-- SystemInformationClass — every enum slot NTOS/EX/SYSINFO.C
+-- references is exposed.  The header's SystemVdmInstemulInformation,
+-- SystemVdmBopInformation and the six SystemSpare* slots have no
+-- switch arm in either Query or Set on NT 3.5 (zero references across
+-- NTOS) — omitted; the syscall would just return STATUS_INVALID_INFO_CLASS.
 local M = {}
+
+M.SystemBasicInformation                = 0
+M.SystemProcessorInformation            = 1
+M.SystemPerformanceInformation          = 2
+M.SystemTimeOfDayInformation            = 3
+M.SystemPathInformation                 = 4
+M.SystemProcessInformation              = 5
+M.SystemCallCountInformation            = 6
+M.SystemDeviceInformation               = 7
+M.SystemProcessorPerformanceInformation = 8
+M.SystemFlagsInformation                = 9
+M.SystemCallTimeInformation             = 10
+M.SystemModuleInformation               = 11
+M.SystemLocksInformation                = 12
+M.SystemStackTraceInformation           = 13
+M.SystemPagedPoolInformation            = 14
+M.SystemNonPagedPoolInformation         = 15
+M.SystemHandleInformation               = 16
+M.SystemObjectInformation               = 17
+M.SystemPageFileInformation             = 18
+M.SystemFileCacheInformation            = 21
+M.SystemPoolTagInformation              = 22
+M.SystemTimeAdjustmentInformation       = 28   -- both Query and Set
+M.SystemNextEventIdInformation          = 30
+M.SystemEventIdsInformation             = 31
+M.SystemCrashDumpInformation            = 32
+M.SystemExceptionInformation            = 33
+M.SystemCrashDumpStateInformation       = 34
+M.SystemKernelDebuggerInformation       = 35
+M.SystemContextSwitchInformation        = 36
+
+-- Aliases used by the existing each_* iterators below.
+local SystemProcessInformation    = M.SystemProcessInformation
+local SystemModuleInformation     = M.SystemModuleInformation
+local STATUS_INFO_LENGTH_MISMATCH = 0xC0000004
 
 -- Generic size-query wrapper. Returns a char[?] buffer sized to hold
 -- whatever the given info class produced; caller keeps the buffer
@@ -205,6 +355,25 @@ local function copy_process(info_ptr, threads_ptr)
         }
     end
     return p
+end
+
+-- ------------------------------------------------------------------
+-- Raw Query / Set wrappers.  Caller supplies the buffer; we return
+-- normalized NTSTATUS + returned-length so equality checks against
+-- 0xC000.... literals work without sign games.
+--
+-- For the variable-length classes (Process / Module / Handle / Object
+-- / PoolTag) prefer the each_* iterators below — they bundle the
+-- query_buffer growth loop and pointer-walk for you.
+-- ------------------------------------------------------------------
+function M.NtQuerySystemInformation(cls, buf, len)
+    local ret = ffi.new('ULONG[1]')
+    local st  = ntdll.NtQuerySystemInformation(cls, buf, len, ret)
+    return err.normalize(st), ret[0]
+end
+
+function M.NtSetSystemInformation(cls, buf, len)
+    return err.normalize(ntdll.NtSetSystemInformation(cls, buf, len))
 end
 
 -- Iterate all processes. Yields a Lua table per process — all fields
