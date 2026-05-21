@@ -27,16 +27,18 @@ function M.files(paths, list_tree)
         { dest = "System32/lua.dll", src = paths.cr_dir .. "/lua.dll" },
     }
 
-    -- pkg/ tree: stage every file under src/pkg/ at \SystemRoot\lua\<rel>.
-    -- The Lua application sets package.path = "\SystemRoot\lua\?.lua;..."
-    -- so require('nt.dll.fs') resolves correctly.
+    -- pkg/ tree: stage every .lua file under src/pkg/ at \SystemRoot\
+    -- lua\<rel>.  The Lua application sets package.path =
+    -- "\SystemRoot\lua\?.lua;..." so require('nt.dll.fs') resolves
+    -- correctly.
     --
-    -- Markdown lives in the pkg tree for developers (plan notes and
-    -- design docs next to the code) but is never require()d at runtime
-    -- — and doc names like `iocp-plan.md` blow the FAT16 8.3 limit.
-    -- Stage only what the guest actually loads.
+    -- Whitelist .lua only — any other file (markdown docs, binary
+    -- assets bundled with a package like src/pkg/ddk351/bin/*.EXE)
+    -- belongs to its own layer to stage where it wants.  Doc names
+    -- like `iocp-plan.md` also blow the FAT16 8.3 limit, so excluding
+    -- them up front avoids that side-issue.
     for _, rel in ipairs(list_tree(paths.pkg_root)) do
-        if not rel:match("%.md$") then
+        if rel:match("%.lua$") then
             files[#files + 1] = {
                 dest = "lua/" .. rel,
                 src  = paths.pkg_root .. "/" .. rel,

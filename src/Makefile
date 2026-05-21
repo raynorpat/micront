@@ -141,6 +141,17 @@ selftest: LAYOUT_FLAG := --layout=$(or $(LAYOUT),split-ntfs)
 selftest: BOOT_FLAGS += --netdump
 selftest: boot
 
+# DDK 3.51 ABI smoke — boot NT 3.51 DDK pre-compiled CLI utilities
+# (DRIVERS.EXE / OBJDIR.EXE in v1) against our kernel + kernel32 and
+# observe pass/fail.  selftest is self-referential; this is the drift
+# detector — an unmodified Microsoft binary either runs or it doesn't.
+# Lean layer set (same as selftest), no NT source / MSVC toolchain.
+testddk351: PROFILE_FLAG := --profile ddk351
+testddk351: INIT_ARGS_FLAG :=
+testddk351: BUILD := $(REPO)/build/disk-ddk351
+testddk351: LAYOUT_FLAG := --layout=$(or $(LAYOUT),split-ntfs)
+testddk351: boot
+
 # iprepro — the IP-stack hardening reproducer target.  Composes the
 # lean `iprepro` profile (same disk as selftest, no NT source tree)
 # but boots straight into iprepro.lua: a minimal network endpoint, no
