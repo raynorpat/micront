@@ -17,6 +17,10 @@ jobs:
       # URL for the MicroNT-patched wibo binary. Override per-workflow if
       # bumping to a newer wibo fork release.
       WIBO_URL: https://github.com/HarryR/wibo/releases/download/v1.1.0-micront.2/wibo-x86_64
+      # Coveralls repo token, surfaced as a job env var so the upload step
+      # can gate on its presence (`if:` can read env but not secrets).
+      # Absent on local `gh act` runs and on forks — the step skips there.
+      COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
 
     steps:
       - name: install build deps
@@ -165,14 +169,17 @@ jobs:
           grep -q '^ALL PASSED' build/cov/serial.log
 
       - name: upload coverage to Coveralls
-        # Publish cov2lcov's lcov .info to Coveralls.  Runs even when the
-        # ALL PASSED grep above failed, so a failing run's coverage is
-        # still reported.  Authenticated with the COVERALLS_REPO_TOKEN
-        # repo secret — the Coveralls GitHub App is not in use, so the
-        # token is passed as github-token (the action forwards it to the
-        # reporter as --repo-token).  SF paths in the .info are already
-        # repo-relative, so no base-path mapping is needed.
-        if: always()
+        # Publish cov2lcov's lcov .info to Coveralls.  Only on a passing
+        # coverage run (the bare env condition keeps the implicit
+        # success() gate) and only when the COVERALLS_REPO_TOKEN secret is
+        # present — it's absent on local `gh act` runs and on forks, where
+        # an empty token would fail the action and abort the job before the
+        # selfhost step, hiding later regressions.  Authenticated with the
+        # token as github-token (the Coveralls GitHub App is not in use, so
+        # the action forwards it to the reporter as --repo-token).  SF
+        # paths in the .info are already repo-relative, so no base-path
+        # mapping is needed.
+        if: ${{ env.COVERALLS_REPO_TOKEN != '' }}
         uses: coverallsapp/github-action@v2
         with:
           file: build/cov/coverage.info
@@ -181,9 +188,9 @@ jobs:
 
       - name: run selfhost (in-OS self-build) under QEMU
         # Boot the `selfhost` ntosbe profile — the full disk: NT source
-        # tree + MS toolchain.  selfhost.lua drives the in-OS rebuild
-        # (tools + kernel + drivers + userland) via NMAKE plus the
-        # test.msvc toolchain probe — the self-build ouroboros.
+        # tree + MS toolchain.  ntosbe.selfhost drives the in-OS rebuild
+        # (tools + kernel + drivers + userland) via NMAKE — the
+        # self-build ouroboros.
         # TCG-only (no /dev/kvm in containers); the in-OS rebuild has
         # grown with the driver set and now runs ~10 min on a GitHub
         # runner under TCG.  The 30-minute wall timeout gives headroom
@@ -194,4 +201,4 @@ jobs:
         timeout-minutes: 30
         run: |
           make -C src selfhost < /dev/null 2>&1 | tee selfhost.log
-          grep -q '^ALL PASSED' selfhost.log
+          grep -q '^SELFHOST OK' selfhost.log
