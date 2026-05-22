@@ -18,7 +18,7 @@ TARGETTYPE=DRIVER
 
 INCLUDES=..\..\inc;..\..\ke;..\..\io
 
-SOURCES=
+SOURCES=hal.rc
 
 i386_SOURCES=i386\halinit.c   \
              i386\irql.c       \

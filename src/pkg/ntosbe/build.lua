@@ -591,6 +591,12 @@ function M.main(opts)
             dbg_link_flags[1], dbg_link_flags[2],
             "-OPT:REF",
             "obj\\i386\\*.obj",
+            -- hal.rc → obj\i386\hal.res (the VS_VERSION_INFO resource).
+            -- The *.obj glob above doesn't match it, and unlike the
+            -- MAKEFILE.DEF $(TARGET): $(OBJECTS) rule the drivers use,
+            -- this hand-built link must name the .res so LINK embeds it
+            -- — otherwise hal.dll reports version 0.0.0.0.
+            "obj\\i386\\hal.res",
             NT_ROOT_WIN .. "\\PUBLIC\\SDK\\LIB\\I386\\ntoskrnl.lib",
             NT_ROOT_WIN .. "\\PUBLIC\\SDK\\LIB\\I386\\libcntpr.lib",
             NT_ROOT_WIN .. "\\PUBLIC\\SDK\\LIB\\I386\\int64.lib",
