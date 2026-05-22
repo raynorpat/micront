@@ -938,8 +938,8 @@ QueryInitConfig(
 // DumpInitConfig — dump the init-process configuration to the boot log,
 // matching the format IopDumpModuleVersion uses for drivers:
 //
-//   INIT: exe   \SystemRoot\lua\run.exe  3.50.0.1  (0x0002a7b4)
-//   INIT: args  \SystemRoot\lua\main.lua
+//   INIT: exe   \SystemRoot\System32\lua.exe  3.50.0.1  (0x0002a7b4)
+//   INIT: args  \SystemRoot\pkg\main.lua
 //   INIT: stdio \Device\Serial0  (handle 0x00000040)
 //
 // Version + PE checksum come from mapping the Exe as an image section

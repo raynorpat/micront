@@ -59,16 +59,17 @@ cr:
 # ---------------- disk image ----------------------------------------
 #
 # PROFILE picks the ntosbe profile — the layer set ntosbe composes.
-# Empty → ntosbe's own default (`selfhost`, the full disk), so a plain
-# `make disk` / `make boot` still bakes a complete image.  The
-# selftest / selfhost / smoke* targets below set it explicitly.
+# Empty → ntosbe's own default (`default`: the lean interactive disk
+# booting main.lua), so a plain `make disk` / `make boot` bakes that.
+# The selftest / selfhost / smoke* targets below set it explicitly.
 PROFILE_FLAG ?=
 
-# Init args override.  Each profile carries its own entry script
-# (selftest.lua / selfhost.lua / smoke.lua); the interactive `make boot`
-# instead wants main.lua, so that is the default here.  The profile-
-# driven targets clear this so the profile's own Init\Args wins.
-INIT_ARGS_FLAG ?= --init-args '\SystemRoot\lua\main.lua'
+# Init args override.  Each profile now declares its own entry script
+# (profile.entry → Control\Init Args), so no default is needed — a bare
+# `make boot` boots the `default` profile's main.lua.  This stays as an
+# escape hatch: `make boot INIT_ARGS_FLAG='--init-args \SystemRoot\pkg\foo.lua'`
+# overrides the entry for an ad-hoc run.
+INIT_ARGS_FLAG ?=
 
 # LAYOUT picks the disk shape: 'single' / 'split-fat' / 'split-ntfs'.
 # Default = profile default (split-fat).  Same set of files; the

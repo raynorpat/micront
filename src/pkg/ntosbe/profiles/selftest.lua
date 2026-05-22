@@ -6,13 +6,15 @@
 -- (which dominates disk-compose wall time) buys nothing here.  For the
 -- in-OS self-host build use the `selfhost` profile instead.
 --
--- A profile is just a layer list + the init entry; see ntosbe/compose.lua.
+-- A profile is a layer list + an entry script; see ntosbe/compose.lua.
+-- `core` is implicit (always added first).  `lua` pulls `nt`; `test`
+-- ships the harness + suites as test.zip and also pulls `nt`.
 
 return {
     layers = {
-        "core", "lua",
+        "lua", "test",
         "drivers.storage.*", "drivers.fs.*",
         "drivers.net", "drivers.input", "drivers.video", "drivers.virtio.*",
     },
-    init = { args = "\\SystemRoot\\lua\\selftest.lua" },
+    entry = "selftest.lua",
 }

@@ -70,7 +70,13 @@ local bit = require('bit')
 
 local M = {}
 
-local on_host = (type(io) == 'table' and type(io.open) == 'function')
+-- Host vs guest.  The build-host LuaJIT targets Linux; the in-OS guest
+-- LuaJIT is cross-built for the NT (Windows) ABI (cr/Makefile
+-- TARGET_SYS=Windows), so jit.os is the reliable discriminator.  (An
+-- earlier heuristic keyed on the presence of an `io` global, but the
+-- runtime preamble now restores io/os on the guest too, so the guest
+-- would mis-detect as host.)
+local on_host = (jit.os ~= "Windows")
 M.on_host = on_host
 
 -- ----------------------------------------------------------------

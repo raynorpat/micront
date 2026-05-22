@@ -2022,7 +2022,7 @@ Return Value:
 //
 // MicroNT helper: search an NT-namespace path for a DLL.  Path is a
 // ';'-separated list of object-namespace directory names (e.g.
-// "\SystemRoot\System32;\SystemRoot\lua").  For each entry we build
+// "\SystemRoot\System32;\SystemRoot\pkg").  For each entry we build
 // "<entry>\<DllName>" and ask the kernel directly via NtOpenFile —
 // no DOS-path translation, no \DosDevices prefix, no drive letter.
 //

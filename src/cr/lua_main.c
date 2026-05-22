@@ -26,6 +26,7 @@
  */
 
 #include <windows.h>
+#include <stdio.h>
 #include "lua.h"
 #include "lualib.h"
 #include "lauxlib.h"
@@ -33,6 +34,13 @@
 extern void  ntshim_init(void);
 extern int   main(int argc, char **argv);
 extern int   luaopen_nt__thread(lua_State *L);
+
+/* Runtime bootstrap, run after the stdlib opens and before the entry
+ * script: sets package.path to the single \SystemRoot\pkg\ root,
+ * installs the STORED-zip require() searcher, and restores the io/os
+ * globals (lib_io/lib_os are compiled out).  Loaded by absolute path
+ * so it needs no package.path of its own.  See src/cr/preamble.lua. */
+#define PREAMBLE_PATH "\\SystemRoot\\System32\\preamble.lua"
 
 /*
  * luaL_openlibs wrapper — opens the standard LuaJIT libs via the real
@@ -56,6 +64,17 @@ void __wrap_luaL_openlibs(lua_State *L)
     lua_pushcfunction(L, luaopen_nt__thread);
     lua_setfield(L, -2, "nt._thread");
     lua_pop(L, 2);
+
+    /* Run the preamble.  On failure, report and continue — the entry
+     * script's first require() will then fail loudly with context,
+     * which is more debuggable than a silent half-set-up state. */
+    if (luaL_loadfile(L, PREAMBLE_PATH) != 0 ||
+        lua_pcall(L, 0, 0, 0) != 0) {
+        const char *msg = lua_tostring(L, -1);
+        fprintf(stderr, "preamble.lua failed: %s\n",
+                msg ? msg : "(unknown error)");
+        lua_pop(L, 1);
+    }
 }
 
 __declspec(dllexport)

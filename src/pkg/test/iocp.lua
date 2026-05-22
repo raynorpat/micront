@@ -93,7 +93,8 @@ end)
 -- consumer drains until the port is idle for a full timeout, then
 -- returns the ApcContext cookies it observed as a comma-joined string.
 local CONSUMER = [[
-package.path = "\\SystemRoot\\lua\\?.lua;\\SystemRoot\\lua\\?\\init.lua"
+-- cr_thread sibling states run luaL_openlibs (wrapped) → the runtime
+-- preamble sets package.path + searcher + io/os here too.
 local ffi    = require('ffi')
 local ex     = require('nt.dll.ex')
 local handle = require('nt.dll.handle')
@@ -186,7 +187,8 @@ end)
 -- once the producer has signalled done AND a full remove timeout sees
 -- the port empty. Returns "<faultcount>;<cookie,cookie,...>".
 local INJECT_CONSUMER = [[
-package.path = "\\SystemRoot\\lua\\?.lua;\\SystemRoot\\lua\\?\\init.lua"
+-- package.path/searcher/io/os set by the runtime preamble (sibling
+-- states run the wrapped luaL_openlibs too).
 local ffi    = require('ffi')
 local ntdll  = require('nt.dll')
 local ex     = require('nt.dll.ex')      -- registers the IOCP cdefs

@@ -36,11 +36,12 @@
 --
 -- Source binaries are tracked under src/pkg/ddk351/bin/.  The lua
 -- layer's auto-stage rule whitelists `.lua` only, so these don't get
--- duplicated at \SystemRoot\lua\ddk351\bin\.
+-- duplicated at \SystemRoot\pkg\ddk351\bin\.
 --
 -- The runner is src/pkg/ddk351/main.lua, auto-staged by the lua
--- layer at \SystemRoot\lua\ddk351\main.lua and pointed at by the
--- ddk351 profile's init.args.
+-- layer at \SystemRoot\pkg\ddk351\main.lua and pointed at by the
+-- ddk351 profile's init.args.  main.lua + bin/ now co-locate under
+-- the single \pkg\ddk351\ directory.
 
 local M = {}
 
@@ -48,11 +49,16 @@ M.name = "ddk351"
 M.description = "NT 3.51 DDK / HCT pre-compiled CLI utilities (ABI smoke)"
 
 function M.files(paths)
-    local bin = paths.pkg_root .. "/ddk351/bin"
+    local pkg = paths.pkg_root .. "/ddk351"
     return {
-        { dest = "pkg/ddk351/DRIVERS.EXE", src = bin .. "/DRIVERS.EXE" },
-        { dest = "pkg/ddk351/FLOATER.EXE", src = bin .. "/FLOATER.EXE" },
-        { dest = "pkg/ddk351/REGDMP.EXE",  src = bin .. "/REGDMP.EXE"  },
+        -- The runner ships loose with its binary bundle (the kernel
+        -- loads main.lua by absolute path via the profile's init.args,
+        -- and the loader resolves the EXEs as siblings).  Not zipped:
+        -- the EXEs aren't Lua, and the entry must be a real file.
+        { dest = "pkg/ddk351/main.lua",    src = pkg .. "/main.lua"     },
+        { dest = "pkg/ddk351/DRIVERS.EXE", src = pkg .. "/bin/DRIVERS.EXE" },
+        { dest = "pkg/ddk351/FLOATER.EXE", src = pkg .. "/bin/FLOATER.EXE" },
+        { dest = "pkg/ddk351/REGDMP.EXE",  src = pkg .. "/bin/REGDMP.EXE"  },
     }
 end
 

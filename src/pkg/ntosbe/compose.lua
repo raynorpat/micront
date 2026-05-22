@@ -69,7 +69,10 @@ end
 
 -- Resolve the init process config.  Precedence, low to high:
 --   layer `init` defaults (core -> stdio, the runtime layer -> exe)
---   profile.init          (the entry script -> args)
+--   profile.layer.init    (a profile's inline layer)
+--   profile.init          (explicit override)
+--   profile.entry         (sugar: derives args from the entry script,
+--                          only if args isn't already set above)
 --   opts_init             (--init-args / --init-exe / --init-stdio)
 local function resolve_init(order, profile, opts_init)
     local init = {}
@@ -78,8 +81,25 @@ local function resolve_init(order, profile, opts_init)
             for k, v in pairs(layer.init) do init[k] = v end
         end
     end
+    if profile.layer and profile.layer.init then
+        for k, v in pairs(profile.layer.init) do init[k] = v end
+    end
     if profile.init then
         for k, v in pairs(profile.init) do init[k] = v end
+    end
+    -- `entry` names a profile's program.  Two forms:
+    --   "name.lua"        a loose top-level script — init.args points
+    --                     straight at pkg\name.lua (staged in compose).
+    --   "a.dotted.module" a module shipped inside a package zip — run
+    --                     via the launcher (System32\launch.lua) which
+    --                     require()s it.  Nothing to stage here; the
+    --                     owning package's layer ships the module.
+    if not init.args and profile.entry then
+        if profile.entry:match("%.lua$") then
+            init.args = "\\SystemRoot\\pkg\\" .. profile.entry
+        else
+            init.args = "\\SystemRoot\\System32\\launch.lua " .. profile.entry
+        end
     end
     if opts_init then
         for k, v in pairs(opts_init) do init[k] = v end
@@ -89,7 +109,8 @@ local function resolve_init(order, profile, opts_init)
               .. "must include an application-runtime layer (e.g. 'lua')")
     end
     if not init.args then
-        error("compose: profile supplies no init.args (entry script)")
+        error("compose: profile gives no entry script — set `entry` or "
+              .. "init.args")
     end
     return init
 end
@@ -104,14 +125,23 @@ function M.compose(args)
 
     local composed = { init = init }
 
+    -- A profile may carry an inline layer (profile.layer) — files /
+    -- registry that belong to the profile itself rather than to a
+    -- reusable named layer (e.g. profile-specific staging).  It runs
+    -- last so it can extend/override the named layers.
+    local inline = profile.layer
+
     function composed.apply(h)
         local ctx = { init = init, paths = paths }
         for _, layer in ipairs(order) do
             if layer.registry then layer.registry(h, ctx) end
         end
+        if inline and inline.registry then inline.registry(h, ctx) end
     end
 
-    -- Merge every layer's plain files, then its boot drivers.
+    -- Merge every layer's plain files, then the profile's inline-layer
+    -- files, then the profile's `entry` script (staged loose), then
+    -- boot drivers.
     local files = {}
     for _, layer in ipairs(order) do
         if layer.files then
@@ -119,6 +149,23 @@ function M.compose(args)
                 files[#files + 1] = e
             end
         end
+    end
+    if inline and inline.files then
+        for _, e in ipairs(inline.files(paths, list_tree)) do
+            files[#files + 1] = e
+        end
+    end
+    -- `entry` sugar: a "name.lua" entry is a loose top-level script,
+    -- staged here at pkg/<entry>.  A dotted-module entry ships inside
+    -- its package's zip (run via launch.lua) — nothing to stage.  (A
+    -- profile whose entry is staged by one of its layers — e.g. ddk351,
+    -- whose main.lua ships with its bin/ bundle — sets init.args
+    -- explicitly instead and omits `entry`.)
+    if profile.entry and profile.entry:match("%.lua$") then
+        files[#files + 1] = {
+            dest = "pkg/" .. profile.entry,
+            src  = paths.pkg_root .. "/" .. profile.entry,
+        }
     end
     for _, layer in ipairs(order) do
         if layer.boot_drivers then

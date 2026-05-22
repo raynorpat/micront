@@ -70,7 +70,8 @@ end)
 -- "OK:<payload>" or "ERR:<stringified error>" rather than letting a
 -- non-string error escape (which cr_thread reports as an empty "error").
 local SERVER_CHUNK = [[
-package.path = "\\SystemRoot\\lua\\?.lua;\\SystemRoot\\lua\\?\\init.lua"
+-- package.path/searcher/io/os set by the runtime preamble (sibling
+-- states run the wrapped luaL_openlibs too).
 local ffi    = require('ffi')
 local lpc    = require('nt.dll.lpc')
 local handle = require('nt.dll.handle')
@@ -113,7 +114,8 @@ return ok and ("OK:" .. result) or ("ERR:" .. tostring(result))
 -- Client worker. PAYLOAD = "<connection-port name>\n<request text>".
 -- Same OK:/ERR: string-marshalling discipline as the server chunk.
 local CLIENT_CHUNK = [[
-package.path = "\\SystemRoot\\lua\\?.lua;\\SystemRoot\\lua\\?\\init.lua"
+-- package.path/searcher/io/os set by the runtime preamble (sibling
+-- states run the wrapped luaL_openlibs too).
 local ffi = require('ffi')
 local lpc = require('nt.dll.lpc')
 

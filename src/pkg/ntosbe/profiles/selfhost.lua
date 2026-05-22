@@ -1,19 +1,21 @@
 -- ntosbe profile: selfhost
 --
--- The full disk: everything `selftest` stages, plus the NT source tree
--- (ntsrc) and the MS toolchain (msvc).  This is what the in-OS
--- self-host build needs — test.ntosbe drives NMAKE against
--- \SystemRoot\src and test.msvc spawns the toolchain EXEs.
+-- The in-OS build environment: the ntosbe builder (ntosbe), the NT
+-- source tree (ntsrc) and the MS toolchain (msvc).  Boots straight into
+-- ntosbe.selfhost, which drives ntosbe.build against \SystemRoot\src
+-- using the in-OS toolchain — the same build that runs on the host,
+-- run from inside the guest.  Not a test run: a real self-host build.
 --
--- selfhost is also the default profile for a bare `ntosbe` invocation,
--- preserving the pre-layer full-disk behaviour.
+-- The lean interactive disk is the `default` profile; selfhost is the
+-- heavy build environment.  (No `test` package — the old msvc/platform
+-- smoke suites served their purpose proving the toolchain wiring and
+-- are retired; the build itself is the proof now.)
 
 return {
     layers = {
-        "core", "lua",
+        "lua", "ntosbe", "ntsrc", "msvc",
         "drivers.storage.*", "drivers.fs.*",
         "drivers.net", "drivers.input", "drivers.video", "drivers.virtio.*",
-        "ntsrc", "msvc",
     },
-    init = { args = "\\SystemRoot\\lua\\selfhost.lua" },
+    entry = "ntosbe.selfhost",
 }

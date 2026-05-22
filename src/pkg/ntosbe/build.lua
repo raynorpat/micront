@@ -946,12 +946,11 @@ function M.main(opts)
         end
 
         mkdir_p(out_dir)
-        -- selfhost = the full disk (NT source tree + toolchain); the
-        -- main.lua init override makes it an interactive image, the
-        -- same shape `make boot` produces.
+        -- The `default` profile = the lean interactive disk booting
+        -- main.lua — the same shape `make boot` produces.  (For the
+        -- full self-host disk, build the `selfhost` profile instead.)
         return ntosbe.build_image {
-            profile    = "selfhost",
-            init       = { args = "\\SystemRoot\\lua\\main.lua" },
+            profile    = "default",
             efi_binary = efi_bin,
             output_dir = out_dir,
             src_root   = SCRIPT_DIR,

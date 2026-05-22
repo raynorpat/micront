@@ -8,8 +8,8 @@
 -- step if missing.  Every line of output before that is normal kernel
 -- + driver init noise; only the sentinel matters for pass/fail.
 
-package.path = "\\SystemRoot\\lua\\?.lua;\\SystemRoot\\lua\\?\\init.lua"
-package.cpath = ""
+-- package.path + searcher + io/os globals come from the runtime
+-- preamble (\SystemRoot\System32\preamble.lua).
 
 local se  = require('nt.dll.se')
 local sys = require('nt.dll.sys')

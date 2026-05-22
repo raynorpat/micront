@@ -20,8 +20,8 @@
 -- the win32-layer roadmap that would unlock the next tier (NTSD /
 -- CDB / a wider RK ecosystem).
 
-package.path = "\\SystemRoot\\lua\\?.lua;\\SystemRoot\\lua\\?\\init.lua"
-package.cpath = ""
+-- package.path + searcher + io/os globals come from the runtime
+-- preamble (\SystemRoot\System32\preamble.lua).
 
 local bit    = require('bit')
 local ffi    = require('ffi')

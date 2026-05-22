@@ -8,7 +8,7 @@
 --   3. Privilege ops, set, create_token, duplicate_token, impersonation.
 --
 -- The kernel-built system token (assigned to every kernel-created
--- process — System, smss, and our run.exe) is constructed in
+-- process — System, smss, and our lua.exe) is constructed in
 -- SE/TOKEN.C:560-870. We reference those line numbers in test asserts
 -- so a regression points straight at the expected source.
 
@@ -23,7 +23,7 @@ local ffi    = require('ffi')
 -- MicroNT does not run csrss, so \BaseNamedObjects is never created.
 -- Make our own per-suite directory under \ for the named-object
 -- enforcement tests. Held for the lifetime of the test module via the
--- upvalue here; closes when run.exe exits.
+-- upvalue here; closes when lua.exe exits.
 local DIRECTORY_ALL_ACCESS = 0xF000F      -- DIRECTORY_QUERY|TRAVERSE|CREATE_OBJECT|CREATE_SUBDIRECTORY|STANDARD_RIGHTS_REQUIRED
 local SE_TEST_DIR = "\\seacltest"
 local function ensure_test_dir()

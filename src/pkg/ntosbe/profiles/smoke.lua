@@ -10,9 +10,9 @@
 
 return {
     layers = {
-        "core", "lua",
+        "lua",
         "drivers.storage.*", "drivers.fs.*",
         "drivers.net", "drivers.input", "drivers.video", "drivers.virtio.*",
     },
-    init = { args = "\\SystemRoot\\lua\\smoke.lua" },
+    entry = "smoke.lua",
 }

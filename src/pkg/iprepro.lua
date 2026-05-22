@@ -12,10 +12,8 @@
 --
 -- See docs-wip/IPSTACK-HARDENING.md §5.
 
--- Phase A reorg: every package lives under \SystemRoot\lua\.  Set this
--- before any require() — same prelude as main.lua / selftest.lua.
-package.path = "\\SystemRoot\\lua\\?.lua;\\SystemRoot\\lua\\?\\init.lua"
-package.cpath = ""
+-- package.path + searcher + io/os globals come from the runtime
+-- preamble (\SystemRoot\System32\preamble.lua).
 
 local dhcp = require('nt.net.dhcp')
 local afd  = require('nt.net.afd')

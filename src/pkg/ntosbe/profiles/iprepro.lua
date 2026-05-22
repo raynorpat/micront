@@ -12,13 +12,13 @@
 --
 -- See docs-wip/IPSTACK-HARDENING.md §5.
 --
--- A profile is just a layer list + the init entry; see ntosbe/compose.lua.
+-- A profile is a layer list + an entry script; see ntosbe/compose.lua.
 
 return {
     layers = {
-        "core", "lua",
+        "lua",
         "drivers.storage.*", "drivers.fs.*",
         "drivers.net", "drivers.input", "drivers.video", "drivers.virtio.*",
     },
-    init = { args = "\\SystemRoot\\lua\\iprepro.lua" },
+    entry = "iprepro.lua",
 }

@@ -23,7 +23,7 @@ t.test("each_process finds the System (kernel) process", function()
                  "threads array length matches thread_count")
         end
     end
-    t.ok(count >= 2, "at least idle + System + run.exe")
+    t.ok(count >= 2, "at least idle + System + lua.exe")
     t.ok(seen_system, "one of the processes is named 'System'")
 end)
 
@@ -41,16 +41,19 @@ t.test("each_process yields plain Lua tables (no cdata in snapshot)", function()
     end
 end)
 
-t.test("each_process finds run.exe (our own process)", function()
+t.test("each_process finds lua.exe (our own process)", function()
+    -- The Lua runtime EXE is staged as \SystemRoot\System32\lua.exe
+    -- (built in cr/ as run.exe); NT reports the process image by its
+    -- on-disk leaf name, so the running process shows as "lua.exe".
     local found = false
     for proc in sys.each_process() do
-        if proc.image == "run.exe" then
+        if proc.image == "lua.exe" then
             found = true
             t.ok(proc.pid > 0)
             t.ok(proc.thread_count >= 1)
         end
     end
-    t.ok(found, "our own run.exe is in the process list")
+    t.ok(found, "our own lua.exe is in the process list")
 end)
 
 t.test("each_module finds ntoskrnl.exe + hal.dll", function()

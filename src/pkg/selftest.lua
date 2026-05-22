@@ -8,10 +8,9 @@
 -- suites in sibling threads or child processes for fault isolation;
 -- the t.test() API is designed to stay source-compatible with that.
 
--- Phase A reorg: every package lives under \SystemRoot\lua\.  See
--- main.lua for the broader rationale; set this before any require().
-package.path = "\\SystemRoot\\lua\\?.lua;\\SystemRoot\\lua\\?\\init.lua"
-package.cpath = ""
+-- package.path + the zip searcher + io/os globals are set by the
+-- runtime preamble (\SystemRoot\System32\preamble.lua, run by lua.dll
+-- before this entry script).  No per-script path setup needed.
 
 local t   = require('test')
 local se  = require('nt.dll.se')
