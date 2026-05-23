@@ -273,6 +273,45 @@ EFI_STATUS pe_stage(const void *blob, UINTN blob_size,
 }
 
 /*----------------------------------------------------------------------------
+ * pe_find_section
+ *
+ * Walks the staged image's section table (the PE headers were copied to
+ * phys_mapped by pe_stage) and returns the matching section's physical base
+ * + virtual size.  Section names are <= 8 bytes, NUL-padded.
+ *---------------------------------------------------------------------------*/
+
+EFI_STATUS pe_find_section(const pe_image_t *img, const char *name,
+                           EFI_PHYSICAL_ADDRESS *out_phys, UINT32 *out_size) {
+    const UINT8 *base = (const UINT8 *)(UINTN)img->phys_mapped;
+    const image_dos_header_t   *dos = (const image_dos_header_t *)base;
+    const image_nt_headers32_t *nt;
+    const image_section_header_t *sec;
+    UINTN n, i;
+
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return EFI_INVALID_PARAMETER;
+    nt = (const image_nt_headers32_t *)(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) return EFI_INVALID_PARAMETER;
+
+    sec = (const image_section_header_t *)
+          ((const UINT8 *)&nt->OptionalHeader + nt->FileHeader.SizeOfOptionalHeader);
+    n = nt->FileHeader.NumberOfSections;
+
+    for (i = 0; i < n; i++) {
+        int match = 1, k;
+        for (k = 0; k < 8; k++) {
+            if (sec[i].Name[k] != name[k]) { match = 0; break; }
+            if (name[k] == 0) break;          /* both NUL — equal so far */
+        }
+        if (match) {
+            if (out_phys) *out_phys = img->phys_mapped + sec[i].VirtualAddress;
+            if (out_size) *out_size = sec[i].VirtualSize;
+            return EFI_SUCCESS;
+        }
+    }
+    return EFI_NOT_FOUND;
+}
+
+/*----------------------------------------------------------------------------
  * pe_resolve_imports
  *---------------------------------------------------------------------------*/
 

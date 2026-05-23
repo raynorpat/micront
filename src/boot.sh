@@ -2,17 +2,25 @@
 #
 # Boot MicroNT UEFI loader under OVMF in QEMU.
 #
-# Usage: boot.sh [--machine pc|q35] [--disk ide|nvme|virtio-blk]
-#                [--disk-image PATH] [--vga] [--gdb] [--trace]
-#                [--netdump] [--coverage PATH] [--mem MB]
-#                [--kernel-opts STRING] [--net-harness PORT]
+# Usage: boot.sh [--machine pc|q35|microvm] [--disk ide|nvme|virtio-blk]
+#                [--disk-image PATH] [--ramdisk PATH] [--vmlinux PATH]
+#                [--vga] [--gdb] [--trace] [--netdump] [--coverage PATH]
+#                [--mem MB] [--kernel-opts STRING] [--net-harness PORT]
 #   --disk-image PATH
 #               Boot this ESP image instead of the default
 #               build/disk/esp.img.  The Makefile passes per-profile
 #               images (build/disk-selftest/esp.img, …) through here.
+#   --ramdisk PATH
+#               PVH direct-boot: boot the vmlinuz loader + this MBR/FAT16
+#               ramdisk via -kernel/-initrd (no OVMF, no ESP drive).
+#               Kernel cmdline rides -append. Use with --machine microvm
+#               for the no-firmware shape. `make -C src boot-ramdisk`.
+#   --vmlinux PATH
+#               PVH loader ELF (default src/boot/vmlinuz/vmlinux).
 #   --machine   QEMU machine type. q35 = ICH9 (default, modern PCIe
 #               topology, no legacy IDE bus); pc = i440fx + PIIX3
-#               (legacy shape, classic chipset with legacy IDE).
+#               (legacy shape, classic chipset with legacy IDE);
+#               microvm = minimal, no PCI (PVH/--ramdisk only).
 #   --disk      Disk controller for the boot volume. nvme (default) =
 #               NVMe via nvme2k.sys; ide = legacy ATA, claimed by
 #               atdisk.sys (q35 + ide bolts on a piix3-ide bridge);
@@ -91,6 +99,10 @@ MEM=128
 # smoke matrix) but kept around as the legacy/debug fallback.
 MACHINE="q35"
 DISK="nvme"
+# PVH ramdisk direct-boot (set by --ramdisk): boot the vmlinuz PVH loader
+# + an MBR/FAT16 ramdisk via -kernel/-initrd, no OVMF and no ESP drive.
+RAMDISK=""
+VMLINUX="$SCRIPT_DIR/boot/vmlinuz/vmlinux"
 
 # Honour `NETDUMP=1` from the environment so wrapper Makefiles (e.g.
 # `make selftest NETDUMP=1`) can opt into the pcap without rewriting
@@ -180,6 +192,20 @@ while [ $# -gt 0 ]; do
             ESP_IMG="$1"
             shift
             ;;
+        --ramdisk)
+            # PVH direct-boot mode: boot vmlinuz + this MBR/FAT16 ramdisk
+            # via -kernel/-initrd (no OVMF, no ESP drive). The kernel
+            # command line rides -append instead of fw_cfg.
+            shift
+            RAMDISK="$1"
+            shift
+            ;;
+        --vmlinux)
+            # Override the PVH loader ELF (default src/boot/vmlinuz/vmlinux).
+            shift
+            VMLINUX="$1"
+            shift
+            ;;
         --extra-disk)
             # Attach an additional virtio-blk drive at PCI position
             # after the primary.  Used for testing FS drivers (e.g.
@@ -207,7 +233,7 @@ done
 
 # --- Sanity --------------------------------------------------------
 
-if [ ! -f "$ESP_IMG" ]; then
+if [ -z "$RAMDISK" ] && [ ! -f "$ESP_IMG" ]; then
     echo "ERROR: $ESP_IMG not found. Run: src/build.sh disk" >&2
     exit 1
 fi
@@ -217,7 +243,9 @@ if [ -n "$COVERAGE_FLAGS" ] && [ ! -f "$QCOV_SO" ]; then
     exit 1
 fi
 
-cp /usr/share/OVMF/OVMF_VARS_4M.fd OVMF_VARS_4M.fd
+if [ -z "$RAMDISK" ]; then
+    cp /usr/share/OVMF/OVMF_VARS_4M.fd OVMF_VARS_4M.fd
+fi
 
 # --- Hardware profile resolution ----------------------------------------
 #
@@ -233,11 +261,57 @@ MACHINE_FLAGS=""
 case "$MACHINE" in
     pc)  MACHINE_FLAGS="-machine pc"  ;;
     q35) MACHINE_FLAGS="-machine q35" ;;
+    microvm) MACHINE_FLAGS="-machine microvm,pic=on,pit=on,rtc=on" ;;
     *)
-        echo "boot.sh: unknown --machine '$MACHINE' (try pc or q35)" >&2
+        echo "boot.sh: unknown --machine '$MACHINE' (try pc, q35, or microvm)" >&2
         exit 1
         ;;
 esac
+
+# --- PVH ramdisk direct-boot --------------------------------------------
+# With --ramdisk, boot the vmlinuz PVH loader + the ramdisk via
+# -kernel/-initrd: no firmware (OVMF), no ESP drive. The kernel command
+# line rides -append (the PVH hvm_start_info cmdline -> vmlinuz cmdline()).
+# pc / q35 get the same PCI virtio device set as the OVMF path; microvm
+# has no PCI by default, so it's ISA serial + debug-exit only.
+if [ -n "$RAMDISK" ]; then
+    if [ ! -f "$VMLINUX" ]; then
+        echo "ERROR: vmlinux '$VMLINUX' not found. Run: make -C src/boot/vmlinuz" >&2
+        exit 1
+    fi
+    if [ ! -f "$RAMDISK" ]; then
+        echo "ERROR: ramdisk '$RAMDISK' not found. Run: make -C src ramdisk" >&2
+        exit 1
+    fi
+    echo "[boot.sh] PVH ramdisk boot: machine=$MACHINE"
+    echo "[boot.sh]   kernel: $VMLINUX"
+    echo "[boot.sh]   initrd: $RAMDISK"
+    echo "[boot.sh]   memory: ${MEM} MB"
+    [ -n "$KERNEL_OPTS" ] && echo "[boot.sh]   cmdline (-append): $KERNEL_OPTS"
+
+    SERIAL_FLAGS="-chardev stdio,id=serialmux,mux=on -serial chardev:serialmux"
+    DEBUG_EXIT="-device isa-debug-exit,iobase=0xf4,iosize=0x04"
+
+    if [ "$MACHINE" = "microvm" ]; then
+        exec qemu-system-x86_64 $MACHINE_FLAGS -m "$MEM" \
+            -kernel "$VMLINUX" -initrd "$RAMDISK" -append "$KERNEL_OPTS" \
+            $SERIAL_FLAGS $DEBUG_EXIT -no-reboot \
+            $DISPLAY_FLAGS $GDB_FLAGS $TRACE_FLAGS $COVERAGE_FLAGS
+    else
+        exec qemu-system-x86_64 $MACHINE_FLAGS -m "$MEM" \
+            -kernel "$VMLINUX" -initrd "$RAMDISK" -append "$KERNEL_OPTS" \
+            $SERIAL_FLAGS \
+            -object rng-random,id=rng0,filename=/dev/urandom \
+            -device virtio-rng-pci,rng=rng0 \
+            -device virtio-serial-pci,id=vser0 \
+            -chardev pty,id=vcon0 -device virtconsole,chardev=vcon0 \
+            -device virtio-keyboard-pci -device virtio-mouse-pci \
+            $NETDEV_BACKEND -device virtio-net-pci,netdev=n0 \
+            $DEBUG_EXIT -no-reboot \
+            $EXTRA_DRIVE_FLAGS \
+            $DISPLAY_FLAGS $GDB_FLAGS $TRACE_FLAGS $NETDUMP_FLAGS $COVERAGE_FLAGS
+    fi
+fi
 
 STORAGE_FLAGS=""
 DISK_DESC=""

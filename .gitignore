@@ -30,10 +30,19 @@ src/NT/PRIVATE/NTOS/INIT/bugcodes.rc
 RC[a-z][0-9][0-9][0-9][0-9][0-9]
 RD[a-z][0-9][0-9][0-9][0-9][0-9]
 
-# Boot EFI build artifacts
-src/boot-efi/*.o
-src/boot-efi/loader.so
-src/boot-efi/BOOTIA32.EFI
+# Boot loader build artifacts (src/boot/efi/; was src/boot-efi/ — the
+# per-dir .gitignore was folded in here per the single-gitignore rule)
+src/boot/efi/*.o
+src/boot/efi/*.so
+src/boot/efi/*.EFI
+src/boot/efi/*.fd
+src/boot/efi/*.img
+src/boot/efi/*.out
+src/boot/efi/SYSTEM
+src/boot/efi/.profile.stamp
+# PVH loader (src/boot/vmlinuz/)
+src/boot/vmlinuz/*.o
+src/boot/vmlinuz/vmlinux
 
 # Build products placed in PUBLIC/SDK/LIB
 # (we keep *.lib import libraries tracked but ignore DLL/EXE/EXP outputs)

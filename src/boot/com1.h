@@ -19,4 +19,8 @@ void com1_init(void);
  * if you need any. */
 void com1_puts(const char *s);
 
+/* Single-character write (busy-waits for THR empty). Used by the vmlinuz
+ * bxlog formatter; com1_puts is built on it. */
+void com1_putc(char c);
+
 #endif

@@ -29,14 +29,29 @@ fi
 mkdir -p "$HOST_OUT_DIR"
 
 #
-# Skip if the existing host binary is newer than every LuaJIT source
-# file — saves the ~5-second rebuild on no-op runs.
+# Skip if the existing host binary is newer than every *git-tracked*
+# LuaJIT source — saves the ~5-second rebuild on no-op runs.
+#
+# Only tracked sources count.  LuaJIT's build emits generated headers
+# (lj_bcdef.h, lj_ffdef.h, lj_libdef.h, lj_recdef.h, lj_folddef.h,
+# host/buildvm_arch.h, luajit.h) straight into src/, and cr/Makefile's
+# cross-build regenerates them with fresh mtimes.  A plain `find` counts
+# those as a source change, so every guest (cross) build would retrigger
+# this host build — whose `make clean` then wipes the tree, forcing the
+# guest to rebuild, which regenerates the headers… a ping-pong.  The
+# generated files aren't tracked, so `git ls-files` filters them out for
+# free; a real edit to a tracked source (luaconf.h, lj_*.c, Makefile)
+# still bumps mtime and correctly retriggers.
 #
 if [ -x "$HOST_OUT" ]; then
-    newest_src="$(find "$LUAJIT_SRC/src" "$LUAJIT_SRC/Makefile" \
-                       \( -name '*.c' -o -name '*.h' -o -name 'Makefile*' \) \
-                       -newer "$HOST_OUT" -print -quit 2>/dev/null)"
-    if [ -z "$newest_src" ]; then
+    stale=
+    while IFS= read -r -d '' f; do
+        if [ "$LUAJIT_SRC/$f" -nt "$HOST_OUT" ]; then
+            stale=1
+            break
+        fi
+    done < <(git -C "$LUAJIT_SRC" ls-files -z -- '*.c' '*.h' '*Makefile*')
+    if [ -z "$stale" ]; then
         exit 0
     fi
 fi

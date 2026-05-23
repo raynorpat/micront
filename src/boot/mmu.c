@@ -1,11 +1,11 @@
 #include "mmu.h"
 #include "log.h"
-#include <efilib.h>
 
 /*
- * Pre-ExitBootServices we AllocatePages() via UEFI. Post-exit, UEFI is
- * gone; all allocation must be done by now. The registry lets other
- * modules (fs, loaderblock, memmap) find out what we grabbed and why.
+ * Physical pages are grabbed through be_alloc_pages (the boot entry's
+ * allocator — UEFI AllocatePages under EFI). All allocation must be done
+ * before the entry's point-of-no-return. The registry lets other modules
+ * (fs, loaderblock, memmap) find out what we grabbed and why.
  */
 
 #define MMU_REGISTRY_MAX 64
@@ -44,29 +44,24 @@ static const char *kind_name(PageKind k) {
 }
 
 static EFI_STATUS mmu_alloc_impl(UINTN pages, PageKind kind,
-                                 EFI_ALLOCATE_TYPE mode,
+                                 BeAllocMode mode,
                                  EFI_PHYSICAL_ADDRESS *out_phys,
                                  EFI_PHYSICAL_ADDRESS preferred) {
-    EFI_PHYSICAL_ADDRESS phys = preferred;
-    EFI_STATUS status;
-
     if (g_reg_n >= MMU_REGISTRY_MAX) {
         BXLOG(L"registry full");
         return EFI_OUT_OF_RESOURCES;
     }
 
-    status = uefi_call_wrapper(BS->AllocatePages, 4,
-                               mode, EfiLoaderData,
-                               pages, &phys);
-    if (EFI_ERROR(status)) {
-        BXLOG(L"AllocatePages(%u) for %a failed: 0x%lx",
-              (UINT32)pages, kind_name(kind), (UINT64)status);
-        return status;
+    EFI_PHYSICAL_ADDRESS phys = be_alloc_pages(mode, pages, preferred);
+    if (phys == 0) {
+        BXLOG(L"be_alloc_pages(%u) for %a failed", (UINT32)pages, kind_name(kind));
+        return EFI_OUT_OF_RESOURCES;
     }
 
-    g_reg[g_reg_n].phys  = phys;
-    g_reg[g_reg_n].pages = pages;
-    g_reg[g_reg_n].kind  = kind;
+    g_reg[g_reg_n].phys   = phys;
+    g_reg[g_reg_n].pages  = pages;
+    g_reg[g_reg_n].kind   = kind;
+    g_reg[g_reg_n].no_map = 0;
     g_reg_n++;
 
     /* No per-alloc log on success — callers that care (fs_read,
@@ -79,19 +74,19 @@ static EFI_STATUS mmu_alloc_impl(UINTN pages, PageKind kind,
 
 EFI_STATUS mmu_alloc(UINTN pages, PageKind kind,
                      EFI_PHYSICAL_ADDRESS *out_phys) {
-    return mmu_alloc_impl(pages, kind, AllocateAnyPages, out_phys, 0);
+    return mmu_alloc_impl(pages, kind, BE_ALLOC_ANY, out_phys, 0);
 }
 
 EFI_STATUS mmu_alloc_at(UINTN pages, PageKind kind,
                         EFI_PHYSICAL_ADDRESS preferred,
                         EFI_PHYSICAL_ADDRESS *out_phys) {
-    return mmu_alloc_impl(pages, kind, AllocateAddress, out_phys, preferred);
+    return mmu_alloc_impl(pages, kind, BE_ALLOC_AT, out_phys, preferred);
 }
 
 EFI_STATUS mmu_alloc_below(UINTN pages, PageKind kind,
                            EFI_PHYSICAL_ADDRESS max_addr,
                            EFI_PHYSICAL_ADDRESS *out_phys) {
-    return mmu_alloc_impl(pages, kind, AllocateMaxAddress, out_phys, max_addr);
+    return mmu_alloc_impl(pages, kind, BE_ALLOC_MAX, out_phys, max_addr);
 }
 
 EFI_STATUS mmu_register_image(EFI_PHYSICAL_ADDRESS phys, UINTN pages) {
@@ -106,6 +101,22 @@ EFI_STATUS mmu_register_image(EFI_PHYSICAL_ADDRESS phys, UINTN pages) {
 
     BXLOG(L"register image %u pages at 0x%lx (identity only, not in KSEG0)",
           (UINT32)pages, (UINT64)phys);
+    return EFI_SUCCESS;
+}
+
+EFI_STATUS mmu_reserve(EFI_PHYSICAL_ADDRESS phys, UINTN pages, PageKind kind) {
+    if (g_reg_n >= MMU_REGISTRY_MAX) {
+        BXLOG(L"registry full");
+        return EFI_OUT_OF_RESOURCES;
+    }
+    g_reg[g_reg_n].phys   = phys;
+    g_reg[g_reg_n].pages  = pages;
+    g_reg[g_reg_n].kind   = kind;
+    g_reg[g_reg_n].no_map = 1;            /* memmap overlay only */
+    g_reg_n++;
+
+    BXLOG(L"reserve %u pages at 0x%lx (%a, memmap-only)",
+          (UINT32)pages, (UINT64)phys, kind_name(kind));
     return EFI_SUCCESS;
 }
 
@@ -215,6 +226,7 @@ static UINTN count_pt_slots(UINT8 id_slot[512], UINT8 ks_slot[512]) {
     for (UINTN i = 0; i < 512; i++) { id_slot[i] = 0; ks_slot[i] = 0; }
 
     for (UINTN r = 0; r < g_reg_n; r++) {
+        if (g_reg[r].no_map) continue;    /* reserved-only: not mapped */
         UINT64 lo = g_reg[r].phys;
         UINT64 hi = lo + ((UINT64)g_reg[r].pages << 12) - 1;
         UINTN  start = (UINTN)(lo >> 22);
@@ -388,6 +400,7 @@ static void build_page_tables(void) {
     } while (0)
 
     for (UINTN r = 0; r < g_reg_n; r++) {
+        if (g_reg[r].no_map) continue;    /* reserved-only: not mapped */
         POPULATE_IDENTITY(&g_reg[r]);
         /* KSEG0 mirror: mmu_alloc entries only */
         UINT32 base = (UINT32)g_reg[r].phys;

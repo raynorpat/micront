@@ -99,7 +99,23 @@ function M.main(opts)
     -- unaffected.  --no-syms opts out for retail-only iteration.
     local debug_symbols = true
     local positional = {}
-    for _, a in ipairs(args) do
+    -- Image options for the disk / ramdisk targets.  These are the only
+    -- flags the component backend doesn't act on itself: it parses them
+    -- once, here, into a table the disk/ramdisk recipes hand straight to
+    -- ntosbe.build_image (a plain library call — no second CLI).
+    -- IMAGE_FLAGS lists the flags that take a value, so the `--key value`
+    -- (space) form knows to consume the next token; `--key=value` works
+    -- too.  Keys normalise dash→underscore to match build_image's opts.
+    local image_opts = {}
+    local IMAGE_FLAGS = {
+        ["profile"] = true, ["layout"] = true, ["output-dir"] = true,
+        ["efi-binary"] = true, ["src-root"] = true, ["size-mb"] = true,
+        ["init-args"] = true, ["init-exe"] = true, ["init-stdio"] = true,
+    }
+    local i = 1
+    while i <= #args do
+        local a = args[i]
+        local eqkey, eqval = a:match("^%-%-([^=]+)=(.*)$")
         if a == "--wibo-trace" then
             if not platform.on_host then
                 platform.log("--wibo-trace is host-only (wibo runs on Linux);"
@@ -112,6 +128,14 @@ function M.main(opts)
             debug_symbols = true   -- explicit no-op (default is on)
         elseif a == "--no-syms" then
             debug_symbols = false
+        elseif eqkey and IMAGE_FLAGS[eqkey] then
+            -- --key=value form.
+            image_opts[(eqkey:gsub("%-", "_"))] = eqval
+        elseif a:sub(1, 2) == "--" and IMAGE_FLAGS[a:sub(3)] then
+            -- --key value form: the value is the next token.
+            local key = (a:sub(3):gsub("%-", "_"))
+            i = i + 1
+            image_opts[key] = args[i]
         elseif a:sub(1, 2) == "--" then
             platform.log("Unknown flag: " .. a)
             -- usage() not yet defined this early; fall through.
@@ -119,6 +143,7 @@ function M.main(opts)
         else
             positional[#positional + 1] = a
         end
+        i = i + 1
     end
 
     -- ----------------------------------------------------------------
@@ -163,7 +188,7 @@ function M.main(opts)
     local ensure_cmdmsg   = codegen.ensure_cmdmsg
 
     -- ----------------------------------------------------------------
-    -- Host-only helper: spawn `make -C <dir>` for the cr + boot-efi
+    -- Host-only helper: spawn `make -C <dir>` for the cr + boot/efi
     -- peer trees.  Errors out cleanly on guest (those don't build there).
     -- ----------------------------------------------------------------
 
@@ -471,6 +496,8 @@ function M.main(opts)
                  "NVME2K - NVMe storage controller (SCSI miniport)")
     nmake_target("dd_vioblk",   NTOS .. "/DD/VIOBLK",
                  "VIOBLK - virtio-blk storage (SCSI miniport via virtio.lib)")
+    nmake_target("dd_ramscsi",  NTOS .. "/DD/RAMSCSI",
+                 "RAMSCSI - RAM-disk SCSI miniport (PVH initrd as boot volume)")
 
     -- ----- NDIS framework -----
     nmake_target("ndis_wrapper", NTOS .. "/NDIS/WRAPPER",
@@ -921,10 +948,15 @@ function M.main(opts)
         return 0
     end
 
-    -- ----- EFI / cr / disk — host-side helpers ----------------------------
+    -- ----- EFI / cr / vmlinux / disk / ramdisk — host-side helpers --------
     targets.efi = function()
         banner("UEFI bootloader (BOOTX64.EFI)")
-        return run_make(SCRIPT_DIR .. "/boot-efi", "BOOTX64.EFI")
+        return run_make(SCRIPT_DIR .. "/boot/efi", "BOOTX64.EFI")
+    end
+
+    targets.vmlinux = function()
+        banner("PVH loader (vmlinux)")
+        return run_make(SCRIPT_DIR .. "/boot/vmlinuz", nil)
     end
 
     targets.cr = function()
@@ -932,36 +964,62 @@ function M.main(opts)
         return run_make(SCRIPT_DIR .. "/cr", nil)
     end
 
-    -- Disk target: hive + ESP image, both built via pkg/ntosbe (Lua port
-    -- of the historical tools/mkhive.py + tools/mkdisk.py pair).  Zero
-    -- Python dependency on this path; everything in-tree.
+    -- Disk + ramdisk targets: hive + boot image, built via pkg/ntosbe
+    -- (Lua port of the historical tools/mkhive.py + tools/mkdisk.py pair).
+    -- Zero Python dependency; everything in-tree.
     --
-    -- Layout is fixed to 'split-fat' here (ESP FAT16 + system FAT16 —
-    -- the canonical shape).  Operators wanting a different layout
-    -- (single / split-ntfs) go through the Makefile route, which
-    -- threads `--layout=` through ntosbe.main:
-    --     make -C src disk LAYOUT=split-ntfs
-    targets.disk = function()
-        local out_dir = REPO_ROOT .. "/build/disk"
-        local efi_bin = SCRIPT_DIR .. "/boot-efi/BOOTX64.EFI"
-        local layout  = "split-fat"
-        banner("boot disk image (layout=" .. layout .. ")")
+    -- These are ordinary targets whose recipe is a library call to
+    -- ntosbe.build_image{...} (not a second CLI): host paths plus the
+    -- parsed --profile / --layout / --size-mb / --init-* image options.
+    -- build_image owns the value defaults (profile 'default', layout
+    -- 'split-fat', size), so there's one parser and one defaults owner.
+    -- Override per build:
+    --   build.sh disk --layout=split-ntfs --profile=selftest
+    --
+    -- image_opts_for builds the build_image opts table from the parsed
+    -- image_opts plus this target's host-side defaults; an explicit flag
+    -- overrides a default.  `forced` pins fields the target won't let the
+    -- caller change (ramdisk's layout).
+    local function image_opts_for(defaults, forced)
+        local o = {
+            profile    = image_opts.profile,
+            src_root   = image_opts.src_root   or SCRIPT_DIR,
+            output_dir = image_opts.output_dir or defaults.output_dir,
+            efi_binary = image_opts.efi_binary or defaults.efi_binary,
+            size_mb    = tonumber(image_opts.size_mb),
+            layout     = image_opts.layout,
+            init = {
+                exe   = image_opts.init_exe,
+                args  = image_opts.init_args,
+                stdio = image_opts.init_stdio,
+            },
+        }
+        for k, v in pairs(forced or {}) do o[k] = v end
+        return o
+    end
 
+    targets.disk = function()
+        local efi_bin = SCRIPT_DIR .. "/boot/efi/BOOTX64.EFI"
+        banner("boot disk image")
         if not file_exists(efi_bin) then
             if targets.efi() ~= 0 then return 1 end
         end
-
-        mkdir_p(out_dir)
-        -- The `default` profile = the lean interactive disk booting
-        -- main.lua — the same shape `make boot` produces.  (For the
-        -- full self-host disk, build the `selfhost` profile instead.)
-        return ntosbe.build_image {
-            profile    = "default",
+        return ntosbe.build_image(image_opts_for{
+            output_dir = REPO_ROOT .. "/build/disk",
             efi_binary = efi_bin,
-            output_dir = out_dir,
-            src_root   = SCRIPT_DIR,
-            layout     = layout,
-        }
+        })
+    end
+
+    -- Ramdisk: the firmware-less PVH initrd (MBR + single FAT16, type 0x06,
+    -- no EFI binary), loaded via -kernel/-initrd.  Layout is pinned to
+    -- 'ramdisk' so a --layout flag can't change the shape.  vmlinux isn't
+    -- an input to the initrd (QEMU loads it via -kernel), so this target
+    -- only composes; the Makefile pairs it with the vmlinux build.
+    targets.ramdisk = function()
+        banner("PVH ramdisk image (layout=ramdisk)")
+        return ntosbe.build_image(image_opts_for(
+            { output_dir = REPO_ROOT .. "/build/disk-ramdisk" },
+            { layout = "ramdisk" }))
     end
 
     -- ------------------------------------------------------------------
@@ -993,6 +1051,7 @@ function M.main(opts)
         "ndis_wrapper",
         "virtio",
         "dd_class", "dd_scsiport", "dd_scsidisk", "dd_nvme2k", "dd_vioblk",
+        "dd_ramscsi",
         "tdi_wrapper", "tdi_tcpip_ip", "tdi_tcpip_tcp", "afd",
     }
 
@@ -1021,18 +1080,21 @@ function M.main(opts)
     targets.userland = function() return build_group("userland", USERLAND_TARGETS) end
 
     -- `all` is the host build-everything target: every artifact —
-    -- tools, kernel, drivers, userland, the cr runtime and the UEFI
-    -- loader — but NOT a disk image.  Disk composition is a separate,
-    -- profile-specific step (`build.sh disk`, `make disk` / smoke-disk
-    -- / selftest / selfhost); baking one here would stage the whole NT
-    -- source tree (the selfhost profile) on every plain `build.sh`.
+    -- tools, kernel, drivers, userland, the cr runtime and both boot
+    -- loaders (UEFI BOOTX64.EFI + PVH vmlinux) — but NOT a disk image.
+    -- Disk composition is a separate, profile-specific step (`build.sh
+    -- disk`, `make disk` / smoke-disk / smoke-ramdisk-disk / selftest /
+    -- selfhost); baking one here would stage the whole NT source tree
+    -- (the selfhost profile) on every plain `build.sh`.
     --
-    -- `all` is host-only — `cr` (mingw) and `efi` (gcc/gnu-efi) go
-    -- through run_make, which fails when not on_host.  The self-hosted
-    -- build never runs `all`; test.ntosbe enumerates the four portable
-    -- groups (tools/ntoskrnl/drivers/userland) explicitly.
+    -- `all` is host-only — `cr` (mingw), `efi` (gcc/gnu-efi) and
+    -- `vmlinux` (gcc -m32) go through run_make, which fails when not
+    -- on_host.  The self-hosted build never runs `all`; test.ntosbe
+    -- enumerates the four portable groups (tools/ntoskrnl/drivers/
+    -- userland) explicitly.
     targets.all = function()
-        for _, g in ipairs({ "tools", "ntoskrnl", "drivers", "userland", "cr", "efi" }) do
+        for _, g in ipairs({ "tools", "ntoskrnl", "drivers", "userland",
+                             "cr", "efi", "vmlinux" }) do
             local rc = targets[g]()
             if rc ~= 0 then return rc end
         end
@@ -1139,20 +1201,23 @@ function M.main(opts)
             }
         end
         if name == "efi" then
-            log("Cleaning boot-efi/ ...")
+            log("Cleaning boot/efi/ ...")
             return platform.spawn_wait{
-                argv = { "make", "-C", SCRIPT_DIR .. "/boot-efi", "clean" },
+                argv = { "make", "-C", SCRIPT_DIR .. "/boot/efi", "clean" },
                 search_path = true,
             }
         end
         if name == "disk" then
             log("Cleaning build/disk* ...")
             -- The default dir plus the per-profile dirs the Makefile
-            -- composes into (build/disk-selftest, -selfhost, -smoke).
+            -- composes into (build/disk-selftest, -selfhost, -smoke) and
+            -- the ramdisk/PVH image dirs (build/disk-ramdisk[-smoke]).
             rmrf(REPO_ROOT .. "/build/disk")
             rmrf(REPO_ROOT .. "/build/disk-selftest")
             rmrf(REPO_ROOT .. "/build/disk-selfhost")
             rmrf(REPO_ROOT .. "/build/disk-smoke")
+            rmrf(REPO_ROOT .. "/build/disk-ramdisk")
+            rmrf(REPO_ROOT .. "/build/disk-smoke-ramdisk")
             return 0
         end
 
@@ -1279,7 +1344,7 @@ function M.main(opts)
             rmrf(REPO_ROOT .. "/build/" .. profile)
         end
 
-        -- Delegate to peer Makefiles for the cr + boot-efi trees.
+        -- Delegate to peer Makefiles for the cr + boot/efi trees.
         clean_one("cr")
         clean_one("efi")
 
@@ -1317,7 +1382,7 @@ function M.main(opts)
             and "[--wibo-trace] [--no-syms]" or "[--no-syms]"
         platform.log("Usage: build.sh " .. flag_summary .. " [<target> ...]")
         platform.log("")
-        platform.log("No arguments → builds 'all' (every group + cr + boot-efi; no disk image).")
+        platform.log("No arguments → builds 'all' (every group + cr + boot/efi; no disk image).")
         platform.log("")
         platform.log("Flags:")
         if platform.on_host then
@@ -1328,8 +1393,13 @@ function M.main(opts)
         platform.log("                (default: build with debug symbols — final binaries")
         platform.log("                 differ only by a 28-byte IMAGE_DEBUG_DIRECTORY entry)")
         platform.log("")
+        platform.log("Image flags (disk / ramdisk targets; passed to build_image):")
+        platform.log("  --profile=N   layer set to compose (default: profile default)")
+        platform.log("  --layout=N    single | split-fat | split-ntfs | ramdisk")
+        platform.log("  --output-dir=D / --size-mb=N / --init-args=… / --init-exe=…")
+        platform.log("")
         platform.log("Top-level targets:")
-        platform.log("  all, tools, ntoskrnl, drivers, userland, cr, efi, disk")
+        platform.log("  all, tools, ntoskrnl, drivers, userland, cr, efi, vmlinux, disk, ramdisk")
         platform.log("  rebuild            — alias for `clean all` (full nuke + full build)")
         platform.log("")
         platform.log("Individual components (build order within each group):")
@@ -1344,7 +1414,7 @@ function M.main(opts)
         platform.log("  clean:<component>  — drop just that component's obj/ tree")
         platform.log("  clean:<group>      — recurse over the group's members")
         platform.log("  clean:cr           — delegates to make -C cr clean")
-        platform.log("  clean:efi          — delegates to make -C boot-efi clean")
+        platform.log("  clean:efi          — delegates to make -C boot/efi clean")
         platform.log("  clean:disk         — drops build/disk* (all profile dirs)")
     end
 

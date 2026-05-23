@@ -17,7 +17,7 @@
 #ifndef _BOOT_EFI_ARENA_H_
 #define _BOOT_EFI_ARENA_H_
 
-#include <efi.h>
+#include "bootenv.h"
 
 /* Reserve `pages` physical pages via mmu_alloc_below(< 16 MiB, PK_MEMORY_DATA)
  * and prepare them as the arena. Returns the underlying mmu_alloc status. */

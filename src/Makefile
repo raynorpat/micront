@@ -34,20 +34,19 @@
 #
 # What this Makefile does NOT build
 #   - NT toolchain / kernel / drivers / userland — that's `src/build.sh`.
-#   - boot-efi (BOOTX64.EFI) — that's `make -C src/boot-efi`.
+#   - the EFI loader (BOOTX64.EFI) — that's `make -C src/boot/efi`.
 #   - cr binaries (run.exe + lua.dll) — auto-built via `make -C cr`,
 #     since the disk image stages them.
 #
-# Run `src/build.sh && make -C src/boot-efi && make -C src boot` for a
+# Run `src/build.sh && make -C src/boot/efi && make -C src boot` for a
 # cold-cache "build everything and boot" cycle.
 
 REPO        := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 SRC         := $(REPO)/src
-BOOT_EFI    := $(SRC)/boot-efi
+BOOT_EFI    := $(SRC)/boot/efi
 BUILD       := $(REPO)/build/disk
-HOST_LUAJIT := $(REPO)/build/host-tools/luajit
 
-.PHONY: cr disk boot selftest selfhost smoketest smoke-disk iprepro gdb qcov coverage coverage-html
+.PHONY: cr disk boot selftest selfhost smoketest smoke-disk iprepro gdb qcov coverage coverage-html vmlinux ramdisk boot-ramdisk smoke-ramdisk smoke-ramdisk-disk
 
 # ---------------- cr binaries (run.exe + lua.dll) -------------------
 #
@@ -81,9 +80,7 @@ LAYOUT_FLAG += --layout=$(LAYOUT)
 endif
 
 disk: cr
-	mkdir -p $(BUILD)
-	$(SRC)/bootstrap.sh
-	$(HOST_LUAJIT) -e 'package.path="$(SRC)/pkg/?.lua;$(SRC)/pkg/?/init.lua;"..package.path; os.exit(require("ntosbe").main(arg))' -- ntosbe --src-root=$(SRC) --output-dir=$(BUILD) --efi-binary=$(BOOT_EFI)/BOOTX64.EFI $(PROFILE_FLAG) $(INIT_ARGS_FLAG) $(LAYOUT_FLAG)
+	$(SRC)/build.sh disk --output-dir=$(BUILD) $(PROFILE_FLAG) $(INIT_ARGS_FLAG) $(LAYOUT_FLAG)
 
 # ---------------- boot / run targets --------------------------------
 #
@@ -197,6 +194,47 @@ smoketest: PROFILE_FLAG := --profile smoke
 smoketest: INIT_ARGS_FLAG :=
 smoketest: BUILD := $(REPO)/build/disk-smoke
 smoketest: boot
+
+# ---------------- PVH ramdisk (vmlinuz + initrd) --------------------
+#
+# The firmware-less boot path: the 32-bit PVH loader (boot/vmlinuz),
+# booted via QEMU -kernel with an MBR/FAT16 ramdisk via -initrd. Mirrors
+# the disk/boot pair but for the ramdisk layout, and routes through
+# boot.sh's PVH mode so it runs across pc / q35 / microvm:
+#
+#   make boot-ramdisk                    # q35 (default)
+#   make boot-ramdisk MACHINE=pc
+#   make boot-ramdisk MACHINE=microvm    # the no-firmware shape
+#   make smoke-ramdisk MACHINE=microvm   # smoke profile (CI matrix)
+BOOT_VMLINUZ  := $(SRC)/boot/vmlinuz
+VMLINUX       := $(BOOT_VMLINUZ)/vmlinux
+RAMDISK_BUILD := $(REPO)/build/disk-ramdisk
+
+vmlinux:
+	$(SRC)/build.sh vmlinux
+
+# Bake the ramdisk image (MBR + single FAT16, no EFI binary) from current
+# artifacts via the ntosbe 'ramdisk' layout; also builds the PVH loader so
+# boot-ramdisk has both halves.
+ramdisk: cr vmlinux
+	$(SRC)/build.sh ramdisk --output-dir=$(RAMDISK_BUILD) $(PROFILE_FLAG) $(INIT_ARGS_FLAG)
+
+boot-ramdisk: ramdisk
+	$(SRC)/boot.sh --ramdisk $(RAMDISK_BUILD)/initrd.img --vmlinux $(VMLINUX) $(BOOT_FLAGS) $(BOOT_REDIRECT)
+
+# Smoke profile over the ramdisk path — the CI matrix entry per machine.
+smoke-ramdisk: PROFILE_FLAG := --profile smoke
+smoke-ramdisk: INIT_ARGS_FLAG :=
+smoke-ramdisk: RAMDISK_BUILD := $(REPO)/build/disk-smoke-ramdisk
+smoke-ramdisk: boot-ramdisk
+
+# Build-only smoke ramdisk image (smoke profile, no boot), parallel to
+# smoke-disk.  The CI PVH smoke matrix bakes this once into
+# build/disk-smoke-ramdisk/initrd.img, then boots it across machines.
+smoke-ramdisk-disk: PROFILE_FLAG := --profile smoke
+smoke-ramdisk-disk: INIT_ARGS_FLAG :=
+smoke-ramdisk-disk: RAMDISK_BUILD := $(REPO)/build/disk-smoke-ramdisk
+smoke-ramdisk-disk: ramdisk
 
 # ---------------- gdb DWARF + interactive session -------------------
 #

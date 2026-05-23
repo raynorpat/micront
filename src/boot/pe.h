@@ -22,7 +22,7 @@
 #ifndef _BOOT_EFI_PE_H_
 #define _BOOT_EFI_PE_H_
 
-#include <efi.h>
+#include "bootenv.h"
 #include "mmu.h"
 
 typedef struct {
@@ -39,5 +39,15 @@ EFI_STATUS pe_stage(const void *blob, UINTN blob_size,
 
 EFI_STATUS pe_resolve_imports(pe_image_t *img,
                               const pe_image_t *modules, UINTN n_modules);
+
+/*
+ * Locate a section by name (<= 8 chars, NUL-padded) in an already-staged
+ * image.  On success *out_phys = the section's physical base (phys_mapped +
+ * VirtualAddress, directly writable while paging is off) and *out_size =
+ * VirtualSize.  Lets the loader fill a boot driver's own data section
+ * (e.g. ramscsi's RAMDCFG) with runtime values before handoff.
+ */
+EFI_STATUS pe_find_section(const pe_image_t *img, const char *name,
+                           EFI_PHYSICAL_ADDRESS *out_phys, UINT32 *out_size);
 
 #endif

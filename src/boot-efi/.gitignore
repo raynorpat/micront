@@ -1,9 +1,0 @@
-*.EFI
-*.o
-*.so
-*.img
-*.fd
-*.log
-SYSTEM
-.profile.stamp
-*.out

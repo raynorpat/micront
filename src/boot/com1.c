@@ -21,7 +21,7 @@ void com1_init(void) {
     outb(COM1 + 4, 0x0B);   /* DTR+RTS+OUT2 */
 }
 
-static void com1_putc(char c) {
+void com1_putc(char c) {
     while ((inb(COM1 + 5) & 0x20) == 0) { }
     outb(COM1, (unsigned char)c);
 }

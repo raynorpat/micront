@@ -22,7 +22,7 @@
 #ifndef _BOOT_EFI_HWTREE_H_
 #define _BOOT_EFI_HWTREE_H_
 
-#include <efi.h>
+#include "bootenv.h"
 
 typedef struct {
     UINT64 total_blocks;   /* boot disk total sector count (UEFI BlockIo) */

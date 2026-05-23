@@ -26,12 +26,14 @@
 #include "com1.h"
 #include "log.h"
 #include "fs.h"
-#include "memmap.h"
+#include "memmap_efi.h"
 #include "mmu.h"
 #include "arena.h"
 #include "hwtree.h"
 #include "lpb.h"
+#include "cmdline.h"
 #include "pe.h"
+#include "bootdrv.h"
 
 extern void handoff(unsigned long entry_kseg0,
                     unsigned long loader_block_kseg0,
@@ -40,122 +42,77 @@ extern void handoff(unsigned long entry_kseg0,
                     unsigned long gdt_phys,
                     unsigned long idt_phys);
 
-/* Upper bound on boot drivers staged from \Boot\.  The real set is
- * ~7 (scsiport, atdisk, nvme2k, vioblk, scsidisk, fastfat, ntfs);
- * 32 leaves generous headroom for future storage/FS layers. */
-#define MAX_BOOT_DRIVERS 32
+/* Boot-driver staging (the \Boot\<NN>\ bucket walk) is shared core now:
+ * stage_boot_drivers() in boot/bootdrv.c, over the link-time bfs_* file
+ * contract (bootdrv.h).  The EFI binding of bfs_* lives in bootfs_efi.c.
+ * MAX_BOOT_DRIVERS comes from bootdrv.h. */
 
-/* Lexical compare of two CHAR16 strings over the ASCII range. */
-static int u16cmp(const CHAR16 *a, const CHAR16 *b) {
-    while (*a && *a == *b) { a++; b++; }
-    return (int)*a - (int)*b;
-}
+/* Read the per-launch command line from EFI_LOADED_IMAGE_PROTOCOL.LoadOptions
+ * (firmware-supplied UTF-16). Convert to ASCII into `out`, trim, and drop a
+ * leading argv[0] path token. Returns strlen(out) (0 if absent/empty). This
+ * is the EFI entry's source for the shared core's cmdline() resolver. */
+static unsigned efi_read_load_options(EFI_HANDLE image, char *out, unsigned cap) {
+    static const EFI_GUID lip_guid = LOADED_IMAGE_PROTOCOL;
+    if (cap == 0) return 0;
+    out[0] = 0;
 
-/* Insertion sort fs_dirent[] by name — small N, ascending lexical. */
-static void sort_dirents(fs_dirent *e, UINTN n) {
-    for (UINTN i = 1; i < n; i++) {
-        fs_dirent tmp = e[i];
-        UINTN j = i;
-        while (j > 0 && u16cmp(e[j - 1].name, tmp.name) > 0) {
-            e[j] = e[j - 1];
-            j--;
+    EFI_LOADED_IMAGE_PROTOCOL *lip = 0;
+    EFI_STATUS s = uefi_call_wrapper(BS->HandleProtocol, 3,
+                                     image, (EFI_GUID *)&lip_guid, (void **)&lip);
+    if (EFI_ERROR(s) || !lip) return 0;
+
+    const CHAR16 *src = (const CHAR16 *)lip->LoadOptions;
+    UINTN bytes = lip->LoadOptionsSize;
+    if (!src || bytes < sizeof(CHAR16)) return 0;
+    UINTN nchars = bytes / sizeof(CHAR16);
+
+    /* UTF-16LE -> ASCII. Stop at first embedded NUL; drop non-printable. */
+    unsigned n = 0;
+    for (UINTN i = 0; i < nchars && n < cap - 1; i++) {
+        CHAR16 c = src[i];
+        if (c == 0) break;
+        if (c >= 0x20 && c <= 0x7E) out[n++] = (char)c;
+    }
+    out[n] = 0;
+
+    /* Trim leading whitespace. */
+    unsigned start = 0;
+    while (out[start] == ' ' || out[start] == '\t') start++;
+
+    /* argv[0] strip (guarded): UEFI Shell / Boot#### launches prefix the
+     * image path (e.g. "FS0:\EFI\BOOT\BOOTX64.EFI /DEBUG"). Strip a leading
+     * token ONLY if it looks like a path — contains '\' or ':' or ends in
+     * ".EFI" — never an NT '/'-flag. QEMU's -append carries no argv[0]. */
+    {
+        unsigned tok_end = start;
+        while (out[tok_end] && out[tok_end] != ' ' && out[tok_end] != '\t')
+            tok_end++;
+        int looks_like_path = 0;
+        for (unsigned i = start; i < tok_end; i++)
+            if (out[i] == '\\' || out[i] == ':') { looks_like_path = 1; break; }
+        if (!looks_like_path && tok_end - start >= 4) {
+            const char *e = &out[tok_end - 4];
+            if (e[0] == '.' &&
+                (e[1] == 'E' || e[1] == 'e') &&
+                (e[2] == 'F' || e[2] == 'f') &&
+                (e[3] == 'I' || e[3] == 'i')) looks_like_path = 1;
         }
-        e[j] = tmp;
-    }
-}
-
-/*
- * Stage every boot driver found under \Boot\ on the ESP.
- *
- * \Boot\ holds 2-digit bucket subdirectories (\Boot\10, \Boot\20, …).
- * Lexical bucket order IS the load order: the kernel's
- * IopInitializeBootDrivers walks LoaderBlock->BootDriverListHead in the
- * order we wire it and does NOT re-sort by ServiceGroupOrder.  The
- * bucket convention (set by ntosbe's layer system) keeps the framework
- * ahead of its dependants:
- *   10  scsiport             (miniports import ScsiPortInitialize)
- *   20  atdisk/nvme2k/vioblk  (storage miniports, mutually independent)
- *   30  scsidisk             (class driver — walks the miniports' devices)
- *   90  fastfat/ntfs         (FS recognizers — no hardware at DriverEntry)
- * Within a bucket the drivers are independent, so lexical file order
- * there is immaterial.
- *
- * The bucket directory is invisible to the kernel: pe_stage records the
- * bare filename ("nvme2k.sys"), from which lpb.c rebuilds both the
- * image path and the Services\<name> registry path.
- *
- * Returns the count staged into out[0..N-1].
- */
-static UINTN stage_boot_drivers(pe_image_t *out, UINTN max) {
-    /* pe_stage stores the name pointer (it does not copy), so the name
-     * strings must outlive this function — keep a static pool. */
-    static char      namepool[MAX_BOOT_DRIVERS][32];
-    static fs_dirent buckets[24];
-    static fs_dirent files[MAX_BOOT_DRIVERS];
-    UINTN n_buckets = 0, staged = 0;
-
-    if (fs_listdir(L"\\Boot", buckets, 24, &n_buckets) != EFI_SUCCESS) {
-        BXLOG(L"\\Boot enumeration failed — no boot drivers staged");
-        return 0;
-    }
-    sort_dirents(buckets, n_buckets);
-
-    for (UINTN b = 0; b < n_buckets; b++) {
-        if (!buckets[b].is_dir) continue;
-
-        /* dirpath = "\Boot\<bucket>" */
-        CHAR16 dirpath[80];
-        UINTN  p = 0;
-        for (const CHAR16 *s = L"\\Boot\\"; *s; s++) dirpath[p++] = *s;
-        for (UINTN k = 0; buckets[b].name[k]; k++)
-            dirpath[p++] = buckets[b].name[k];
-        dirpath[p] = 0;
-
-        UINTN n_files = 0;
-        if (fs_listdir(dirpath, files, MAX_BOOT_DRIVERS, &n_files)
-            != EFI_SUCCESS)
-            continue;
-        sort_dirents(files, n_files);
-
-        for (UINTN f = 0; f < n_files; f++) {
-            if (files[f].is_dir) continue;
-            if (staged >= max) {
-                BXLOG(L"boot-driver count exceeds %lu — truncating",
-                      (UINT64)max);
-                return staged;
-            }
-
-            /* fpath = "\Boot\<bucket>\<file>" */
-            CHAR16 fpath[160];
-            UINTN  q = 0;
-            for (UINTN k = 0; dirpath[k]; k++) fpath[q++] = dirpath[k];
-            fpath[q++] = L'\\';
-            for (UINTN k = 0; files[f].name[k]; k++)
-                fpath[q++] = files[f].name[k];
-            fpath[q] = 0;
-
-            /* ASCII basename for pe_stage -> lpb (Services\<name>). */
-            char  *aname = namepool[staged];
-            UINTN  a = 0;
-            for (UINTN k = 0;
-                 files[f].name[k] && a < sizeof namepool[0] - 1; k++)
-                aname[a++] = (char)files[f].name[k];
-            aname[a] = 0;
-
-            void *blob; UINTN bsz;
-            if (fs_read(fpath, PK_FIRMWARE_TEMP, &blob, &bsz)
-                != EFI_SUCCESS)
-                continue;
-            if (pe_stage(blob, bsz, PK_BOOT_DRIVER, aname, &out[staged])
-                == EFI_SUCCESS) {
-                staged++;
-            } else {
-                BXLOG(L"%a: pe_stage failed", aname);
-            }
+        if (looks_like_path) {
+            start = tok_end;
+            while (out[start] == ' ' || out[start] == '\t') start++;
         }
     }
-    BXLOG(L"staged %lu boot driver(s) from \\Boot", (UINT64)staged);
-    return staged;
+
+    /* Left-shift the trimmed string to the front (w <= start, no overlap). */
+    unsigned w = 0;
+    while (out[start]) out[w++] = out[start++];
+    out[w] = 0;
+
+    /* Trim trailing whitespace. */
+    while (w > 0 && (out[w - 1] == ' ' || out[w - 1] == '\t')) w--;
+    out[w] = 0;
+
+    return w;
 }
 
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
@@ -380,6 +337,17 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
             .block_size   = block_size,
         };
         lpb_set_configuration_root(hwtree_build(&hw));
+    }
+
+    /* Resolve the kernel command line (EFI LoadOptions, else fw_cfg) and
+     * latch it before the LPB is built. ImageHandle is in scope and boot
+     * services are still live, as the LoadOptions read requires. */
+    {
+        char loadopts[256];
+        efi_read_load_options(ImageHandle, loadopts, sizeof loadopts);
+        char opts[256];
+        cmdline(loadopts, opts, sizeof opts);
+        lpb_set_load_options(opts);
     }
 
     /* LOADER_PARAMETER_BLOCK + its referenced lists + strings. */

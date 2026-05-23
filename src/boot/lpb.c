@@ -1,6 +1,5 @@
 #include "lpb.h"
 #include "arena.h"
-#include "fwcfg.h"
 #include "log.h"
 #include "mmu.h"
 #include "memmap.h"
@@ -111,6 +110,19 @@ void lpb_set_configuration_root(UINT32 root_kseg0) {
     g_config_root = root_kseg0;
 }
 
+/* Resolved kernel command line (`cmdline` output, latched by main.c
+ * before lpb_build). Defaults to empty — kernel parsers tolerate that the
+ * same as a missing flag. */
+static char g_load_options[256];
+
+void lpb_set_load_options(const char *opts) {
+    unsigned i = 0;
+    if (opts)
+        for (; opts[i] && i < sizeof(g_load_options) - 1; i++)
+            g_load_options[i] = opts[i];
+    g_load_options[i] = 0;
+}
+
 unsigned long lpb_handoff_ptr(void) {
     return g_lpb_phys ? (unsigned long)kseg0_of(g_lpb_phys) : 0;
 }
@@ -212,19 +224,12 @@ EFI_STATUS lpb_build(void) {
     lpb->NtBootPathName    = kseg0_of(arena_dup_ascii("\\"));
     lpb->NtHalPathName     = kseg0_of(arena_dup_ascii("\\"));
 
-    /* LoadOptions: read from the qemu fw_cfg file `opt/micront/loadopts`
-     * if present (boot.sh --kernel-opts populates it).  Empty string
-     * otherwise — kernel parsers tolerate it the same as a missing
-     * flag.  256 bytes is roughly twice the longest plausible flag
-     * combo (NT 4 max LoadOptions in boot.ini was 128). */
+    /* LoadOptions: the command line resolved by `cmdline` and latched
+     * via lpb_set_load_options (EFI LoadOptions, else fw_cfg). Empty string
+     * if never set — kernel parsers tolerate it the same as a missing flag. */
     {
-        char *opts = arena_alloc(256, 1);
+        char *opts = arena_dup_ascii(g_load_options);
         if (!opts) return EFI_OUT_OF_RESOURCES;
-        opts[0] = 0;
-        unsigned n = fwcfg_read_string("opt/micront/loadopts", opts, 256);
-        if (n > 1) {
-            BXLOG(L"LoadOptions: '%a'", opts);
-        }
         lpb->LoadOptions = kseg0_of(opts);
     }
 
@@ -296,19 +301,19 @@ EFI_STATUS lpb_wire_modules(const pe_image_t *kernel,
 
     /* LoadOrderList: kernel first, then HAL, then drivers. */
     LDR_DATA_TABLE_ENTRY *k_ldr = make_ldr_entry(kernel,
-        "\\WINNT\\SYSTEM32\\ntoskrnl.exe");
+        "\\System32\\ntoskrnl.exe");
     list_tail_insert(&lpb->LoadOrderListHead, &k_ldr->InLoadOrderLinks);
 
     LDR_DATA_TABLE_ENTRY *h_ldr = make_ldr_entry(hal,
-        "\\WINNT\\SYSTEM32\\hal.dll");
+        "\\System32\\hal.dll");
     list_tail_insert(&lpb->LoadOrderListHead, &h_ldr->InLoadOrderLinks);
 
     for (UINTN i = 0; i < n_boot_drivers; i++) {
         const pe_image_t *d = &boot_drivers[i];
 
-        /* Build driver path "\WINNT\SYSTEM32\Drivers\<name>". */
+        /* Build driver path "\System32\Drivers\<name>". */
         char full[64]; UINTN fn = 0;
-        static const char prefix[] = "\\WINNT\\SYSTEM32\\Drivers\\";
+        static const char prefix[] = "\\System32\\Drivers\\";
         for (UINTN j = 0; prefix[j]; j++) full[fn++] = prefix[j];
         for (UINTN j = 0; d->name[j] && fn < sizeof full - 1; j++) full[fn++] = d->name[j];
         full[fn] = 0;

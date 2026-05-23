@@ -1,0 +1,38 @@
+!IF 0
+
+Copyright (c) 2026 MicroNT
+SPDX-License-Identifier: BSD-3-Clause   (see LICENSE in this directory)
+
+Module: ramscsi.sys -- RAM-disk SCSI miniport.  Presents the in-RAM
+MBR+FAT16 initrd (PVH boot) as a SCSI disk so scsidisk can surface it
+as the boot/system volume.  Ported from the Gary Nebbett NT4 RAM-SCSI
+sample; the disk's physical base+size come from the boot loader, which
+fills this driver's RAMDCFG data section while staging it (no FAT-BPB
+introspection, no hardcoded address).
+
+Builds as a SCSI miniport on top of NT 3.5's scsiport.sys, like vioblk
+/ nvme2k.  No hardware, no PCI, no interrupt -- every SRB completes
+synchronously in HwStartIo; physical RAM is mapped on demand via
+ScsiPortGetDeviceBase.
+
+!ENDIF
+
+MAJORCOMP=ntos
+MINORCOMP=dd
+
+TARGETNAME=ramscsi
+TARGETPATH=$(BASEDIR)\public\sdk\lib
+TARGETTYPE=MINIPORT
+
+INCLUDES=..\..\inc
+
+# scsiport for the SCSI miniport + ScsiPortGetDeviceBase API; ntoskrnl
+# for DbgPrint / Rtl{Zero,Copy}Memory.  MINIPORT TARGETTYPE doesn't
+# auto-include ntoskrnl (it assumes scsiport wraps everything), but we
+# call those ntoskrnl routines directly.
+TARGETLIBS=$(BASEDIR)\public\sdk\lib\*\scsiport.lib \
+           $(BASEDIR)\public\sdk\lib\*\ntoskrnl.lib \
+           $(BASEDIR)\public\sdk\lib\*\hal.lib
+
+SOURCES=ramscsi.c    \
+        ramscsi.rc

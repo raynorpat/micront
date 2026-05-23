@@ -90,18 +90,23 @@ jobs:
         # builds 'all', which includes:
         #   - tools/ntoskrnl/drivers/userland (wibo + MS toolchain)
         #   - cr (mingw cross-compile of run.exe + lua.dll)
-        #   - boot-efi (gcc + gnu-efi for BOOTX64.EFI)
+        #   - boot/efi (gcc + gnu-efi for BOOTX64.EFI — the UEFI loader)
+        #   - boot/vmlinuz (gcc -m32 for vmlinux — the PVH loader, booted
+        #     via QEMU -kernel for the firmware-less ramdisk path)
         # 'all' builds every artifact but composes NO disk image — the
         # smoke / selftest / selfhost steps below each bake their own
         # disk (their own ntosbe profile) and reuse every other artifact.
         run: src/build.sh
 
-      - name: smoke matrix across (machine, disk)
+      - name: smoke matrix UEFI (machine, disk)
         # Far cheaper than the full selftest (~10 s/combo vs ~4 min
         # for one): boot the system on each hardware shape, confirm
         # Lua reaches `print("SMOKE OK")`, power off.  Catches
         # boot-side regressions across the full matrix without
         # paying the in-OS rebuild cost on every shape.
+        #
+        # This is the UEFI path (OVMF + BOOTX64.EFI booting an ESP disk);
+        # the PVH path (vmlinuz + ramdisk) is the matrix immediately below.
         #
         # Runs BEFORE the full selftest so a boot-side regression
         # fails the workflow fast, before paying the ~4 min in-OS
@@ -137,6 +142,39 @@ jobs:
           done
           exit $fail
 
+      - name: smoke matrix PVH (machine)
+        # The firmware-less path: the PVH loader (boot/vmlinuz/vmlinux)
+        # booted via QEMU -kernel with an MBR/FAT16 ramdisk via -initrd,
+        # exercising ramscsi (the RAM-disk SCSI miniport) as the boot
+        # volume — the vmlinuz counterpart to the UEFI smoke matrix above.
+        #
+        # Bake the smoke ramdisk once (smoke.lua entry) then boot it across
+        # machines.  Unlike the UEFI matrix there's NO disk-backend axis:
+        # the boot volume is always the RAM disk (ramscsi), independent of
+        # chipset.  microvm is deferred — it currently hangs in user-mode
+        # FP-exception dispatch (a kernel/HAL issue orthogonal to the boot
+        # path); add it to `machines` once that's fixed.
+        run: |
+          make -C src smoke-ramdisk-disk
+          fail=0
+          machines="q35 pc"
+          for machine in $machines; do
+            log="smoke-pvh-$machine.log"
+            echo "=== smoke PVH: machine=$machine ==="
+            timeout 60 src/boot.sh \
+              --ramdisk build/disk-smoke-ramdisk/initrd.img \
+              --vmlinux src/boot/vmlinuz/vmlinux \
+              --machine "$machine" \
+              < /dev/null 2>&1 | tee "$log" || true
+            if grep -q '^SMOKE OK' "$log"; then
+              echo "  PASS: pvh+$machine"
+            else
+              echo "  FAIL: pvh+$machine (no SMOKE OK in log)"
+              fail=1
+            fi
+          done
+          exit $fail
+
       - name: run selftest under QEMU with coverage
         # Boot micront under OVMF/QEMU with the `selftest` ntosbe
         # profile — the lean disk: kernel + driver + fuzz suites, no NT
@@ -164,7 +202,6 @@ jobs:
         # /dev/null closes the input stream so the mux doesn't stall.
         timeout-minutes: 20
         run: |
-          make -C src coverage < /dev/null
           make -C src coverage-html
           grep -q '^ALL PASSED' build/cov/serial.log
 

@@ -10,7 +10,7 @@
 -- The `selfhost` profile boots this via `entry = "ntosbe.selfhost"`;
 -- the loose launcher (pkg/launch.lua) require()s it, which runs this
 -- chunk.  Shipped inside ntosbe.zip so the builder is fully
--- self-contained — its host CLI (ntosbe.main) and its guest entry
+-- self-contained — its driver (ntosbe.build) and its guest entry
 -- (this) travel together.
 --
 -- Not yet wired: building a full disk image in-guest (the `disk`

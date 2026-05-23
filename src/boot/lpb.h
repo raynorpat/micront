@@ -26,7 +26,7 @@
 #ifndef _BOOT_EFI_LPB_H_
 #define _BOOT_EFI_LPB_H_
 
-#include <efi.h>
+#include "bootenv.h"
 #include "pe.h"
 
 /* Arena sizing that covers the LPB, its strings, LDR + boot-driver
@@ -69,6 +69,12 @@ void lpb_set_boot_time(const EFI_TIME *t);
 /* Store the ConfigurationRoot KSEG0 VA. Call with the return value of
  * hwtree_build() before `lpb_build`. */
 void lpb_set_configuration_root(UINT32 root_kseg0);
+
+/* Optional. Latches the resolved kernel command line (cmdline output)
+ * that lpb_build stamps into LOADER_PARAMETER_BLOCK.LoadOptions.
+ * If never called, LoadOptions is the empty string. Copied internally
+ * (caller's buffer need not persist); truncated at 255 chars. */
+void lpb_set_load_options(const char *opts);
 
 /* Build the LPB itself. Caller must have called arena_init first.
  * Allocates the LPB, the ARC disk info block, the path strings, and the

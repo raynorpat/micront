@@ -21,6 +21,10 @@ make                        # builds BOOTX64.EFI
 
 **Never run qemu directly** — use `boot.sh`. It sets the OVMF pflash vars, muxes COM1 + COM2 to stdio, threads the `--gdb` / `--trace` flags through, and keeps the logs in sensible places. Running QEMU by hand will diverge from what CI + GDB expect.
 
+## Kernel command line
+
+`LOADER_PARAMETER_BLOCK.LoadOptions` is resolved by `cmdline` (`cmdline.c`) from the first non-empty source: EFI `LoadOptions` (firmware-supplied — QEMU `-kernel … -append`, a UEFI Shell invocation, or a `Boot####` entry's OptionalData), else the QEMU fw_cfg blob `opt/micront/loadopts` (`boot.sh --kernel-opts`). Removable-media auto-boot leaves EFI `LoadOptions` empty, so fw_cfg is the active channel for the static-disk profile.
+
 ## High-level flow
 
 `efi_main` (`main.c`) orchestrates:

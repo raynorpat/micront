@@ -18,7 +18,7 @@
 #ifndef _BOOT_EFI_NT_H_
 #define _BOOT_EFI_NT_H_
 
-#include <efi.h>
+#include "bootenv.h"
 
 #define UCHAR   UINT8
 #define USHORT  UINT16

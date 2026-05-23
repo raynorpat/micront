@@ -10,6 +10,11 @@
 #   .so --(objcopy PE sections)--------->  BOOTX64.EFI
 #
 # ESP / disk image assembly is handled by pkg/ntosbe (Lua), not here.
+#
+# Layout: the entry-agnostic boot core lives one level up in boot/*.c
+# (shared with future entry points, e.g. boot/vmlinuz/). This directory
+# holds only the EFI entry (main.c) and its firmware-specific adapters
+# (fs.c, handoff.S). Shared sources are pulled in via VPATH below.
 
 ARCH       := x86_64
 EFI_INC    := /usr/include/efi
@@ -29,8 +34,8 @@ CFLAGS := \
     -m64 -ffreestanding -fno-stack-protector -fno-stack-check \
     -fshort-wchar -mno-red-zone \
     -Wall -Wextra -Werror \
-    -I$(EFI_INC) -I$(EFI_INC)/$(ARCH) \
-    -DEFI_FUNCTION_WRAPPER \
+    -I.. -I$(EFI_INC) -I$(EFI_INC)/$(ARCH) \
+    -DEFI_FUNCTION_WRAPPER -DBOOTENV_EFI \
     -nostdinc \
     -isystem $(EFI_INC) -isystem $(EFI_INC)/$(ARCH) \
     -isystem $(shell $(CC) -m64 -print-file-name=include)
@@ -39,8 +44,17 @@ LDFLAGS := \
     -nostdlib -znocombreloc -T $(EFI_LDS) -shared \
     -Bsymbolic -L$(EFI_LIB) -m elf_x86_64
 
-OBJS := main.o com1.o fs.o memmap.o mmu.o pe.o \
-        arena.o uart.o hwtree.o lpb.o handoff.o fwcfg.o
+# Shared boot core (../*.c) found via VPATH; objects build into this dir.
+VPATH := ..
+
+# Entry-agnostic core, shared with other boot entries.
+COMMON_OBJS := com1.o uart.o fwcfg.o pe.o arena.o hwtree.o lpb.o \
+               memmap.o mmu.o cmdline.o bootdrv.o
+# EFI entry + firmware-specific adapters (local to boot/efi/).
+# bootfs_efi.o binds the bfs_* contract (bootdrv.h) to UEFI SimpleFileSystem.
+EFI_OBJS    := main.o fs.o handoff.o bootenv_efi.o memmap_efi.o bootfs_efi.o
+
+OBJS := $(EFI_OBJS) $(COMMON_OBJS)
 
 all: BOOTX64.EFI
 

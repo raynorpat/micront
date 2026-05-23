@@ -37,12 +37,13 @@ M.fs       = require('nt.fs')
 -- build_image — builds SYSTEM hive + ESP boot disk for a given profile.
 --
 -- opts (table):
---   profile      = profile name (default "selfhost")
+--   profile      = profile name (default "default")
 --   init         = { exe, args, stdio }  partial overrides ok
---   efi_binary   = absolute path to BOOTX64.EFI                (required)
+--   efi_binary   = absolute path to BOOTX64.EFI    (required, non-ramdisk)
 --   output_dir   = where SYSTEM + esp.img land                 (required)
 --   src_root     = absolute path to repo's src/ directory      (required)
---   size_mb      = ESP image size, default 64
+--   layout       = single | ramdisk | split-fat | split-ntfs (default split-fat)
+--   size_mb      = total image size MB, fixed layouts, default 2000
 --
 -- Writes <output_dir>/SYSTEM (the hive — kept on disk for inspection)
 -- and <output_dir>/esp.img (the boot image, with the same hive embedded
@@ -85,13 +86,34 @@ function M.build_image(opts)
     composed.apply(h)
     local hive_bytes = h:build(now)
 
+    -- ---- Layout selection (resolved before file routing so the
+    -- firmware-less 'ramdisk' layout can skip the EFI binary).
+    --   'single'     — one FAT16 partition (type 0xEF) hosts everything.
+    --   'ramdisk'    — one FAT16 partition (type 0x06), no EFI binary,
+    --                  size computed from content. This is the vmlinuz/PVH
+    --                  + ramscsi initrd image: an MBR + single FAT16.
+    --   'split-fat'  — partition 1: FAT16 ESP (0xEF, ~64 MB);
+    --                  partition 2: FAT16 system (0x06, rest). CANONICAL.
+    --   'split-ntfs' — like split-fat, but the system partition is NTFS.
+    -- Files route by `where` ('esp'/'root'/'both') only in the split
+    -- layouts; single/ramdisk place everything on the one volume.
+    local layout = opts.layout or 'split-fat'
+    if layout ~= 'single' and layout ~= 'ramdisk'
+       and layout ~= 'split-fat' and layout ~= 'split-ntfs' then
+        platform.die("Unknown layout '" .. tostring(layout)
+                     .. "' (want 'single'|'ramdisk'|'split-fat'|'split-ntfs')")
+    end
+
     -- ---- Resolve disk file list + check sources exist ----
     local files = composed.files
-    -- BOOTX64.EFI lives on the ESP for UEFI to find it.  Tag
-    -- where='esp' so the partitioning loop below routes it.
-    table.insert(files, 1,
-                 { dest = "EFI/BOOT/BOOTX64.EFI", where = 'esp',
-                   src = opts.efi_binary })
+    -- BOOTX64.EFI lives on the ESP for UEFI to find it (where='esp').
+    -- The ramdisk is firmware-less (loaded via -kernel/-initrd), so it
+    -- carries no EFI binary even when one is supplied.
+    if opts.efi_binary and layout ~= 'ramdisk' then
+        table.insert(files, 1,
+                     { dest = "EFI/BOOT/BOOTX64.EFI", where = 'esp',
+                       src = opts.efi_binary })
+    end
 
     -- A file entry sources its content either from a host file
     -- (f.src, copied in) or from in-memory bytes (f.bytes, written
@@ -118,54 +140,67 @@ function M.build_image(opts)
     -- both sides and reports any mismatch.
 
     -- ---- Build disk image ----
-    -- Layout selection:
-    --   'single'     — one FAT16 partition, type 0xEF, hosts everything.
-    --                  ESP and \SystemRoot share the same volume; the
-    --                  per-file `where` tag is ignored.
-    --   'split-fat'  — partition 1: FAT16 ESP (type 0xEF, ~64 MB);
-    --                  partition 2: FAT16 system (type 0x06, rest).
-    --                  CANONICAL — most common layout.  Files routed
-    --                  by `where`: 'esp' → ESP only, 'root' → system,
-    --                  'both' → both partitions.
-    --   'split-ntfs' — partition 1: FAT16 ESP (type 0xEF, ~64 MB);
-    --                  partition 2: NTFS system (type 0x07, rest).
-    --                  Same routing rules as split-fat; system volume
-    --                  is NTFS so ntfs.sys mounts it.
-    --
-    -- Default 512 MiB total — enough for OS + toolchain + the staged
-    -- NT source tree (~144 MB used today) with comfortable headroom.
-    local layout = opts.layout or 'split-fat'
-    if layout ~= 'single' and layout ~= 'split-fat'
-       and layout ~= 'split-ntfs' then
-        platform.die("Unknown layout '" .. tostring(layout)
-                     .. "' (want 'single' | 'split-fat' | 'split-ntfs')")
-    end
-    local total_mb = opts.size_mb or 512
+    -- Default 2000 MiB total for the fixed-size layouts; 'ramdisk'
+    -- computes its volume size from content (below).  Single owner of the
+    -- size default — callers pass size_mb only to override.
+    local total_mb = opts.size_mb or 2000
     local PRE_PARTITION_GAP_MB = 1
     local ESP_SIZE_MB          = 64
 
-    local esp_path = opts.output_dir .. "/esp.img"
+    local image_name = (layout == 'ramdisk') and "initrd.img" or "esp.img"
+    local esp_path   = opts.output_dir .. "/" .. image_name
     local d = fs.drive.new {
         table     = 'mbr',
         signature = 0x4E544653,
     }
 
-    if layout == 'single' then
+    if layout == 'single' or layout == 'ramdisk' then
+        -- Both put everything on one FAT16 volume (the `where` tag is
+        -- ignored). 'single' is a fixed-size bootable ESP-typed disk;
+        -- 'ramdisk' is a content-sized, 0x06-typed initrd image.
+        local vol_size_mb
+        if layout == 'ramdisk' then
+            -- Size from actual content — it's a RAM disk, so don't burn
+            -- RAM on slack. Sum file sizes rounded up to a conservative
+            -- cluster, plus FAT overhead and free headroom for NT's own
+            -- runtime writes (hive growth, temp, last-known-good).
+            local content = #hive_bytes
+            for _, f in ipairs(files) do
+                local sz = f.bytes and #f.bytes or (platform.file_size(f.src) or 0)
+                content = content + math.floor((sz + 4095) / 4096) * 4096
+            end
+            local overhead = 512 * 1024
+            local free_hdr = math.max(8 * 1024 * 1024, math.floor(content * 0.25))
+            vol_size_mb = math.max(8,
+                math.ceil((content + overhead + free_hdr) / (1024 * 1024)))
+        else
+            vol_size_mb = total_mb - PRE_PARTITION_GAP_MB
+        end
+
         local vol = fs.fat16.new {
-            size_mb      = total_mb - PRE_PARTITION_GAP_MB,
+            size_mb      = vol_size_mb,
             volume_label = "NT",
             now          = now,
         }
         for _, f in ipairs(files) do
-            local sz = platform.file_size(f.src) or 0
-            local basename = f.src:match("([^/]+)$") or f.src
+            local sz, basename
+            if f.bytes then
+                sz, basename = #f.bytes, "(generated)"
+            else
+                sz       = platform.file_size(f.src) or 0
+                basename = f.src:match("([^/]+)$") or f.src
+            end
             platform.log(string.format("  all  %-40s %8d  (%s)",
                                        f.dest, sz, basename))
-            vol:add_file(f.dest, f.src, platform)
+            if f.bytes then vol:add_bytes(f.dest, f.bytes)
+            else            vol:add_file(f.dest, f.src, platform) end
         end
         vol:mkdir("tmp")
         vol:add_bytes("System32/config/SYSTEM", hive_bytes)
-        d:add(vol, { active = true, type_code = 0xEF })
+        -- 'single' = ESP-typed (0xEF) bootable disk; 'ramdisk' = plain
+        -- FAT16 system partition (0x06) served by ramscsi.
+        local type_code = (layout == 'ramdisk') and 0x06 or 0xEF
+        d:add(vol, { active = true, type_code = type_code })
     else
         -- split-fat / split-ntfs: ESP + system, routed by `where`.
         local sys_size_mb = total_mb - PRE_PARTITION_GAP_MB - ESP_SIZE_MB
@@ -292,59 +327,9 @@ function M.build_image(opts)
     platform.log(string.format(
         "  MBR checksum for ARC_DISK_SIGNATURE.CheckSum: 0x%08X",
         stats.mbr_checksum))
-    platform.log("ESP image: " .. esp_path)
+    platform.log("Disk image: " .. esp_path)
 
     return 0
-end
-
--- ----------------------------------------------------------------
--- main — command-line entry.  Parses --flag=value / --flag value, then
--- dispatches to build_image.  Currently a single command (the disk
--- builder); subcommands (e.g. "ntosbe hive ..." for hive-only output)
--- can land later if a caller actually needs them.
--- ----------------------------------------------------------------
-
-local function parse_argv(argv)
-    local opts = {}
-    local i = 1
-    while i <= #argv do
-        local a = argv[i]
-        local key, value = a:match("^%-%-([^=]+)=(.*)$")
-        if not key and a:sub(1, 2) == "--" then
-            key   = a:sub(3)
-            value = argv[i + 1]
-            i = i + 1
-        end
-        if key then
-            -- Normalise --init-args to opts.init_args etc.
-            opts[(key:gsub("%-", "_"))] = value
-        end
-        i = i + 1
-    end
-    return opts
-end
-
-function M.main(argv)
-    local platform = M.platform
-    local opts     = parse_argv(argv or {})
-
-    if not opts.efi_binary then platform.die("--efi-binary required") end
-    if not opts.output_dir then platform.die("--output-dir required") end
-    if not opts.src_root   then platform.die("--src-root required")   end
-
-    return M.build_image {
-        profile    = opts.profile,
-        init = {
-            exe   = opts.init_exe,
-            args  = opts.init_args,
-            stdio = opts.init_stdio,
-        },
-        efi_binary = opts.efi_binary,
-        output_dir = opts.output_dir,
-        src_root   = opts.src_root,
-        size_mb    = tonumber(opts.size_mb) or 2000,
-        layout     = opts.layout,
-    }
 end
 
 return M

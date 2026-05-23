@@ -13,7 +13,7 @@
 #ifndef _BOOT_EFI_MMU_H_
 #define _BOOT_EFI_MMU_H_
 
-#include <efi.h>
+#include "bootenv.h"
 
 #define KSEG0_BASE 0x80000000UL
 #define KSEG0(phys) ((void *)(unsigned long)((unsigned long)(phys) | KSEG0_BASE))
@@ -41,6 +41,9 @@ typedef struct {
     EFI_PHYSICAL_ADDRESS phys;
     UINTN                pages;
     PageKind             kind;
+    UINT8                no_map;  /* 1 = memmap-overlay only: contribute an NT
+                                   * descriptor but skip identity + KSEG0
+                                   * mapping (mmu_reserve'd ranges). */
 } AllocEntry;
 
 /* Allocate `pages` contiguous pages; records the allocation in the
@@ -81,6 +84,14 @@ EFI_STATUS mmu_alloc_reserved(void);
  * is made. The range does NOT contribute to KSEG0 mirror or memmap
  * NT-type overlay — those are reserved for mmu_alloc'd entries. */
 EFI_STATUS mmu_register_image(EFI_PHYSICAL_ADDRESS phys, UINTN pages);
+
+/* Reserve a phys range we didn't allocate (e.g. the in-RAM initrd) so it
+ * appears in the NT memory map with type `kind` (use a non-reclaimable kind
+ * like PK_FIRMWARE_PERM) and MM won't reclaim it.  Unlike mmu_alloc this
+ * makes no allocation; unlike mmu_register_image it DOES contribute a memmap
+ * NT descriptor — but is excluded from the identity map / KSEG0 mirror / PT
+ * pool, since the consumer (a driver) maps it on demand. */
+EFI_STATUS mmu_reserve(EFI_PHYSICAL_ADDRESS phys, UINTN pages, PageKind kind);
 
 /* Pre-exit: allocate the exact-sized PT pool after all identity + KSEG0
  * candidates are registered. Walks both registries, counts unique PDE
