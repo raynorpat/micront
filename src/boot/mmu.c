@@ -46,7 +46,8 @@ static const char *kind_name(PageKind k) {
 static EFI_STATUS mmu_alloc_impl(UINTN pages, PageKind kind,
                                  BeAllocMode mode,
                                  EFI_PHYSICAL_ADDRESS *out_phys,
-                                 EFI_PHYSICAL_ADDRESS preferred) {
+                                 EFI_PHYSICAL_ADDRESS preferred,
+                                 UINT8 no_map) {
     if (g_reg_n >= MMU_REGISTRY_MAX) {
         BXLOG(L"registry full");
         return EFI_OUT_OF_RESOURCES;
@@ -61,7 +62,7 @@ static EFI_STATUS mmu_alloc_impl(UINTN pages, PageKind kind,
     g_reg[g_reg_n].phys   = phys;
     g_reg[g_reg_n].pages  = pages;
     g_reg[g_reg_n].kind   = kind;
-    g_reg[g_reg_n].no_map = 0;
+    g_reg[g_reg_n].no_map = no_map;
     g_reg_n++;
 
     /* No per-alloc log on success — callers that care (fs_read,
@@ -74,19 +75,29 @@ static EFI_STATUS mmu_alloc_impl(UINTN pages, PageKind kind,
 
 EFI_STATUS mmu_alloc(UINTN pages, PageKind kind,
                      EFI_PHYSICAL_ADDRESS *out_phys) {
-    return mmu_alloc_impl(pages, kind, BE_ALLOC_ANY, out_phys, 0);
+    return mmu_alloc_impl(pages, kind, BE_ALLOC_ANY, out_phys, 0, 0);
 }
 
 EFI_STATUS mmu_alloc_at(UINTN pages, PageKind kind,
                         EFI_PHYSICAL_ADDRESS preferred,
                         EFI_PHYSICAL_ADDRESS *out_phys) {
-    return mmu_alloc_impl(pages, kind, BE_ALLOC_AT, out_phys, preferred);
+    return mmu_alloc_impl(pages, kind, BE_ALLOC_AT, out_phys, preferred, 0);
 }
 
 EFI_STATUS mmu_alloc_below(UINTN pages, PageKind kind,
                            EFI_PHYSICAL_ADDRESS max_addr,
                            EFI_PHYSICAL_ADDRESS *out_phys) {
-    return mmu_alloc_impl(pages, kind, BE_ALLOC_MAX, out_phys, max_addr);
+    return mmu_alloc_impl(pages, kind, BE_ALLOC_MAX, out_phys, max_addr, 0);
+}
+
+/* Allocate `pages` AND register memmap-overlay only (no identity/KSEG0/PT
+ * pool) — the combination mmu_alloc (allocate, mapped) and mmu_reserve
+ * (register pre-existing, memmap-only) don't provide.  For a large RAM
+ * region a driver maps on demand: the loader-built FAT16 disk served by
+ * ramscsi. */
+EFI_STATUS mmu_alloc_reserve(UINTN pages, PageKind kind,
+                             EFI_PHYSICAL_ADDRESS *out_phys) {
+    return mmu_alloc_impl(pages, kind, BE_ALLOC_ANY, out_phys, 0, 1);
 }
 
 EFI_STATUS mmu_register_image(EFI_PHYSICAL_ADDRESS phys, UINTN pages) {

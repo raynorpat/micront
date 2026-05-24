@@ -37,13 +37,13 @@
 #
 # PVH / ramdisk (firmware-less; boots vmlinuz + initrd instead of OVMF +
 # disk).  --vmlinux defaults to src/boot/vmlinuz/vmlinux:
-#   tools/agent_run.sh --ramdisk build/disk-smoke-ramdisk/initrd.img \
+#   tools/agent_run.sh --ramdisk build/disk-smoke-ramdisk/initrd.zip \
 #                      --machine microvm --break Phase1Initialization
 #
 # Hang hunting (--run-secs): free-run, SIGINT after N s, then dump $eip
 # (>=0x80000000 = kernel/KSEG0, else user-mode) + backtrace.  No symbol
 # breakpoint — for "it hangs and I don't know where":
-#   tools/agent_run.sh --ramdisk build/disk-smoke-ramdisk/initrd.img \
+#   tools/agent_run.sh --ramdisk build/disk-smoke-ramdisk/initrd.zip \
 #                      --machine microvm --run-secs 30
 #
 # Exit codes (precise — agents branch on these):

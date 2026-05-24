@@ -18,6 +18,7 @@
 #include "cmdline.h"
 #include "bootenv_pvh.h"
 #include "fatread.h"
+#include "fatbuild.h"
 #include "mmu.h"
 #include "arena.h"
 #include "hwtree.h"
@@ -53,7 +54,12 @@ void vmlinuz_main(uint32_t start_info_phys) {
     }
     pvh_bootenv_init(si);
 
-    /* The initrd (module[0]) is our boot volume — an MBR + FAT16 image. */
+    /* The initrd (module[0]) is our boot volume.  Two shipping formats:
+     *   - a STORED zip of the system tree (the release artifact) — the loader
+     *     builds an MBR+FAT16 image in RAM from it, so upstream can drop files
+     *     into \SystemRoot with standard zip tools;
+     *   - a raw MBR+FAT16 image (dev / back-compat) — used directly.
+     * Either way ramscsi serves the resulting disk as the system volume. */
     if (!si->nr_modules || !si->modlist_paddr) {
         BXLOG(L"no initrd module"); return;
     }
@@ -61,19 +67,33 @@ void vmlinuz_main(uint32_t start_info_phys) {
         (const struct hvm_modlist_entry *)(uintptr_t)si->modlist_paddr;
     const UINT8 *initrd = (const UINT8 *)(uintptr_t)m[0].paddr;
     UINT32 initrd_size  = (UINT32)m[0].size;
-    if (fat_mount(initrd, initrd_size) != 0) {
-        BXLOG(L"fat_mount failed"); return;
-    }
-    BXLOG(L"initrd mounted (%lu bytes)", (UINT64)initrd_size);
 
-    /* Reserve the initrd region in the NT memory map (LoaderFirmwarePermanent)
-     * so MM won't reclaim it — ramscsi serves it as the system volume. It's
-     * memmap-overlay only (ramscsi maps it on demand; no identity/KSEG0). */
-    {
+    const UINT8 *disk_base;
+    UINT32       disk_size;
+    if (initrd_size >= 4 && initrd[0] == 'P' && initrd[1] == 'K') {
+        /* Zip: build the FAT16 volume in RAM.  fatbuild reserves the built
+         * region (memmap-only, ramscsi maps on demand); the raw zip is left
+         * unreserved so MM reclaims it once its contents are copied in. */
+        EFI_PHYSICAL_ADDRESS fat_phys; UINT32 fat_size;
+        if (fatbuild_from_zip(initrd, initrd_size, &fat_phys, &fat_size) != 0) {
+            BXLOG(L"fatbuild_from_zip failed"); return;
+        }
+        disk_base = (const UINT8 *)(UINTN)fat_phys;
+        disk_size = fat_size;
+    } else {
+        /* Raw MBR+FAT16 image: use directly + reserve it (LoaderFirmwarePermanent,
+         * memmap-overlay only) so MM won't reclaim it under ramscsi. */
+        disk_base = initrd;
+        disk_size = initrd_size;
         UINT32 rd_lo = (UINT32)(uintptr_t)initrd & ~0xFFFu;
         UINT32 rd_hi = ((UINT32)(uintptr_t)initrd + initrd_size + 0xFFFu) & ~0xFFFu;
         mmu_reserve(rd_lo, (rd_hi - rd_lo) >> 12, PK_FIRMWARE_PERM);
     }
+
+    if (fat_mount(disk_base, disk_size) != 0) {
+        BXLOG(L"fat_mount failed"); return;
+    }
+    BXLOG(L"boot volume mounted (%lu bytes)", (UINT64)disk_size);
 
     /* Load kernel, HAL (temp blobs, pe_stage relocates them later) + hive. */
     UINT32 ksz = 0, hsz = 0, vsz = 0;
@@ -153,23 +173,53 @@ void vmlinuz_main(uint32_t start_info_phys) {
             continue;
         volatile UINT32 *cfg = (volatile UINT32 *)(UINTN)sec_phys;
         if (sec_size >= 12 && cfg[0] == 0x52414D44u /* 'RAMD' */) {
-            cfg[1] = (UINT32)(uintptr_t)initrd;   /* base (sector 0 = MBR) */
-            cfg[2] = initrd_size;                 /* length in bytes */
+            cfg[1] = (UINT32)(uintptr_t)disk_base;   /* base (sector 0 = MBR) */
+            cfg[2] = disk_size;                      /* length in bytes */
             BXLOG(L"RAMDCFG <- %a: base=0x%x len=%u",
-                  drivers[i].name, (UINT32)(uintptr_t)initrd, initrd_size);
+                  drivers[i].name, (UINT32)(uintptr_t)disk_base, disk_size);
         }
     }
 
-    /* Boot-disk identity from the initrd's MBR (single FAT16 partition →
-     * boot = HAL = partition 1). Signature at 0x1B8; checksum is the two's
-     * complement of the first 128 DWORDs so the kernel's sum nets to 0. */
+    /* Boot-disk identity + partition numbers from the MBR.  Mirrors the EFI
+     * loader's walk (boot/efi/main.c): the slot index maps 1:1 to NT's
+     * partition(N).  Single partition → boot = HAL = partition 1; an ESP
+     * (0xEF) + a system partition → HAL = ESP, boot = system, so the kernel
+     * resolves \SystemRoot against the system partition (FAT16 or NTFS).
+     * Signature at 0x1B8; checksum is the two's complement of the first 128
+     * DWORDs so the kernel's sum nets to 0.  (fat_mount reads slot 1 = the
+     * ESP, where the boot-critical files live.) */
     {
-        const UINT32 *dw = (const UINT32 *)initrd;
+        const UINT32 *dw = (const UINT32 *)disk_base;
         UINT32 sum = 0;
         for (int i = 0; i < 128; i++) sum += dw[i];
-        UINT32 mbr_sig = rd32(initrd + 0x1B8);
-        lpb_set_boot_disk(mbr_sig, (UINT32)-(INT32)sum, 1, 1);
-        BXLOG(L"boot disk sig=0x%x", mbr_sig);
+        UINT32 mbr_sig = rd32(disk_base + 0x1B8);
+
+        UINT8 esp_slot = 0, first_used = 0, second_used = 0, first_non_esp = 0;
+        int n_used = 0;
+        for (int i = 0; i < 4; i++) {
+            UINT8 type = disk_base[0x1BE + i * 16 + 4];
+            if (type == 0) continue;
+            UINT8 slot = (UINT8)(i + 1);
+            n_used++;
+            if (!first_used) first_used = slot;
+            else if (!second_used) second_used = slot;
+            if (type == 0xEF && !esp_slot) esp_slot = slot;
+            if (type != 0xEF && !first_non_esp) first_non_esp = slot;
+        }
+        UINT8 boot_part = 1, hal_part = 1;
+        if (n_used <= 1) {
+            boot_part = hal_part = first_used ? first_used : 1;
+        } else if (esp_slot && first_non_esp) {
+            hal_part = esp_slot; boot_part = first_non_esp;
+        } else if (esp_slot) {
+            boot_part = hal_part = esp_slot;
+        } else {
+            hal_part = first_used;
+            boot_part = second_used ? second_used : first_used;
+        }
+        lpb_set_boot_disk(mbr_sig, (UINT32)-(INT32)sum, boot_part, hal_part);
+        BXLOG(L"boot disk sig=0x%x parts=%d boot=p%d hal=p%d",
+              mbr_sig, n_used, boot_part, hal_part);
     }
 
     /* Reserved <16 MiB core pages, the arena, the hardware tree, the
@@ -180,7 +230,7 @@ void vmlinuz_main(uint32_t start_info_phys) {
     arena_init(LPB_ARENA_PAGES);
     {
         hwtree_disk_info hw = {
-            .total_blocks = initrd_size / 512,
+            .total_blocks = disk_size / 512,
             .block_size   = 512,
         };
         lpb_set_configuration_root(hwtree_build(&hw));

@@ -104,6 +104,24 @@ function M.build_image(opts)
                      .. "' (want 'single'|'ramdisk'|'split-fat'|'split-ntfs')")
     end
 
+    -- Ramdisk wire format (layout='ramdisk' only).  All are content-sized,
+    -- firmware-less initrds the vmlinuz loader serves via ramscsi:
+    --   'zip' (default) — a STORED zip the loader turns into a RAM FAT16 at
+    --                     boot; the shippable artifact upstream edits with
+    --                     standard zip tools.  Output: initrd.zip.
+    --   'fat'           — a raw single MBR+FAT16 image (loader raw-disk path).
+    --   'split-fat'     — MBR: ESP (FAT16, boot files) + system (FAT16).
+    --   'split-ntfs'    — MBR: ESP (FAT16) + system (NTFS) — a system volume
+    --                     with real security descriptors / ACLs.
+    -- The three raw formats output initrd.img.
+    local ramdisk_format = opts.ramdisk_format or 'zip'
+    if layout == 'ramdisk' and ramdisk_format ~= 'zip'
+       and ramdisk_format ~= 'fat' and ramdisk_format ~= 'split-fat'
+       and ramdisk_format ~= 'split-ntfs' then
+        platform.die("Unknown ramdisk_format '" .. tostring(ramdisk_format)
+                     .. "' (want 'zip'|'fat'|'split-fat'|'split-ntfs')")
+    end
+
     -- ---- Resolve disk file list + check sources exist ----
     local files = composed.files
     -- BOOTX64.EFI lives on the ESP for UEFI to find it (where='esp').
@@ -147,23 +165,54 @@ function M.build_image(opts)
     local PRE_PARTITION_GAP_MB = 1
     local ESP_SIZE_MB          = 64
 
-    local image_name = (layout == 'ramdisk') and "initrd.img" or "esp.img"
+    local image_name
+    if layout == 'ramdisk' then
+        image_name = (ramdisk_format == 'zip') and "initrd.zip" or "initrd.img"
+    else
+        image_name = "esp.img"
+    end
     local esp_path   = opts.output_dir .. "/" .. image_name
     local d = fs.drive.new {
         table     = 'mbr',
         signature = 0x4E544653,
     }
+    -- Set for the 'ramdisk' layout: the initrd is shipped as a STORED zip
+    -- (not a FAT image). The vmlinuz loader builds a RAM FAT16 from it at
+    -- boot (boot/fatbuild.c), so upstream can drop files into \SystemRoot
+    -- with standard zip tools (`zip -0`). Written below in place of d:build.
+    local ramdisk_zip_bytes = nil
 
-    if layout == 'single' or layout == 'ramdisk' then
-        -- Both put everything on one FAT16 volume (the `where` tag is
-        -- ignored). 'single' is a fixed-size bootable ESP-typed disk;
-        -- 'ramdisk' is a content-sized, 0x06-typed initrd image.
-        local vol_size_mb
+    if layout == 'ramdisk' and ramdisk_format == 'zip' then
+        local zip = require('ntosbe.zip')
+        local members = {}
+        for _, f in ipairs(files) do
+            local data, sz, basename
+            if f.bytes then
+                data, sz, basename = f.bytes, #f.bytes, "(generated)"
+            else
+                data     = platform.read_file(f.src)
+                sz       = data and #data or 0
+                basename = f.src:match("([^/]+)$") or f.src
+            end
+            platform.log(string.format("  all  %-40s %8d  (%s)",
+                                       f.dest, sz, basename))
+            members[#members + 1] = { name = f.dest, data = data or "" }
+        end
+        members[#members + 1] =
+            { name = "System32/config/SYSTEM", data = hive_bytes }
+        members[#members + 1] = { name = "tmp/", data = "" }   -- empty dir marker
+        ramdisk_zip_bytes = zip.build(members)
+    elseif layout == 'single'
+           or (layout == 'ramdisk' and ramdisk_format == 'fat') then
+        -- One FAT16 volume; the `where` tag is ignored (everything lands on
+        -- the one volume).  'single' is a fixed-size, bootable ESP-typed
+        -- (0xEF) disk; 'ramdisk'+fat is a content-sized, system-typed (0x06)
+        -- initrd image served by ramscsi.
+        local vol_size_mb, type_code
         if layout == 'ramdisk' then
-            -- Size from actual content — it's a RAM disk, so don't burn
-            -- RAM on slack. Sum file sizes rounded up to a conservative
-            -- cluster, plus FAT overhead and free headroom for NT's own
-            -- runtime writes (hive growth, temp, last-known-good).
+            -- Size from actual content — it's a RAM disk, so don't burn RAM
+            -- on slack.  File sizes rounded up to a conservative cluster,
+            -- plus FAT overhead and free headroom for NT's own runtime writes.
             local content = #hive_bytes
             for _, f in ipairs(files) do
                 local sz = f.bytes and #f.bytes or (platform.file_size(f.src) or 0)
@@ -173,10 +222,11 @@ function M.build_image(opts)
             local free_hdr = math.max(8 * 1024 * 1024, math.floor(content * 0.25))
             vol_size_mb = math.max(8,
                 math.ceil((content + overhead + free_hdr) / (1024 * 1024)))
+            type_code = 0x06
         else
             vol_size_mb = total_mb - PRE_PARTITION_GAP_MB
+            type_code   = 0xEF
         end
-
         local vol = fs.fat16.new {
             size_mb      = vol_size_mb,
             volume_label = "NT",
@@ -197,35 +247,75 @@ function M.build_image(opts)
         end
         vol:mkdir("tmp")
         vol:add_bytes("System32/config/SYSTEM", hive_bytes)
-        -- 'single' = ESP-typed (0xEF) bootable disk; 'ramdisk' = plain
-        -- FAT16 system partition (0x06) served by ramscsi.
-        local type_code = (layout == 'ramdisk') and 0x06 or 0xEF
         d:add(vol, { active = true, type_code = type_code })
     else
-        -- split-fat / split-ntfs: ESP + system, routed by `where`.
-        local sys_size_mb = total_mb - PRE_PARTITION_GAP_MB - ESP_SIZE_MB
-        local sys_min     = (layout == 'split-ntfs') and 8 or 4
-        if sys_size_mb < sys_min then
-            platform.die(string.format(
-                "size_mb=%d too small for ESP=%d + system partition "
-                .. "(need ≥%d for layout=%s)",
-                total_mb, ESP_SIZE_MB,
-                ESP_SIZE_MB + PRE_PARTITION_GAP_MB + sys_min, layout))
+        -- ESP (FAT16, boot files) + system (FAT16 or NTFS, the OS tree),
+        -- routed by `where`.  Two callers: a fixed-size bootable disk
+        -- (layout=split-fat/split-ntfs) and a content-sized PVH ramdisk
+        -- (layout=ramdisk + ramdisk_format=split-*).  The ramdisk sizes both
+        -- partitions to content (no RAM slack) and carries no EFI binary; the
+        -- loader reads boot files from the ESP (partition 1) and NT mounts the
+        -- system partition (2) as \SystemRoot.
+        local is_ramdisk = (layout == 'ramdisk')
+        local split_kind
+        if is_ramdisk then
+            split_kind = (ramdisk_format == 'split-ntfs') and 'ntfs' or 'fat'
+        else
+            split_kind = (layout == 'split-ntfs') and 'ntfs' or 'fat'
+        end
+
+        local esp_size_mb, sys_size_mb
+        if is_ramdisk then
+            -- Content-size each partition.  content_of sums the rounded sizes
+            -- of files destined for a side ('both' counts on both).
+            local function content_of(side)
+                local c = 0
+                for _, f in ipairs(files) do
+                    local w = f.where or 'root'
+                    if w == 'both' or w == side then
+                        local sz = f.bytes and #f.bytes
+                                   or (platform.file_size(f.src) or 0)
+                        c = c + math.floor((sz + 4095) / 4096) * 4096
+                    end
+                end
+                return c
+            end
+            local function mb_for(content, min_mb)
+                local overhead = 512 * 1024
+                local free_hdr = math.max(8 * 1024 * 1024, math.floor(content * 0.25))
+                return math.max(min_mb,
+                    math.ceil((content + overhead + free_hdr) / (1024 * 1024)))
+            end
+            esp_size_mb = mb_for(content_of('esp') + #hive_bytes, 8)
+            -- NTFS carries more fixed overhead (MFT, $LogFile, …) → bigger floor.
+            sys_size_mb = mb_for(content_of('root'),
+                                 (split_kind == 'ntfs') and 16 or 8)
+        else
+            esp_size_mb = ESP_SIZE_MB
+            sys_size_mb = total_mb - PRE_PARTITION_GAP_MB - ESP_SIZE_MB
+            local sys_min = (split_kind == 'ntfs') and 8 or 4
+            if sys_size_mb < sys_min then
+                platform.die(string.format(
+                    "size_mb=%d too small for ESP=%d + system partition "
+                    .. "(need ≥%d for layout=%s)",
+                    total_mb, ESP_SIZE_MB,
+                    ESP_SIZE_MB + PRE_PARTITION_GAP_MB + sys_min, layout))
+            end
         end
 
         local esp_vol = fs.fat16.new {
-            size_mb      = ESP_SIZE_MB,
+            size_mb      = esp_size_mb,
             volume_label = "ESP",
             now          = now,
         }
         local sys_vol
-        if layout == 'split-fat' then
+        if split_kind == 'fat' then
             sys_vol = fs.fat16.new {
                 size_mb      = sys_size_mb,
                 volume_label = "NT",
                 now          = now,
             }
-        else  -- split-ntfs
+        else  -- ntfs
             local bit = require('bit')
             sys_vol = fs.ntfs.new {
                 size_mb       = sys_size_mb,
@@ -293,6 +383,15 @@ function M.build_image(opts)
         end
         platform.write_file(opts.output_dir .. "/manifest.tsv",
                              table.concat(lines, "\n") .. "\n")
+    end
+
+    if ramdisk_zip_bytes then
+        platform.write_file(esp_path, ramdisk_zip_bytes)
+        platform.log(string.format(
+            "  Ramdisk (STORED zip): %d KB  Layout: ramdisk",
+            math.floor(#ramdisk_zip_bytes / 1024)))
+        platform.log("Disk image: " .. esp_path)
+        return 0
     end
 
     local stats = d:build(platform, esp_path)

@@ -17,7 +17,7 @@ CFLAGS := \
     -fno-pic -fno-pie -mno-red-zone -fshort-wchar \
     -fno-tree-loop-distribute-patterns \
     -Wall -Wextra -Werror \
-    -I.. -nostdinc \
+    -I. -I.. -nostdinc \
     -isystem $(shell $(CC) -m32 -print-file-name=include)
 
 LDFLAGS := -m elf_i386 -nostdlib -z noexecstack -T vmlinux.lds
@@ -27,13 +27,17 @@ VPATH := ..
 
 # Entry-agnostic core, shared with boot/efi/ (compiled freestanding -m32).
 COMMON_OBJS := com1.o uart.o fwcfg.o cmdline.o pe.o arena.o hwtree.o \
-               mmu.o memmap.o lpb.o fatread.o bootdrv.o
+               mmu.o memmap.o lpb.o fatread.o fatbuild.o zipread.o bootdrv.o
 # PVH entry + adapters (local to boot/vmlinuz/). blog.c is this entry's
 # bxlog() sink (-> com1); bootenv_pvh.c is its be_* contract impl
 # (be_memory_regions from e820, be_alloc_pages bump allocator); handoff.S
 # is the 32-bit CR3/GDT/IDT/TSS install + jump into KiSystemStartup;
 # bootfs_pvh.c binds the bfs_* contract (bootdrv.h) to the FAT16 reader.
-PVH_OBJS    := head.o main.o blog.o bootenv_pvh.o handoff.o bootfs_pvh.o
+# puff.c is the vendored DEFLATE inflater (zip method 8), kept here rather
+# than in the shared core since the EFI build never decompresses; setjmp.S
+# backs the freestanding <setjmp.h> puff bails out through.
+PVH_OBJS    := head.o main.o blog.o bootenv_pvh.o handoff.o bootfs_pvh.o \
+               puff.o setjmp.o
 
 OBJS := $(PVH_OBJS) $(COMMON_OBJS)
 

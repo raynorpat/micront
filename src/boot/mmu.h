@@ -93,6 +93,13 @@ EFI_STATUS mmu_register_image(EFI_PHYSICAL_ADDRESS phys, UINTN pages);
  * pool, since the consumer (a driver) maps it on demand. */
 EFI_STATUS mmu_reserve(EFI_PHYSICAL_ADDRESS phys, UINTN pages, PageKind kind);
 
+/* Allocate `pages` AND mark them memmap-overlay only — like mmu_alloc for the
+ * allocation, like mmu_reserve for the NT-descriptor-but-no-mapping treatment.
+ * For a large RAM region a driver maps on demand (the loader-built FAT16 disk
+ * ramscsi serves). Returns the base physical address. */
+EFI_STATUS mmu_alloc_reserve(UINTN pages, PageKind kind,
+                             EFI_PHYSICAL_ADDRESS *out_phys);
+
 /* Pre-exit: allocate the exact-sized PT pool after all identity + KSEG0
  * candidates are registered. Walks both registries, counts unique PDE
  * slots, allocates that many PTs (+1 for the HAL PT at PDE[1023]) below

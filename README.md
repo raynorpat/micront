@@ -10,8 +10,8 @@ Implemented:
   kernel, drivers, and userland from source
 - [x] Kernel-level code coverage during selftest [![Coverage Status](https://coveralls.io/repos/github/HarryR/nt365/badge.svg?branch=main)](https://coveralls.io/github/HarryR/nt365?branch=main)
 - [x] `gdb` powered kernel & driver debugging
-- [x] 64-bit UEFI bootloader (`BOOTX64.EFI`, OVMF on qemu)
-- [x] Firmware-less PVH boot (`qemu -kernel` + RAM-disk initrd, mounted via `ramscsi`)
+- [x] 64-bit UEFI bootloader (`BOOTX64.EFI`)
+- [x] 32-bit MicroVM boot (`vmlinux` + `initrd.zip`, easy to customize)
 - [x] 32-bit userland (no VDM, V86, WoW16 or 16-bit paths)
 - [x] PCI-native HAL (BAR relocation above 4 GiB, no PC/AT assumptions)
 - [x] LAPIC + IOAPIC interrupt delivery (graceful 8259 fallback) — boots
@@ -52,9 +52,9 @@ anything that would have lived in a service — is Lua under
 ```
 src/NT/PRIVATE/         original NT source (kernel, drivers, sdktools)
 src/NT/PUBLIC/          shipped headers + import libs + bootstrap binaries
-src/boot/               shared boot core (PE loader, mmu, lpb, hwtree, FAT reader)
+src/boot/               shared boot core (PE loader, mmu, lpb, hwtree, FAT read/build, zip)
 src/boot/efi/           UEFI loader (gnu-efi, x86_64; long-mode → 32-bit kernel)
-src/boot/vmlinuz/       PVH loader (32-bit; qemu -kernel + RAM-disk initrd, no firmware)
+src/boot/vmlinuz/       PVH loader (32-bit; qemu -kernel; zip/FAT initrd → in-RAM FAT16; no firmware)
 src/cr/                 native-NT LuaJIT runtime (run.exe + lua.dll + librt)
 src/pkg/                Lua tree staged at \SystemRoot\pkg\ on disk
 src/pkg/ntosbe/         NT OS Build Environment (build + hive + layered disk composition)

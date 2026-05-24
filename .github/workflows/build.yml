@@ -144,9 +144,10 @@ jobs:
 
       - name: smoke matrix PVH (machine)
         # The firmware-less path: the PVH loader (boot/vmlinuz/vmlinux)
-        # booted via QEMU -kernel with an MBR/FAT16 ramdisk via -initrd,
-        # exercising ramscsi (the RAM-disk SCSI miniport) as the boot
-        # volume — the vmlinuz counterpart to the UEFI smoke matrix above.
+        # booted via QEMU -kernel with a STORED-zip ramdisk via -initrd (the
+        # loader builds an MBR/FAT16 volume from it in RAM), exercising ramscsi
+        # (the RAM-disk SCSI miniport) as the boot volume — the vmlinuz
+        # counterpart to the UEFI smoke matrix above.
         #
         # Bake the smoke ramdisk once (smoke.lua entry) then boot it across
         # machines.  Unlike the UEFI matrix there's NO disk-backend axis:
@@ -163,7 +164,7 @@ jobs:
             log="smoke-pvh-$machine.log"
             echo "=== smoke PVH: machine=$machine ==="
             timeout 60 src/boot.sh \
-              --ramdisk build/disk-smoke-ramdisk/initrd.img \
+              --ramdisk build/disk-smoke-ramdisk/initrd.zip \
               --vmlinux src/boot/vmlinuz/vmlinux \
               --machine "$machine" \
               < /dev/null 2>&1 | tee "$log" || true
@@ -171,6 +172,35 @@ jobs:
               echo "  PASS: pvh+$machine"
             else
               echo "  FAIL: pvh+$machine (no SMOKE OK in log)"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      - name: smoke matrix PVH (initrd format, microvm)
+        # The initrd wire-format axis, microvm only (kept off the machine
+        # matrix above to bound CI time).  The loader handles each shape:
+        #   fat        — a raw single MBR+FAT16 image (loader raw-disk path)
+        #   split-fat  — MBR: ESP (FAT16, boot files) + FAT16 system volume
+        #   split-ntfs — MBR: ESP + NTFS system volume (real security
+        #                descriptors / ACLs, mounted via ntfs.sys)
+        # zip on microvm is already covered by the machine matrix above; the
+        # three raw formats all emit build/disk-smoke-ramdisk/initrd.img.
+        run: |
+          fail=0
+          for fmt in fat split-fat split-ntfs; do
+            make -C src smoke-ramdisk-disk RAMDISK_FORMAT=$fmt
+            log="smoke-pvh-$fmt.log"
+            echo "=== smoke PVH: format=$fmt machine=microvm ==="
+            timeout 60 src/boot.sh \
+              --ramdisk build/disk-smoke-ramdisk/initrd.img \
+              --vmlinux src/boot/vmlinuz/vmlinux \
+              --machine microvm \
+              < /dev/null 2>&1 | tee "$log" || true
+            if grep -q '^SMOKE OK' "$log"; then
+              echo "  PASS: pvh+$fmt"
+            else
+              echo "  FAIL: pvh+$fmt (no SMOKE OK in log)"
               fail=1
             fi
           done

@@ -64,7 +64,7 @@ default `src/boot/vmlinuz/vmlinux`); `--machine` takes `microvm` too:
 
 ```sh
 src/tools/agent_run.sh \
-    --ramdisk build/disk-smoke-ramdisk/initrd.img \
+    --ramdisk build/disk-smoke-ramdisk/initrd.zip \
     --machine microvm --break Phase1Initialization
 ```
 
@@ -77,7 +77,7 @@ run?" — it stops at the bp if it fired, or at the SIGINT if it didn't:
 ```sh
 # is the clock interrupt even firing on this machine?  (q35 hits it;
 # microvm never does — its PIT IRQ0 doesn't reach the CPU.)
-src/tools/agent_run.sh --ramdisk build/disk-smoke-ramdisk/initrd.img \
+src/tools/agent_run.sh --ramdisk build/disk-smoke-ramdisk/initrd.zip \
     --machine microvm --break HalpClockInterrupt --run-secs 25
 ```
 

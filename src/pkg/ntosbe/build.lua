@@ -111,6 +111,7 @@ function M.main(opts)
         ["profile"] = true, ["layout"] = true, ["output-dir"] = true,
         ["efi-binary"] = true, ["src-root"] = true, ["size-mb"] = true,
         ["init-args"] = true, ["init-exe"] = true, ["init-stdio"] = true,
+        ["ramdisk-format"] = true,
     }
     local i = 1
     while i <= #args do
@@ -988,6 +989,7 @@ function M.main(opts)
             efi_binary = image_opts.efi_binary or defaults.efi_binary,
             size_mb    = tonumber(image_opts.size_mb),
             layout     = image_opts.layout,
+            ramdisk_format = image_opts.ramdisk_format,
             init = {
                 exe   = image_opts.init_exe,
                 args  = image_opts.init_args,

@@ -219,17 +219,29 @@ BOOT_VMLINUZ  := $(SRC)/boot/vmlinuz
 VMLINUX       := $(BOOT_VMLINUZ)/vmlinux
 RAMDISK_BUILD := $(REPO)/build/disk-ramdisk
 
+# RAMDISK_FORMAT=zip|fat|split-fat|split-ntfs — the initrd wire format.
+# zip (default) ships a STORED zip the loader turns into a RAM FAT16 (and
+# upstream edits with standard zip tools); fat is a raw single MBR+FAT16
+# image; split-fat / split-ntfs are content-sized MBR images with a FAT16 ESP
+# (boot files) + a FAT16/NTFS system volume.  Only zip is named initrd.zip;
+# the raw formats are initrd.img.
+RAMDISK_FORMAT ?= zip
+ifeq ($(RAMDISK_FORMAT),zip)
+RAMDISK_FILE := initrd.zip
+else
+RAMDISK_FILE := initrd.img
+endif
+
 vmlinux:
 	$(SRC)/build.sh vmlinux
 
-# Bake the ramdisk image (MBR + single FAT16, no EFI binary) from current
-# artifacts via the ntosbe 'ramdisk' layout; also builds the PVH loader so
-# boot-ramdisk has both halves.
+# Bake the ramdisk image from current artifacts via the ntosbe 'ramdisk'
+# layout; also builds the PVH loader so boot-ramdisk has both halves.
 ramdisk: cr vmlinux
-	$(SRC)/build.sh ramdisk --output-dir=$(RAMDISK_BUILD) $(PROFILE_FLAG) $(INIT_ARGS_FLAG)
+	$(SRC)/build.sh ramdisk --output-dir=$(RAMDISK_BUILD) --ramdisk-format=$(RAMDISK_FORMAT) $(PROFILE_FLAG) $(INIT_ARGS_FLAG)
 
 boot-ramdisk: ramdisk
-	$(SRC)/boot.sh --ramdisk $(RAMDISK_BUILD)/initrd.img --vmlinux $(VMLINUX) $(BOOT_FLAGS) $(BOOT_REDIRECT)
+	$(SRC)/boot.sh --ramdisk $(RAMDISK_BUILD)/$(RAMDISK_FILE) --vmlinux $(VMLINUX) $(BOOT_FLAGS) $(BOOT_REDIRECT)
 
 # Smoke profile over the ramdisk path — the CI matrix entry per machine.
 smoke-ramdisk: PROFILE_FLAG := --profile smoke
@@ -239,7 +251,7 @@ smoke-ramdisk: boot-ramdisk
 
 # Build-only smoke ramdisk image (smoke profile, no boot), parallel to
 # smoke-disk.  The CI PVH smoke matrix bakes this once into
-# build/disk-smoke-ramdisk/initrd.img, then boots it across machines.
+# build/disk-smoke-ramdisk/initrd.zip, then boots it across machines.
 smoke-ramdisk-disk: PROFILE_FLAG := --profile smoke
 smoke-ramdisk-disk: INIT_ARGS_FLAG :=
 smoke-ramdisk-disk: RAMDISK_BUILD := $(REPO)/build/disk-smoke-ramdisk
