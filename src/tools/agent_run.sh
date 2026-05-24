@@ -167,8 +167,18 @@ QEMU_PIDFILE="$WORK/qemu.pid"
 # without race conditions.  Trap kills the whole group on any exit
 # path (normal completion, signal, error).
 QEMU_PGID=""
+INT_PID=""
+WALL_PID=""
 cleanup() {
     local rc=$?
+    # Stop the RUN_SECS watchdog timers and their orphaned sleep children
+    # so a piped caller doesn't hang on an inherited fd after we exit (only
+    # matters if we're killed before the in-flow reap below).
+    for _p in "${INT_PID:-}" "${WALL_PID:-}"; do
+        [[ -n "$_p" ]] || continue
+        pkill -P "$_p" 2>/dev/null || true   # sleep child first (see reap note)
+        kill "$_p" 2>/dev/null || true
+    done
     if [[ -n "${QEMU_PGID:-}" ]]; then
         # Negative PID = kill the process group.
         kill -TERM -- "-$QEMU_PGID" 2>/dev/null || true
@@ -205,14 +215,13 @@ COMMON_TAIL=( -serial file:"$QEMU_LOG"
 
 if [[ -n "$RAMDISK" ]]; then
     # PVH path: vmlinuz + RAM-disk initrd via -kernel/-initrd, no firmware
-    # and no disk controller (mirrors `boot.sh --ramdisk`).  microvm adds
-    # the legacy PIC/PIT/RTC it omits by default; pc/q35 take their chipset.
-    # No virtio device set here — the RAM disk (ramscsi) is the boot volume,
-    # so the chipset doesn't matter for what we're debugging.
+    # and no disk controller (mirrors `boot.sh --ramdisk`).  No virtio device
+    # set here — the RAM disk (ramscsi) is the boot volume, so the chipset
+    # doesn't matter for what we're debugging.
     [[ -f "$RAMDISK" ]] || preflight_fail "missing ramdisk $RAMDISK (run 'make -C src smoke-ramdisk-disk')"
     [[ -f "$VMLINUX" ]] || preflight_fail "missing vmlinux $VMLINUX (run 'src/build.sh vmlinux')"
     case "$MACHINE" in
-        microvm) MFLAGS=(-machine microvm,pic=on,pit=on,rtc=on) ;;
+        microvm) MFLAGS=(-machine microvm) ;;   # pit/pic on by default
         pc|q35)  MFLAGS=(-machine "$MACHINE") ;;
         *)       preflight_fail "unsupported --machine $MACHINE for --ramdisk (pc/q35/microvm)" ;;
     esac
@@ -393,9 +402,19 @@ if [[ -n "$RUN_SECS" ]]; then
     # snapshot commands.  A second timer hard-stops gdb at GDB_TIMEOUT.
     gdb -batch -nx -x "$GDB_SCRIPT" > "$GDB_LOG" 2>&1 &
     GDB_PID=$!
-    ( sleep "$RUN_SECS";    kill -INT  "$GDB_PID" 2>/dev/null ) & INT_PID=$!
-    ( sleep "$GDB_TIMEOUT"; kill -TERM "$GDB_PID" 2>/dev/null ) & WALL_PID=$!
+    # Watchdog timers.  Redirect their fds off our stdout/stderr: killing a
+    # timer below hits the subshell, not its `sleep` child, so the sleep is
+    # orphaned with the rest of GDB_TIMEOUT left to run.  If that orphan
+    # still held our stdout it would keep a piped caller (`agent_run | tail`)
+    # hanging for the full 120 s — the spurious "still running" symptom.
+    ( sleep "$RUN_SECS";    kill -INT  "$GDB_PID" 2>/dev/null ) </dev/null >/dev/null 2>&1 & INT_PID=$!
+    ( sleep "$GDB_TIMEOUT"; kill -TERM "$GDB_PID" 2>/dev/null ) </dev/null >/dev/null 2>&1 & WALL_PID=$!
     wait "$GDB_PID" || GDB_RC=$?
+    # Reap both watchdogs AND their sleep children.  pkill the children
+    # FIRST: killing the subshell reparents its sleep to init, after which
+    # `pkill -P <subshell>` would find nothing and leak the sleep.
+    pkill -P "$INT_PID"  2>/dev/null || true
+    pkill -P "$WALL_PID" 2>/dev/null || true
     kill "$INT_PID" "$WALL_PID" 2>/dev/null || true
 else
     timeout --kill-after=5 "$GDB_TIMEOUT" \
