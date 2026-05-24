@@ -59,24 +59,78 @@ local ATTR_ARCHIVE   = 0x20
 -- 8.3 name encoding.  case-folds to uppercase, space-pads to 11.
 -- ----------------------------------------------------------------
 
-local function encode_83(name)
+local function pad83(s, n) return s .. string.rep(" ", n - #s) end
+
+-- Try to encode `name` as a strict 8.3 short name (11 bytes, space-padded,
+-- uppercased). Returns the 11-byte string, or nil if it doesn't fit 8.3 — the
+-- caller then emits VFAT long-name (LFN) dirents + a generated 8.3 alias, which
+-- fastfat reads back as the full name (it already implements VFAT LFN).
+local function try_83(name)
     name = name:upper()
-    local stem, ext
-    local dot = name:match("()%.[^.]*$")
-    if dot then
-        stem = name:sub(1, dot - 1)
-        ext  = name:sub(dot + 1)
-    else
-        stem = name
-        ext  = ""
+    local dot  = name:match("()%.[^.]*$")
+    local stem = dot and name:sub(1, dot - 1) or name
+    local ext  = dot and name:sub(dot + 1) or ""
+    if #stem == 0 or #stem > 8 or #ext > 3 then return nil end
+    return pad83(stem, 8) .. pad83(ext, 3)
+end
+
+-- VFAT LFN checksum of an 11-byte 8.3 name (binds the LFN slots to the short
+-- entry; matches fastfat's FatComputeLfnChecksum): rotate-right + add, mod 256.
+local function lfn_checksum(name11)
+    local sum = 0
+    for i = 1, 11 do
+        sum = bit.band(bit.bor(bit.lshift(bit.band(sum, 1), 7),
+                               bit.rshift(sum, 1)) + name11:byte(i), 0xFF)
     end
-    if #stem > 8 or #ext > 3 then
-        error("FAT16: name '" .. name .. "' exceeds the 8.3 limit "
-              .. "(max 8-char stem + 3-char ext) — rename it, or build "
-              .. "the disk with an NTFS layout (--layout=split-ntfs)", 2)
+    return sum
+end
+
+-- Generate a unique 8.3 alias (NAME~N.EXT) for a long name. `used` is the set
+-- of 11-byte names already in the directory; the chosen alias is added to it.
+local function make_short_alias(name, used)
+    name = name:upper()
+    local dot  = name:match("()%.[^.]*$")
+    local stem = (dot and name:sub(1, dot - 1) or name):gsub("[^A-Z0-9]", "")
+    local ext  = (dot and name:sub(dot + 1) or ""):gsub("[^A-Z0-9]", ""):sub(1, 3)
+    if stem == "" then stem = "FILE" end
+    for n = 1, 999999 do
+        local suffix = "~" .. n
+        local alias  = pad83(stem:sub(1, 8 - #suffix) .. suffix, 8) .. pad83(ext, 3)
+        if not used[alias] then used[alias] = true; return alias end
     end
-    local function pad(s, n) return s .. string.rep(" ", n - #s) end
-    return pad(stem, 8) .. pad(ext, 3)
+    error("FAT16: cannot generate a unique 8.3 alias for '" .. name .. "'", 2)
+end
+
+-- Build the VFAT LFN dirent chain for `longname` (the alias's checksum binds
+-- them). Returns the concatenated 32-byte slots in on-disk order: highest
+-- sequence first, sequence 1 sits immediately before the 8.3 entry the caller
+-- appends. 13 UTF-16 code units per slot, split 5/6/2 (Name1/Name2/Name3).
+local function lfn_dirents(longname, name11_alias)
+    local chk = lfn_checksum(name11_alias)
+    local len = #longname
+    local n_slots = math.floor((len + 12) / 13)        -- ceil(len/13)
+    local function cu(p)                                -- 1-based code unit
+        if p <= len then return longname:byte(p)
+        elseif p == len + 1 then return 0              -- NUL terminator
+        else return 0xFFFF end                         -- 0xFFFF padding
+    end
+    local function put_wc(buf, off, v)
+        buf[off] = bit.band(v, 0xFF)
+        buf[off + 1] = bit.band(bit.rshift(v, 8), 0xFF)
+    end
+    local parts = {}
+    for seq = n_slots, 1, -1 do
+        local buf = ffi.new('uint8_t[32]')
+        buf[0]  = bit.bor(seq, (seq == n_slots) and 0x40 or 0)
+        buf[11] = 0x0F                                  -- ATTR_LONG_NAME
+        buf[13] = chk
+        local base = (seq - 1) * 13
+        for i = 0, 4 do put_wc(buf, 1  + i * 2, cu(base + 1  + i)) end  -- Name1[5]
+        for i = 0, 5 do put_wc(buf, 14 + i * 2, cu(base + 6  + i)) end  -- Name2[6]
+        for i = 0, 1 do put_wc(buf, 28 + i * 2, cu(base + 12 + i)) end  -- Name3[2]
+        parts[#parts + 1] = ffi.string(buf, 32)
+    end
+    return table.concat(parts)
 end
 
 -- FAT date / time encoding from a calendar table {year, month, day,
@@ -98,8 +152,11 @@ end
 
 local function newentry(name, is_dir, opts)
     opts = opts or {}
-    -- Validate up-front so errors surface at add-time, not build-time.
-    encode_83(name)
+    -- Long names are fine now (emitted as VFAT LFN at build time); just guard
+    -- the LFN limit so errors surface at add-time, not build-time.
+    if #name == 0 or #name > 255 then
+        error("FAT16: invalid name length: '" .. name .. "'", 2)
+    end
     return {
         name          = name:upper(),
         is_dir        = is_dir,
@@ -267,6 +324,31 @@ local function dir_entry(name11, attr, first_cluster, size, mtime, platform)
     return ffi.string(buf, 32)
 end
 
+-- Emit the directory entries for one child: a single 8.3 dirent when the name
+-- fits, else a VFAT LFN slot chain + a generated 8.3-alias dirent. `used` is the
+-- per-directory set of taken 8.3 names (mutated to reserve short names/aliases
+-- so an alias can't collide with a sibling).
+local function child_dirents(child, used, now, platform)
+    local size  = child.is_dir and 0 or #child.data
+    local short = try_83(child.name)
+    if short then
+        used[short] = true
+        return dir_entry(short, child.attr, child.first_cluster, size,
+                         child.mtime or now, platform)
+    end
+    local alias = make_short_alias(child.name, used)
+    return lfn_dirents(child.name, alias)
+        .. dir_entry(alias, child.attr, child.first_cluster, size,
+                     child.mtime or now, platform)
+end
+
+-- Number of 32-byte dirents a child occupies (1 for 8.3, else LFN slots + 1) —
+-- used to size directory clusters before they're written.
+local function child_dirent_count(child)
+    if try_83(child.name) then return 1 end
+    return math.floor((#child.name + 12) / 13) + 1
+end
+
 -- ctx = { start_lba, sector_size }
 --   start_lba is the partition's absolute LBA on the disk; goes into
 --   the FAT16 BPB HiddenSectors field.  The composer passes this in.
@@ -328,7 +410,10 @@ function FatVolume:build(platform, ctx)
     local function assign(entry, parent_is_root)
         if entry.is_dir then
             if entry ~= self.root then
-                local n_entries = 2 + #entry.children
+                local n_entries = 2   -- "." and ".."
+                for _, c in ipairs(entry.children) do
+                    n_entries = n_entries + child_dirent_count(c)
+                end
                 local est_bytes = n_entries * 32
                 if est_bytes < 32 then est_bytes = 32 end
                 local first = alloc_clusters(est_bytes)
@@ -401,12 +486,10 @@ function FatVolume:build(platform, ctx)
         root_bytes_buf[#root_bytes_buf + 1] = dir_entry(
             lbl, ATTR_VOLUME_ID, 0, 0, self.now, platform)
     end
+    local root_used = {}
     for _, child in ipairs(self.root.children) do
-        local size = (child.is_dir) and 0 or #child.data
-        root_bytes_buf[#root_bytes_buf + 1] = dir_entry(
-            encode_83(child.name), child.attr,
-            child.first_cluster, size,
-            child.mtime or self.now, platform)
+        root_bytes_buf[#root_bytes_buf + 1] =
+            child_dirents(child, root_used, self.now, platform)
     end
     local root_str = table.concat(root_bytes_buf)
     copy_to_img(root_lba * SECTOR_SIZE, root_str, #root_str)
@@ -422,12 +505,10 @@ function FatVolume:build(platform, ctx)
             parts[2] = dir_entry(
                 "..         ", ATTR_DIRECTORY,
                 parent_cluster, 0, entry.mtime or self.now, platform)
+            local used = { [".          "] = true, ["..         "] = true }
             for _, child in ipairs(entry.children) do
-                local size = (child.is_dir) and 0 or #child.data
-                parts[#parts + 1] = dir_entry(
-                    encode_83(child.name), child.attr,
-                    child.first_cluster, size,
-                    child.mtime or self.now, platform)
+                parts[#parts + 1] =
+                    child_dirents(child, used, self.now, platform)
             end
             local s = table.concat(parts)
             local lba = data_lba + (entry.first_cluster - 2) * spc
