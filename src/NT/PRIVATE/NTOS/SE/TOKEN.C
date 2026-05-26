@@ -731,6 +731,19 @@ Return Value:
     Privileges[19].Luid = SeSystemtimePrivilege;
     Privileges[19].Attributes = 0;    // disabled, not enabled by default
 
+    //
+    // MicroNT divergence from stock NT 3.5: assign SeSystemProfile-
+    // Privilege to the system token so NtCreateProfile(Process=NULL)
+    // / "profile all processes" mode is callable from anything that
+    // inherits the system token (selftest, init, smss).  Stock NT
+    // expected csrss/perfmon to get this privilege via SAM at user
+    // logon; we skip that whole layer and grant directly on the
+    // system token.  Disabled by default -- callers must with_privileges
+    // it explicitly, same convention as Backup/Restore/Shutdown above.
+    //
+    Privileges[20].Luid = SeSystemProfilePrivilege;
+    Privileges[20].Attributes = 0;    // disabled, not enabled by default
+
     //BEFORE ADDING ANOTHER PRIVILEGE ^^ HERE ^^ CHECK THE ARRAY BOUND
     //ALSO INCREMENT THE PRIVILEGE COUNT IN THE SepCreateToken() call
 
@@ -847,7 +860,7 @@ Return Value:
                  2,                         // GroupCount
                  GroupIds,
                  512,                       // see call to ExAllocatePool above
-                 20,                        // privileges
+                 21,                        // privileges (was 20; +SystemProfile)
                  Privileges,
                  sizeof(Privileges),
                  Owner,

@@ -46,6 +46,7 @@ require('test.lpc')
 -- today, so order between the two is loose).
 require('test.harderr')
 require('test.harderr_xproc')
+require('test.ex_misc')   -- SYSTIME / PROFILE / EVENTPR thread vars / DBGCTRL / SYSENV
 require('test.sys')
 require('test.tree')
 require('test.thread')

@@ -44,6 +44,37 @@ t.test("event: reset() clears a signaled notification event", function()
     e:close()
 end)
 
+t.test("event: clear() resets state (NtClearEvent vs NtResetEvent)", function()
+    -- NtClearEvent and NtResetEvent both reset the event; the
+    -- difference is NtResetEvent returns the previous state via an
+    -- out-param and NtClearEvent doesn't.  ke.event:clear() wraps
+    -- the cheap one.  EX/EVENT.C marked uncovered until this test.
+    local e = ke.event{ signaled = true }
+    t.eq(e:wait(0), true, "starts signaled")
+    e:clear()
+    t.eq(e:wait(0), false, "clear() resets state -> wait times out")
+    e:close()
+end)
+
+t.test("event: pulse() releases waiters then auto-resets", function()
+    -- NtPulseEvent: signals + immediately clears.  With no waiter
+    -- pending it's a no-op transition (signaled briefly, then
+    -- non-signaled).  Test: start unsignaled, pulse, wait must
+    -- time out (the brief signaled window already closed).  Then
+    -- signal explicitly + pulse + wait must STILL time out (pulse
+    -- clears on the way through).
+    local e = ke.event()
+    e:pulse()
+    t.eq(e:wait(0), false, "pulse() on already-clear event leaves clear")
+
+    e:signal()
+    t.eq(e:wait(0), true, "signal makes wait return true")
+    e:pulse()
+    t.eq(e:wait(0), false,
+         "pulse() on signaled event releases-and-clears -> wait times out")
+    e:close()
+end)
+
 -- ------------------------------------------------------------------
 -- Mutex
 -- ------------------------------------------------------------------

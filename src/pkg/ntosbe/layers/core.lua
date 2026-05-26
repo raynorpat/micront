@@ -61,6 +61,17 @@ function M.registry(h, ctx)
         :set_expand_sz("SystemRoot",  "%SystemDrive%\\")
         :set_expand_sz("Path",        "%SystemRoot%\\System32")
 
+    -- Nls\Language\Default — system locale ID (LCID) as a hex string,
+    -- read by the kernel's ControlVector at boot (CONFIG/CMDAT3.C:274,
+    -- CMCONTRL.C:222-249).  Parses into PsDefaultSystemLocaleId; if
+    -- the value is missing the kernel defaults to 0x00000409 (en-US),
+    -- so omitting this key only matters for callers that *write* the
+    -- value via NtSetDefaultLocale -- those need the key to exist so
+    -- ZwSetValueKey can target it (SYSINFO.C:280-313).  Seed with
+    -- en-US to match the kernel's fallback.
+    control:key("Nls\\Language")
+        :set_sz("Default", "00000409")
+
     -- ServiceGroupOrder — order system-start drivers load in.  The
     -- group set is stable; layers only place their services into a
     -- group named here.  Video Init (port driver) before Video

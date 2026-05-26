@@ -147,6 +147,82 @@ NTSTATUS __stdcall NtDisplayString(UNICODE_STRING *String);
 NTSTATUS __stdcall NtRaiseException(void *ExceptionRecord,
                                     void *ContextRecord,
                                     unsigned char FirstChance);
+
+/* SYSTIME.C -- wall-clock and timer-resolution control. */
+NTSTATUS __stdcall NtSetSystemTime(LARGE_INTEGER *NewTime,
+                                   LARGE_INTEGER *PreviousTime);
+NTSTATUS __stdcall NtQueryTimerResolution(ULONG *MaximumTime,
+                                          ULONG *MinimumTime,
+                                          ULONG *CurrentTime);
+NTSTATUS __stdcall NtSetTimerResolution(ULONG DesiredTime,
+                                        unsigned char SetResolution,
+                                        ULONG *ActualTime);
+
+/* PROFILE.C -- kernel sampling profiler.  ProfileBase + ProfileSize
+ * define the virtual-address range the sampler watches; on every clock
+ * tick the kernel reads EIP, finds which BucketSize-bucket it falls
+ * into within that range, and increments the corresponding ULONG in
+ * the user-supplied Buffer (BufferSize bytes, must hold
+ * ProfileSize/BucketSize ULONGs).
+ *
+ * NT 3.5 signatures match PROFILE.C verbatim: no ProfileSource or
+ * ProcessorMask args (those landed in NT 4 alongside PMC-driven
+ * sampling).  Get this wrong and the kernel reads garbage from the
+ * stack for BufferSize and returns STATUS_INVALID_PARAMETER. */
+NTSTATUS __stdcall NtCreateProfile(HANDLE *ProfileHandle,
+                                   HANDLE Process,
+                                   void *ProfileBase,
+                                   ULONG ProfileSize,
+                                   ULONG BucketSize,
+                                   ULONG *Buffer,
+                                   ULONG BufferSize);
+NTSTATUS __stdcall NtStartProfile(HANDLE ProfileHandle);
+NTSTATUS __stdcall NtStopProfile(HANDLE ProfileHandle);
+NTSTATUS __stdcall NtSetIntervalProfile(ULONG Interval);
+NTSTATUS __stdcall NtQueryIntervalProfile(ULONG *Interval);
+
+/* EVENTPR.C -- thread-side EventPair atomic set+wait variants.
+ * Both take no arguments; the kernel uses the current thread's
+ * ImpersonationToken's connected port pair (set up by csrss in stock
+ * NT).  Almost certainly unimplemented on MicroNT -- we never set up
+ * the per-thread EventPair attachment in PsCreateThread; bound here
+ * for completeness, will return STATUS_NO_EVENT_PAIR on the actual
+ * call.  Per-process EventPair surface (via NtCreateEventPair and
+ * NtWaitHighEventPair / NtSetLowWaitHighEventPair etc.) is already
+ * covered above. */
+NTSTATUS __stdcall NtSetHighWaitLowThread(void);
+NTSTATUS __stdcall NtSetLowWaitHighThread(void);
+
+/* DBGCTRL.C -- kernel debugger control surface.  Used by the KD stub
+ * client when wired against a remote debugger; on MicroNT we don't
+ * normally run with KD attached so most commands return failure.
+ * Bound for completeness; no production caller today. */
+NTSTATUS __stdcall NtSystemDebugControl(int Command,
+                                        void *InputBuffer,
+                                        ULONG InputBufferLength,
+                                        void *OutputBuffer,
+                                        ULONG OutputBufferLength,
+                                        ULONG *ReturnLength);
+
+/* SYSENV.C -- firmware environment variables.  Originally NT/Alpha's
+ * ARC firmware env block; on modern x86 this maps to UEFI variables
+ * when EFI is in play.  Off-spec on MicroNT (HAL doesn't expose
+ * NV-RAM); bound for completeness, the call returns failure. */
+NTSTATUS __stdcall NtQuerySystemEnvironmentValue(UNICODE_STRING *VariableName,
+                                                 wchar_t *VariableValue,
+                                                 unsigned short ValueLength,
+                                                 unsigned short *ReturnLength);
+NTSTATUS __stdcall NtSetSystemEnvironmentValue(UNICODE_STRING *VariableName,
+                                               UNICODE_STRING *VariableValue);
+
+/* SYSINFO.C -- default-locale ID accessors.
+ * LCID is a ULONG (low word = lang-id, high word = sortspecifier);
+ * UserProfile=TRUE picks the per-user default, FALSE picks the
+ * system-wide setting. */
+NTSTATUS __stdcall NtQueryDefaultLocale(unsigned char UserProfile,
+                                        ULONG *DefaultLocaleId);
+NTSTATUS __stdcall NtSetDefaultLocale(unsigned char UserProfile,
+                                      ULONG DefaultLocaleId);
 ]]
 
 local M = {}
@@ -595,6 +671,214 @@ function M.NtRaiseException(exception_record, context_record, first_chance)
     local st = ntdll.NtRaiseException(exception_record, context_record,
                                       first_chance and 1 or 0)
     if err.is_error(st) then err.raise('NtRaiseException', st) end
+end
+
+-- ------------------------------------------------------------------
+-- SYSTIME.C -- wall clock and timer-resolution control.
+-- ------------------------------------------------------------------
+
+-- Set the wall-clock time.  `new_time` is a LARGE_INTEGER cdata (the
+-- caller's NT-format 100ns-since-1601 timestamp).  Returns the
+-- previous time as a LARGE_INTEGER (caller can compare to detect
+-- a clock jump).
+function M.NtSetSystemTime(new_time)
+    local prev = ffi.new('LARGE_INTEGER')
+    local st = ntdll.NtSetSystemTime(new_time, prev)
+    if err.is_error(st) then err.raise('NtSetSystemTime', st) end
+    return prev
+end
+
+-- Returns the timer-resolution triple as { max, min, current } in
+-- units of 100ns ticks.  Smaller values = finer resolution.  Typical
+-- NT values: max ~156250 (~15.6ms), min ~10000 (~1ms), current
+-- depends on whether anyone has called NtSetTimerResolution.
+function M.NtQueryTimerResolution()
+    local maxr = ffi.new('ULONG[1]')
+    local minr = ffi.new('ULONG[1]')
+    local cur  = ffi.new('ULONG[1]')
+    local st = ntdll.NtQueryTimerResolution(maxr, minr, cur)
+    if err.is_error(st) then err.raise('NtQueryTimerResolution', st) end
+    return {
+        max     = tonumber(maxr[0]),
+        min     = tonumber(minr[0]),
+        current = tonumber(cur[0]),
+    }
+end
+
+-- Request the timer resolution.  `desired` is in 100ns ticks; the
+-- kernel rounds to the closest supported value and returns that as
+-- `actual`.  set=true requests the change, set=false relinquishes
+-- this caller's request (the resolution is the minimum across all
+-- active requesters).
+function M.NtSetTimerResolution(desired, set)
+    local actual = ffi.new('ULONG[1]')
+    local st = ntdll.NtSetTimerResolution(desired, set and 1 or 0, actual)
+    if err.is_error(st) then err.raise('NtSetTimerResolution', st) end
+    return tonumber(actual[0])
+end
+
+-- ------------------------------------------------------------------
+-- PROFILE.C -- kernel sampling profiler.
+--
+-- Each clock tick the kernel reads EIP; if it falls inside
+-- [ProfileBase, ProfileBase+ProfileSize), it indexes into Buffer by
+-- (EIP - ProfileBase) / BucketSize and increments that ULONG.  The
+-- caller allocates Buffer (BufferSize bytes, must be at least
+-- ProfileSize/BucketSize ULONGs) and walks it after NtStopProfile to
+-- find the hot spots.
+--
+-- Sources: 0 = ProfileTime (the kernel timer interrupt), additional
+-- sources on later NT are PMC-driven.  ProcessorMask is the affinity
+-- mask of CPUs the sampler should track (0 = system default = all).
+-- ------------------------------------------------------------------
+
+local PROFILE_ALL_ACCESS = 0x000F0001  -- STANDARD_RIGHTS_REQUIRED | PROFILE_CONTROL
+
+function M.NtCreateProfile(opts)
+    -- opts: { process (handle, nil=self), base (cdata), size,
+    --         bucket_size_log2, buffer (cdata), buffer_size }
+    --
+    -- ABI gotcha worth documenting in big letters: `bucket_size_log2`
+    -- is the LOG BASE 2 of the bucket size in bytes, NOT the bucket
+    -- size itself (PROFILE.C:237-243 + the bounds check at 304:
+    --   if (BucketSize > 31 || BucketSize < 2) return INVALID_PARAMETER
+    -- ).  So 6 means 64-byte buckets, 12 means 4 KB buckets, etc.
+    -- The kernel's `BucketSize - 2` shift then turns log2-bytes into
+    -- log2-DWORDs (since each bucket is one DWORD counter), bounding
+    -- BufferSize >= RangeSize >> (BucketSize - 2).
+    --
+    -- NT 3.5 NtCreateProfile is 7-arg only; no ProfileSource /
+    -- ProcessorMask parameters (those landed in NT 4).
+    local proc_h = opts.process and handle.raw(opts.process) or nil
+    local h = ffi.new('HANDLE[1]')
+    local st = ntdll.NtCreateProfile(h, proc_h,
+                                     ffi.cast('void *', opts.base),
+                                     opts.size,
+                                     opts.bucket_size_log2,
+                                     ffi.cast('ULONG *', opts.buffer),
+                                     opts.buffer_size)
+    if err.is_error(st) then err.raise('NtCreateProfile', st) end
+    return handle.wrap(h[0])
+end
+
+function M.NtStartProfile(h)
+    local st = ntdll.NtStartProfile(handle.raw(h))
+    if err.is_error(st) then err.raise('NtStartProfile', st) end
+end
+
+function M.NtStopProfile(h)
+    local st = ntdll.NtStopProfile(handle.raw(h))
+    if err.is_error(st) then err.raise('NtStopProfile', st) end
+end
+
+-- Set the system-wide sampling interval in 100ns ticks (NT 3.5 has
+-- exactly one source, the timer; later NT adds the Source arg).
+-- Kernel clamps to its supported range.
+function M.NtSetIntervalProfile(interval)
+    local st = ntdll.NtSetIntervalProfile(interval)
+    if err.is_error(st) then err.raise('NtSetIntervalProfile', st) end
+end
+
+-- Returns the active sampling interval in 100ns ticks.
+function M.NtQueryIntervalProfile()
+    local interval = ffi.new('ULONG[1]')
+    local st = ntdll.NtQueryIntervalProfile(interval)
+    if err.is_error(st) then err.raise('NtQueryIntervalProfile', st) end
+    return tonumber(interval[0])
+end
+
+-- ------------------------------------------------------------------
+-- EVENTPR.C -- thread-side EventPair atomic set+wait variants.
+--
+-- These operate on the calling thread's EventPair attachment, which
+-- in stock NT is set up by csrss via NtSetInformationThread(
+-- ThreadEventPair).  MicroNT has no csrss path that wires this, so
+-- bare calls return STATUS_NO_EVENT_PAIR.  Bound for completeness
+-- and to surface that error cleanly to callers that try them.
+-- ------------------------------------------------------------------
+
+function M.NtSetHighWaitLowThread()
+    local st = ntdll.NtSetHighWaitLowThread()
+    if err.is_error(st) then err.raise('NtSetHighWaitLowThread', st) end
+end
+
+function M.NtSetLowWaitHighThread()
+    local st = ntdll.NtSetLowWaitHighThread()
+    if err.is_error(st) then err.raise('NtSetLowWaitHighThread', st) end
+end
+
+-- ------------------------------------------------------------------
+-- DBGCTRL.C -- kernel debugger control.
+--
+-- Raw binding only.  Commands are a small enum (SysDbgQueryModule-
+-- Information, SysDbgQueryTraceInformation, SysDbgGetTriageDump,
+-- ...); the caller builds InputBuffer per the command and reads from
+-- OutputBuffer.  Most commands fail unless KD is attached or the
+-- caller holds SeDebugPrivilege.  Returns the syscall NTSTATUS plus
+-- the actual ReturnLength.
+-- ------------------------------------------------------------------
+
+function M.NtSystemDebugControl(command, input_buf, input_len,
+                                output_buf, output_len)
+    local ret = ffi.new('ULONG[1]')
+    local st = ntdll.NtSystemDebugControl(command, input_buf,
+                                          input_len or 0,
+                                          output_buf, output_len or 0,
+                                          ret)
+    return err.normalize(st), tonumber(ret[0])
+end
+
+-- ------------------------------------------------------------------
+-- SYSENV.C -- firmware environment variables.
+--
+-- Originally NT/Alpha ARC firmware env block; on EFI x86 this maps
+-- to UEFI runtime services.  MicroNT's HAL doesn't expose NV-RAM, so
+-- the calls return STATUS_NOT_IMPLEMENTED.  Bound for completeness.
+-- Returns the raw NTSTATUS so the caller can distinguish "the
+-- variable isn't defined" from "we don't have an EFI surface at all".
+-- ------------------------------------------------------------------
+
+function M.NtQuerySystemEnvironmentValue(name)
+    local ns = require('nt.dll.str').to_utf16(name)
+    local buf = ffi.new('wchar_t[?]', 256)
+    local ret = ffi.new('USHORT[1]')
+    local st = ntdll.NtQuerySystemEnvironmentValue(
+        ffi.cast('UNICODE_STRING *', ns),
+        buf, 256 * 2, ret)
+    local nst = err.normalize(st)
+    if nst == 0 then
+        return require('nt.dll.str').from_wchars(buf, tonumber(ret[0]) / 2)
+    end
+    return nil, nst
+end
+
+function M.NtSetSystemEnvironmentValue(name, value)
+    local ns_name  = require('nt.dll.str').to_utf16(name)
+    local ns_value = require('nt.dll.str').to_utf16(value)
+    local st = ntdll.NtSetSystemEnvironmentValue(
+        ffi.cast('UNICODE_STRING *', ns_name),
+        ffi.cast('UNICODE_STRING *', ns_value))
+    return err.normalize(st)
+end
+
+-- ------------------------------------------------------------------
+-- SYSINFO.C -- default-locale accessors.
+--
+-- LCID = LANG_ID | SORT_ID<<16 (the typical user-mode 0x0409 = en-US
+-- is just LANG_ID=0x0409 with default sort).  `user_profile` true
+-- targets the per-user default, false the system default.
+-- ------------------------------------------------------------------
+
+function M.NtQueryDefaultLocale(user_profile)
+    local lcid = ffi.new('ULONG[1]')
+    local st = ntdll.NtQueryDefaultLocale(user_profile and 1 or 0, lcid)
+    if err.is_error(st) then err.raise('NtQueryDefaultLocale', st) end
+    return tonumber(lcid[0])
+end
+
+function M.NtSetDefaultLocale(user_profile, lcid)
+    local st = ntdll.NtSetDefaultLocale(user_profile and 1 or 0, lcid)
+    if err.is_error(st) then err.raise('NtSetDefaultLocale', st) end
 end
 
 -- ------------------------------------------------------------------

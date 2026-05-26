@@ -166,10 +166,14 @@ t.test("query 'type' = 'primary' for process token", function()
     tok:close()
 end)
 
-t.test("query 'privileges' returns the 20-privilege set with right flags", function()
+t.test("query 'privileges' returns the 21-privilege set with right flags", function()
     local tok = se.open_process_token()
     local pr  = se.query(tok, 'privileges')
-    t.eq(#pr, 20, "system token has 20 privileges (SE/TOKEN.C:655-732)")
+    -- MicroNT adds SeSystemProfilePrivilege (index 20) to the stock
+    -- NT 3.5 20-entry list -- stock NT expected SAM/csrss to grant
+    -- it at logon, we grant directly on the system token instead.
+    -- See SE/TOKEN.C:655-744.
+    t.eq(#pr, 21, "system token has 21 privileges (SE/TOKEN.C:655-744)")
 
     local by_name = {}
     for _, p in ipairs(pr) do by_name[p.name] = p end
@@ -190,6 +194,14 @@ t.test("query 'privileges' returns the 20-privilege set with right flags", funct
 
     t.ok(by_name.SeChangeNotifyPrivilege,         "SeChangeNotifyPrivilege present")
     t.ok(by_name.SeChangeNotifyPrivilege.enabled, "SeChangeNotifyPrivilege enabled")
+
+    -- MicroNT addition: SeSystemProfilePrivilege is assigned-but-
+    -- disabled so NtCreateProfile(Process=NULL) is reachable via
+    -- with_privileges (see test/ex_misc.lua).
+    t.ok(by_name.SeSystemProfilePrivilege,
+         "SeSystemProfilePrivilege present (MicroNT-specific)")
+    t.eq(by_name.SeSystemProfilePrivilege.enabled, false,
+         "SeSystemProfilePrivilege disabled by default")
     tok:close()
 end)
 
@@ -208,7 +220,7 @@ t.test("query 'statistics' returns populated counts", function()
     local s   = se.query(tok, 'statistics')
     t.eq(s.token_type,      'primary')
     t.eq(s.group_count,     2,  "matches groups query")
-    t.eq(s.privilege_count, 20, "matches privileges query")
+    t.eq(s.privilege_count, 21, "matches privileges query")
     -- Token IDs are LUIDs allocated at boot; non-zero proves the
     -- kernel actually populated them.
     t.ok(s.token_id.low ~= 0 or s.token_id.high ~= 0, "token_id non-zero")
