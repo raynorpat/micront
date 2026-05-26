@@ -67,3 +67,12 @@ EXPORTS
     RegUnLoadKeyW
 
     IsTextUnicode
+
+;   --- Event log no-op stubs (evtlog.c) ---
+;   No eventlog.exe / EventLog service on MicroNT.  RegisterEventSourceA
+;   returns NULL (OpenSSL's xsyslog and similar callers handle this and
+;   fall back to stderr); Report / Deregister return FALSE+INVALID_HANDLE
+;   in case anything passes a bogus handle through.
+    RegisterEventSourceA
+    ReportEventA
+    DeregisterEventSource

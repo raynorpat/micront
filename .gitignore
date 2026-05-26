@@ -101,6 +101,14 @@ src/NT/PUBLIC/SDK/LIB/I386/basesrv.dll
 src/NT/PUBLIC/SDK/LIB/I386/basesrv.exp
 src/NT/PUBLIC/SDK/LIB/I386/basesrv.lib
 
+# Winsock
+src/NT/PUBLIC/SDK/LIB/I386/ws2_32.dll
+src/NT/PUBLIC/SDK/LIB/I386/ws2_32.exp
+src/NT/PUBLIC/SDK/LIB/I386/ws2_32.lib
+src/NT/PUBLIC/SDK/LIB/I386/wsock32.dll
+src/NT/PUBLIC/SDK/LIB/I386/wsock32.exp
+src/NT/PUBLIC/SDK/LIB/I386/wsock32.lib
+
 # GUI-side drivers + their export libs. Like csrsrv/basesrv, these are
 # all built from in-tree sources on every run.
 src/NT/PUBLIC/SDK/LIB/I386/i8042prt.sys

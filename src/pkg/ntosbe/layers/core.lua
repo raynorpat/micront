@@ -146,6 +146,8 @@ function M.files(paths)
         { dest = "System32/advapi32.dll", src = paths.sdk_lib .. "/advapi32.dll" },
         { dest = "System32/user32.dll",   src = paths.sdk_lib .. "/user32.dll"   },
         { dest = "System32/shell32.dll",  src = paths.sdk_lib .. "/shell32.dll"  },
+        { dest = "System32/ws2_32.dll",   src = paths.sdk_lib .. "/ws2_32.dll"   },
+        { dest = "System32/wsock32.dll",  src = paths.sdk_lib .. "/wsock32.dll"  },
 
         -- Base system drivers — loaded post-boot by IoLoadDriver from
         -- \SystemRoot\System32\Drivers, so they stay on the root volume.

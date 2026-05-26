@@ -475,7 +475,13 @@ symhelp     0x21000000  0x01000000
 ;
 ; The following is for the Streams/Sockets dll's
 ;
-wsock32     0x75000000  0x00400000
+; NT 3.5 only had wsock32 at 0x75000000 (no ws2_32 existed).  When MicroNT
+; later added ws2_32 it took the same slot on the assumption wsock32 would
+; never be built -- now that we ship a wsock32 forwarder over ws2_32 (see
+; WINDOWS/BASE/WSOCK32) the two collide, so wsock32 gets its own slot in
+; the 9 MB gap between profile (0x71600000) and the kbd block (0x72000000).
+wsock32     0x71AB0000  0x00100000
+ws2_32      0x75000000  0x00400000
 winstrm     0x75400000  0x00100000
 inetmib1    0x75500000  0x00100000
 lmmib2      0x75600000  0x00100000

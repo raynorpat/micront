@@ -1,0 +1,61 @@
+LIBRARY WSOCK32
+
+DESCRIPTION 'MicroNT Winsock 1.1 forwarder over WS2_32'
+
+EXPORTS
+
+;
+; Pure PE-format forwarders to ws2_32.  No per-DLL state, no v11
+; option remapping (Python's _ssl.pyd -- our reason for existing --
+; doesn't touch the IP multicast options that classic NT wsock32
+; used to rewrite, and no caller we care about does either).
+;
+; Ordinals match the canonical Winsock 1.1 table (NT 3.x through
+; XP); functions absent from ws2_32 (the WSAAsync* block at 101-110,
+; the blocking-hook block at 113-114, the MSWSOCK extensions at
+; 1100+) are simply omitted.  _ssl.pyd does not import any of these.
+;
+
+;   --- BSD socket calls (1-23) ---
+    accept            = WS2_32.accept            @1
+    bind              = WS2_32.bind              @2
+    closesocket       = WS2_32.closesocket       @3
+    connect           = WS2_32.connect           @4
+    getpeername       = WS2_32.getpeername       @5
+    getsockname       = WS2_32.getsockname       @6
+    getsockopt        = WS2_32.getsockopt        @7
+    htonl             = WS2_32.htonl             @8
+    htons             = WS2_32.htons             @9
+    inet_addr         = WS2_32.inet_addr         @10
+    inet_ntoa         = WS2_32.inet_ntoa         @11
+    ioctlsocket       = WS2_32.ioctlsocket       @12
+    listen            = WS2_32.listen            @13
+    ntohl             = WS2_32.ntohl             @14
+    ntohs             = WS2_32.ntohs             @15
+    recv              = WS2_32.recv              @16
+    recvfrom          = WS2_32.recvfrom          @17
+    select            = WS2_32.select            @18
+    send              = WS2_32.send              @19
+    sendto            = WS2_32.sendto            @20
+    setsockopt        = WS2_32.setsockopt        @21
+    shutdown          = WS2_32.shutdown          @22
+    socket            = WS2_32.socket            @23
+
+;   --- Resolver block (51-57) ---
+    gethostbyaddr     = WS2_32.gethostbyaddr     @51
+    gethostbyname     = WS2_32.gethostbyname     @52
+    getprotobyname    = WS2_32.getprotobyname    @53
+    getprotobynumber  = WS2_32.getprotobynumber  @54
+    getservbyname     = WS2_32.getservbyname     @55
+    getservbyport     = WS2_32.getservbyport     @56
+    gethostname       = WS2_32.gethostname       @57
+
+;   --- WSA 1.1 startup / error (111-116; 113-114 absent in ws2_32) ---
+    WSAGetLastError   = WS2_32.WSAGetLastError   @111
+    WSASetLastError   = WS2_32.WSASetLastError   @112
+    WSAStartup        = WS2_32.WSAStartup        @115
+    WSACleanup        = WS2_32.WSACleanup        @116
+
+;   --- Misc ---
+    __WSAFDIsSet      = WS2_32.__WSAFDIsSet      @151
+    WSARecvEx         = WS2_32.WSARecvEx         @1107

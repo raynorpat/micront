@@ -1,0 +1,66 @@
+!IF 0
+
+Copyright (c) 1989  Microsoft Corporation
+
+Module Name:
+
+    sources.
+
+Abstract:
+
+    ws2_32.dll -- MicroNT-owned.  A flat BSD-sockets layer over the NT 3.50
+    AFD driver, ported from NT 3.5's wsock32 (which already speaks exactly
+    this AFD: IOCTL_AFD_* / \Device\Afd / \Device\Tcp / \Device\Udp).  The
+    Winsock helper-DLL / provider catalog is collapsed to a single hardcoded
+    TCP/IP transport descriptor (helper.c) because MicroNT supports only IPv4
+    + TCP/UDP (+ raw IP); WSAAsync* is dropped (no message pump); the DNS
+    resolver / name-service provider is dropped (getaddrinfo = numeric +
+    hosts file).
+
+!ENDIF
+
+MAJORCOMP=windows
+MINORCOMP=base
+
+TARGETNAME=ws2_32
+TARGETPATH=$(BASEDIR)\public\sdk\lib
+TARGETTYPE=DYNLINK
+DLLENTRY=SockInitialize
+
+LINKLIBS=$(BASEDIR)\public\sdk\lib\*\kernel32.lib \
+         $(BASEDIR)\public\sdk\lib\*\advapi32.lib \
+         $(BASEDIR)\public\sdk\lib\*\ntdll.lib \
+         $(BASEDIR)\public\sdk\lib\*\libcntpr.lib
+
+INCLUDES=..\inc;..\..\inc;..\..\..\inc
+
+NTDEBUGTYPE=coff
+
+SOURCES= init.c \
+         socket.c \
+         bind.c \
+         connect.c \
+         listen.c \
+         accept.c \
+         recv.c \
+         send.c \
+         select.c \
+         shutdown.c \
+         getname.c \
+         sockopt.c \
+         sockproc.c \
+         wsamisc.c \
+         i_addr.c \
+         i_ntoa.c \
+         byteswap.c \
+         sockerr.c \
+         sockdata.c \
+         strcscmp.c \
+         helper.c \
+         resolver.c
+# writev.c dropped: scatter/gather writev is unexported + pulls malloc/free;
+# not needed for the bare-essentials BSD surface.
+
+UMTYPE=console
+
+DLLDEF=ws2_32.def

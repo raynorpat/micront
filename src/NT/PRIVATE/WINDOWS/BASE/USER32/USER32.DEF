@@ -67,3 +67,14 @@ EXPORTS
 ;   --- string resources (clres.c) ---
     LoadStringA
     LoadStringW
+
+;   --- headless / OpenSSL-compat stubs (stub.c) ---
+;   No win32k / csrss USER server in MicroNT, so the "is there a user
+;   here?" probes (GetDesktopWindow, GetProcessWindowStation,
+;   GetUserObjectInformationW) return the truthful "nothing here"
+;   answer; MessageBoxA tees its caption + text to stderr and returns
+;   IDOK so anyone trying to surface a diagnostic still gets it.
+    GetDesktopWindow
+    GetProcessWindowStation
+    GetUserObjectInformationW
+    MessageBoxA

@@ -1,0 +1,44 @@
+!IF 0
+
+Copyright (c) MicroNT contributors
+
+Module Name:
+
+    sources.
+
+Abstract:
+
+    wsock32.dll -- Winsock 1.1 forwarder DLL.  Every export is a
+    PE-format forwarder string ("WS2_32.<name>") pointing at the
+    same-named export in ws2_32.dll.  No code; LINK is given a
+    tiny wsock32.c just so it has an .obj to combine with the
+    .def.  Real Windows ships wsock32.dll as the same kind of
+    forwarder; this matches that contract.
+
+    Consumers: Python 2.5's _ssl.pyd (built against OpenSSL's
+    legacy wsock32.lib) plus any other 1990s-vintage Win32
+    extension that didn't get rebuilt against ws2_32.
+
+!ENDIF
+
+MAJORCOMP=windows
+MINORCOMP=base
+
+TARGETNAME=wsock32
+TARGETPATH=$(BASEDIR)\public\sdk\lib
+TARGETTYPE=DYNLINK
+DLLENTRY=WsockDllInitialize
+
+LINKLIBS=$(BASEDIR)\public\sdk\lib\*\kernel32.lib \
+         $(BASEDIR)\public\sdk\lib\*\ntdll.lib \
+         $(BASEDIR)\public\sdk\lib\*\ws2_32.lib
+
+INCLUDES=..\inc;..\..\inc;..\..\..\inc
+
+NTDEBUGTYPE=coff
+
+SOURCES= wsock32.c
+
+UMTYPE=console
+
+DLLDEF=wsock32.def

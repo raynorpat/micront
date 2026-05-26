@@ -43,7 +43,8 @@ SOURCES= init.c \
          oemxlate.c \
          rect.c \
          wsprintf.c \
-         clres.c
+         clres.c \
+         stub.c
 
 UMTYPE=console
 

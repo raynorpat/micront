@@ -515,6 +515,36 @@ function M.main(opts)
     end
     clean_dirs.windows_shell32 = { WIN .. "/BASE/SHELL32", WIN .. "/BASE/SHELL32/obj" }
 
+    -- ----- WINDOWS/BASE/WS2_32 — ws2_32.dll (MicroNT-owned).  Flat BSD
+    -- sockets over the NT 3.50 AFD, ported from wsock32; the helper-DLL
+    -- catalog is collapsed to a single hardcoded TCP/IP descriptor (helper.c)
+    -- and WSAAsync*/resolver are dropped.  Links kernel32 + advapi32 + ntdll.
+    -- Output: PUBLIC/SDK/LIB/i386/{ws2_32.lib, ws2_32.dll}.
+    targets.windows_ws2_32 = function()
+        local since = platform.now()
+        local rc = run_nmake(WIN .. "/BASE/WS2_32",
+                         "WINDOWS/BASE/WS2_32 - ws2_32.dll",
+                         { "makedll=1" })
+        if rc ~= 0 then return rc end
+        return splitsym_dir(PUB_LIB, since)
+    end
+    clean_dirs.windows_ws2_32 = { WIN .. "/BASE/WS2_32", WIN .. "/BASE/WS2_32/obj" }
+
+    -- ----- WINDOWS/BASE/WSOCK32 — Winsock 1.1 forwarder DLL.  Pure
+    -- PE-format forwarder strings to ws2_32 (see WSOCK32.DEF); no code
+    -- of its own.  Exists for binaries built against the legacy
+    -- wsock32.lib -- Python 2.5's _ssl.pyd is the immediate consumer.
+    -- Output: PUBLIC/SDK/LIB/i386/{wsock32.lib, wsock32.dll}.
+    targets.windows_wsock32 = function()
+        local since = platform.now()
+        local rc = run_nmake(WIN .. "/BASE/WSOCK32",
+                         "WINDOWS/BASE/WSOCK32 - wsock32.dll (forwarder)",
+                         { "makedll=1" })
+        if rc ~= 0 then return rc end
+        return splitsym_dir(PUB_LIB, since)
+    end
+    clean_dirs.windows_wsock32 = { WIN .. "/BASE/WSOCK32", WIN .. "/BASE/WSOCK32/obj" }
+
     -- ----- WINDOWS/CMD — NT 3.5 cmd.exe lifted from stuff/.
     -- NMAKE shells inline commands (@if exist, &&, |, redirections)
     -- through COMSPEC; without a working cmd.exe those _spawn calls
@@ -1105,7 +1135,8 @@ function M.main(opts)
 
     local USERLAND_TARGETS = {
         "rtl_user", "ntdll", "urtl", "windows_base_client", "windows_advapi",
-        "windows_user32", "windows_shell32", "cmd",
+        "windows_user32", "windows_shell32", "windows_ws2_32", "windows_wsock32",
+        "cmd",
     }
 
     local function build_group(name, list)

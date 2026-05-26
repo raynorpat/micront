@@ -49,7 +49,8 @@ SOURCES= init.c \
          regset.c \
          regdel.c \
          regv31.c \
-         regmisc.c
+         regmisc.c \
+         evtlog.c
 
 UMTYPE=console
 
