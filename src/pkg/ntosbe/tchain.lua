@@ -297,6 +297,16 @@ function M.run_nmake(linux_dir, desc, extra_args, opts)
     if cfg.debug_symbols then
         tool_args[#tool_args + 1] = "NTDEBUG=ntsdnodbg"
         tool_args[#tool_args + 1] = "NTDEBUGTYPE=windbg"
+        -- ML debug flag.  MAKEFILE.DEF only sets 386_ADBGFLAGS=/Zi inside
+        -- !IFDEF NTLEGO, and NTLEGO is unconditionally !UNDEFed whenever
+        -- NTDEBUG is set to anything other than "" or "retail" (line
+        -- 755).  Without /Zi, every .asm we build lands as .text-only --
+        -- no .debug$S / .debug$T -- so splitsym extracts nothing, dbg2dwf
+        -- has no CodeView line records to convert, and ASM files show up
+        -- in coverage with execution hits but no source attribution.
+        -- Command-line wins over the makefile's empty default, so we
+        -- just pass /Zi unconditionally when --syms is on.
+        tool_args[#tool_args + 1] = "386_ADBGFLAGS=/Zi"
     end
     for _, a in ipairs(extra_args) do tool_args[#tool_args + 1] = a end
 

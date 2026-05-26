@@ -436,6 +436,263 @@ function M.main(opts)
     --   windows_winnls      → WINDOWS/obj/i386/nlslib.lib
     --   windows_base_client → PUBLIC/SDK/LIB/i386/{kernel32.lib, kernel32.dll}
     --
+    -- ----- C Runtime (CRT32 + CRT32NT + FP32 + FP32NT + CRTLIB) ---------
+    -- Imported verbatim from NT-782/PRIVATE/{CRT32,CRT32NT,FP32,FP32NT,
+    -- CRTLIB} (ALPHA/MIPS/PPC arch subdirs stripped).  POSIX subsystem
+    -- (CRT32PSX) deliberately skipped -- MicroNT has no POSIX subsystem.
+    --
+    -- Build flow follows MS's BUILDCRT.CMD:
+    --   1. Per CRTLIBTYPE variant (DLL/MT/ST/NT), walk CRT32/DIRS, run
+    --      nmake in each subdir.  Each produces <subdir>/obj/i386/
+    --      <component>.lib + the .obj files the top-level lib step
+    --      gathers.
+    --   2. nmake CRT32/MAKEFILE rolls up per-subdir outputs into the
+    --      variant's lib: libcdll.lib, libcmt.lib, libc.lib, libcnt.lib.
+    --   3. Same dance for CRT32NT (which has fewer subdirs -- it's the
+    --      NT-overlay; produces libcnt.lib's NT-specific half).
+    --   4. FP32 (CONV+TRAN -> conv.lib + tran.lib for portable FP), and
+    --      FP32NT (TRAN -> trannt.lib for kernel-mode FP).
+    --   5. CRTLIB's makefile lib.exe-combines the per-project outputs
+    --      into the final release libs: libcntpr.lib (= libcnt + trannt),
+    --      libc.lib, libcmt.lib, libcdll.lib, plus CRTDLL.DLL itself.
+    --      Installs to PUBLIC/SDK/LIB/i386/ and OAK/BIN/I386/.
+    --
+    -- These targets are SKELETON: the per-subdir nmake invocations are
+    -- wired but compile errors are expected on first run; fix-ups land
+    -- as follow-up commits.  Until that's done the prebuilt blobs in
+    -- PUBLIC/SDK/LIB/i386/ stay in use (these targets aren't yet in
+    -- USERLAND_TARGETS).
+
+    local CRT32    = NT_ROOT .. "/PRIVATE/CRT32"
+    local CRT32NT  = NT_ROOT .. "/PRIVATE/CRT32NT"
+    local FP32     = NT_ROOT .. "/PRIVATE/FP32"
+    local FP32NT   = NT_ROOT .. "/PRIVATE/FP32NT"
+    local CRTLIB_D = NT_ROOT .. "/PRIVATE/CRTLIB"
+
+    -- Per-variant subdir lists, taken verbatim from each tree's
+    -- BUILDCRT.CMD recipes.  The base DIRS (CONVERT MISC STARTUP STDIO
+    -- STRING) are always walked for CRT32/CRT32NT; the per-variant
+    -- additions are the `build` command-line args in BUILDCRT.CMD
+    -- (which override CRT32/DIRS's OPTIONAL_DIRS line).
+    local CRT32_DIRS_NT = {  -- :bldnt -- base + hack
+        "CONVERT", "MISC", "STARTUP", "STDIO", "STRING",
+        "HACK",
+    }
+    local CRT32_DIRS_ST = {  -- :bldst -- base + 10 extras
+        "CONVERT", "MISC", "STARTUP", "STDIO", "STRING",
+        "LINKOPTS", "TIME", "WINHEAP", "DIRECT", "DOS",
+        "EXEC", "IOSTREAM", "LOWIO", "SMALL", "MBSTRING",
+    }
+    local CRT32_DIRS_MT = {  -- MT fall-through -- base + 8 extras
+        "CONVERT", "MISC", "STARTUP", "STDIO", "STRING",
+        "TIME", "WINHEAP", "DIRECT", "DOS", "EXEC",
+        "IOSTREAM", "LOWIO", "MBSTRING",
+    }
+    local CRT32_DIRS_DLL = {  -- :blddll -- base + 9 extras (incl. DLLSTUFF)
+        "CONVERT", "MISC", "STARTUP", "STDIO", "STRING",
+        "TIME", "WINHEAP", "DLLSTUFF", "DIRECT", "DOS",
+        "EXEC", "IOSTREAM", "LOWIO", "MBSTRING",
+    }
+    -- CRT32NT NT (only variant): base + HACK.
+    local CRT32NT_DIRS_NT = {
+        "CONVERT", "MISC", "STARTUP", "STDIO", "STRING",
+        "HACK",
+    }
+    -- FP32: ST/MT/DLL walk CONV+TRAN; NT walks just TRAN.
+    local FP32_DIRS_ST   = { "CONV", "TRAN" }
+    local FP32_DIRS_MT   = { "CONV", "TRAN" }
+    local FP32_DIRS_DLL  = { "CONV", "TRAN" }
+    local FP32NT_DIRS_NT = { "TRAN" }
+
+    -- Build helper: walk a tree's subdirs, run nmake in each with
+    -- CRTLIBTYPE=<variant>, then roll up at the top-level.
+    --
+    -- Each subdir's SOURCES has TARGETPATH=..\obj, so the per-subdir
+    -- .lib lands in <root>/obj/i386/<targetname>.lib -- pre-create
+    -- that dir at the tree root before walking.  (run_nmake itself
+    -- mkdir_p's <subdir>/obj/i386 but not the parent.)
+    --
+    -- Subdirs without a SOURCES file (header dirs, empty placeholders
+    -- left after arch-strip) are silently skipped: defence-in-depth so
+    -- a layout change upstream doesn't require touching this helper.
+    --
+    -- 386=1 selects the i386 target in BUILDCRT/MAKEFILE's
+    -- architecture-flag tree (otherwise it might fall through to the
+    -- MIPS or Alpha default).
+    --
+    -- Per-variant .obj wipe: stock NT 3.5 dev kept separate source
+    -- copies per variant (crt32st, crt32, crt32dll, ...); we don't.
+    -- Symbols differ (e.g. CRTDLL=1 produces _environ_dll vs _environ),
+    -- so re-archiving the same .obj into libcXX.lib leaves the wrong
+    -- symbols.  Drop a stamp at <subdir>/obj/i386/.crt-variant; on
+    -- mismatch wipe per-subdir .obj before nmake.
+    local function build_crt_variant(root, dirs, variant, desc)
+        return function()
+            mkdir_p(root .. "/obj/i386")
+            local extras = { "CRTLIBTYPE=" .. variant, "386=1" }
+            for _, d in ipairs(dirs) do
+                local subdir = root .. "/" .. d
+                if platform.file_exists(subdir .. "/SOURCES") then
+                    local stamp = subdir .. "/obj/i386/.crt-variant"
+                    local prev  = platform.read_file(stamp)
+                    if prev and prev:match("[^\r\n]*") ~= variant then
+                        platform.log((">>> variant change (%s -> %s); wiping %s/obj")
+                            :format(prev:match("[^\r\n]*"), variant, d))
+                        platform.rmrf(subdir .. "/obj")
+                    end
+                    local rc = run_nmake(subdir, desc .. "/" .. d, extras)
+                    if rc ~= 0 then return rc end
+                    platform.write_file(stamp, variant)
+                end
+            end
+            -- Top-level roll-up: each tree has a hand-written MAKEFILE
+            -- (no SOURCES at the root) that lib.exe-archives the per-
+            -- subdir .obj files into the final libc<suffix>.lib.
+            -- Invoke nmake directly via run_wibo_tool so we bypass our
+            -- gen_objects/SOURCES machinery.
+            platform.log("========================================")
+            platform.log("Building: " .. desc .. " - roll-up")
+            platform.log("========================================")
+            return toolchain.run_wibo_tool(root, "NMAKE.EXE",
+                                           "/NOLOGO",
+                                           "CRTLIBTYPE=" .. variant,
+                                           "386=1")
+        end
+    end
+
+    -- CRT32 variants.  Each one re-walks the same source tree with a
+    -- different CRTLIBTYPE; outputs land in CRT32/obj/i386/ as
+    -- libc<suffix>.lib (suffix = dll / mt / nothing / nt).
+    targets.crt32_dll = build_crt_variant(CRT32, CRT32_DIRS_DLL, "DLL", "CRT32-DLL")
+    targets.crt32_mt  = build_crt_variant(CRT32, CRT32_DIRS_MT,  "MT",  "CRT32-MT")
+    targets.crt32_st  = build_crt_variant(CRT32, CRT32_DIRS_ST,  "ST",  "CRT32-ST")
+    targets.crt32_nt  = build_crt_variant(CRT32, CRT32_DIRS_NT,  "NT",  "CRT32-NT")
+
+    -- CRT32NT (NT-subsystem overlay).  Single variant -- the whole
+    -- point of CRT32NT is the NT-mode build.
+    targets.crt32nt   = build_crt_variant(CRT32NT, CRT32NT_DIRS_NT, "NT", "CRT32NT")
+
+    -- Floating-point support.  FP32 has both single-thread and DLL
+    -- variants; FP32NT is NT-only.
+    targets.fp32_st   = build_crt_variant(FP32,   FP32_DIRS_ST,   "ST",  "FP32-ST")
+    targets.fp32_dll  = build_crt_variant(FP32,   FP32_DIRS_DLL,  "DLL", "FP32-DLL")
+    targets.fp32_mt   = build_crt_variant(FP32,   FP32_DIRS_MT,   "MT",  "FP32-MT")
+    targets.fp32nt    = build_crt_variant(FP32NT, FP32NT_DIRS_NT, "NT",  "FP32NT")
+
+    -- CRTLIB orchestrator: top-level MAKEFILE lib.exes the per-variant
+    -- outputs into the final release libs.  No per-component SOURCES
+    -- -- the makefile is hand-written and just runs lib.exe over the
+    -- previously-built per-tree outputs.  Invoke nmake directly via
+    -- run_wibo_tool to bypass our gen_objects/SOURCES machinery.
+    -- Builds (in CRTLIB/LIB/I386/):
+    --   libcntpr.lib (= libcnt.lib + trannt.lib, what ntdll/kernel32 link)
+    --   libc.lib + libcmt.lib (the user-mode static variants)
+    --   exsup.lib (SEH support objs)
+    --   crtdll.lib + crtdll.dll (the DLL CRT)
+    -- After the build, copy the set the original NT 3.5 `release` rule
+    -- stages to PUBLIC/SDK/LIB/I386 — uppercase casing matches the
+    -- prebuilt artifacts shipped in the repo — then splitsym_dir scans
+    -- PUB_LIB for fresh PE images and emits .DBG + .dwf next to them.
+    local CRTLIB_OUT = CRTLIB_D .. "/LIB/I386"
+    local CRTLIB_INSTALL = {
+        { "crtdll.dll",  "CRTDLL.DLL"   },
+        { "crtdll.lib",  "CRTDLL.LIB"   },
+        { "libcntpr.lib","LIBCNTPR.LIB" },
+        { "libc.lib",    "LIBC.LIB"     },
+        { "libcmt.lib",  "LIBCMT.LIB"   },
+        { "exsup.lib",   "EXSUP.LIB"    },
+    }
+    targets.crtlib = function()
+        -- CRTLIB pulls per-subdir SUPPOBJS like CRT32/LOWIO/obj/i386/
+        -- txtmode.obj into crtdll.lib as the CLIENT-side static-CRT
+        -- support pack.  Stock NT 3.5 sourced these from the MT-variant
+        -- tree (crt32, where _fmode is the static `int _fmode = 0`); our
+        -- single-source remap leaves per-subdir .obj as whichever
+        -- variant ran last, and a DLL-variant txtmode.obj exports
+        -- _fmode_dll instead of _fmode -- crtexe.obj's `*_fmode_dll =
+        -- _fmode;` then can't resolve the static _fmode at client link
+        -- time (real failure mode: building link.exe).
+        --
+        -- Fix the ordering inside the target: explicitly run the CRT/FP
+        -- chain ending in crt32_mt right before the CRTLIB nmake roll-
+        -- up.  The variant stamp ([[project_crt_variant_share]]) makes
+        -- repeat invocations cheap when the subdir was already MT.
+        -- crt32_nt is intentionally omitted -- its libcnt.lib is not
+        -- referenced by CRTLIB (the NT-subset CRT comes from the
+        -- separate CRT32NT tree, not from CRT32-with-CRTLIBTYPE=NT).
+        local chain = {
+            targets.fp32nt, targets.crt32nt,
+            targets.fp32_st, targets.fp32_dll, targets.fp32_mt,
+            targets.crt32_dll, targets.crt32_st, targets.crt32_mt,
+            targets.int64,
+        }
+        for _, t in ipairs(chain) do
+            local rc = t()
+            if rc ~= 0 then return rc end
+        end
+
+        local since = platform.now()
+        local rc = toolchain.run_wibo_tool(CRTLIB_D, "NMAKE.EXE",
+                                           "/NOLOGO", "386=1")
+        if rc ~= 0 then return rc end
+        for _, pair in ipairs(CRTLIB_INSTALL) do
+            local src = CRTLIB_OUT .. "/" .. pair[1]
+            local dst = PUB_LIB    .. "/" .. pair[2]
+            if not platform.file_exists(src) then
+                platform.log("!!! crtlib install: missing " .. src)
+                return 1
+            end
+            local ok, err = copy_file(src, dst)
+            if not ok then
+                platform.log("!!! crtlib install: copy " .. src
+                             .. " -> " .. dst .. ": " .. (err or "?"))
+                return 1
+            end
+            platform.log(">>> installed " .. pair[2])
+        end
+        return splitsym_dir(PUB_LIB, since)
+    end
+
+    -- ----- INT64.LIB — 64-bit integer runtime helpers ----------------------
+    -- NT 3.5 shipped i386 INT64.LIB prebuilt with no source under PRIVATE/.
+    -- We import the matching MSVC 2.2 helper ASM (LLDIV/LLMUL/etc.) into
+    -- CRT32/HELPER/I386 and build it through HELPER's SOURCES.  The helper
+    -- component's normal output is `helper.lib` at CRT32/obj/i386/; we
+    -- install it as INT64.LIB to match the original release naming.
+    -- CRTLIBTYPE=ST is the architecture-independent variant -- INT64 is
+    -- C-runtime-flavour agnostic.
+    targets.int64 = function()
+        local since = platform.now()
+        local rc = run_nmake(CRT32 .. "/HELPER", "CRT32/HELPER - INT64.LIB",
+                             { "CRTLIBTYPE=ST", "386=1" })
+        if rc ~= 0 then return rc end
+        local src = CRT32 .. "/obj/i386/helper.lib"
+        local dst = PUB_LIB .. "/INT64.LIB"
+        if not platform.file_exists(src) then
+            platform.log("!!! int64 install: missing " .. src)
+            return 1
+        end
+        local ok, err = copy_file(src, dst)
+        if not ok then
+            platform.log("!!! int64 install: " .. (err or "?"))
+            return 1
+        end
+        platform.log(">>> installed INT64.LIB")
+        return splitsym_dir(PUB_LIB, since)
+    end
+
+    clean_dirs.int64      = { CRT32 .. "/HELPER/obj", CRT32 .. "/obj" }
+    clean_dirs.crt32_dll  = { CRT32 .. "/obj", CRT32 .. "/dllstuff/obj" }
+    clean_dirs.crt32_mt   = { CRT32 .. "/obj" }
+    clean_dirs.crt32_st   = { CRT32 .. "/obj" }
+    clean_dirs.crt32_nt   = { CRT32 .. "/obj" }
+    clean_dirs.crt32nt    = { CRT32NT .. "/obj" }
+    clean_dirs.fp32_st    = { FP32 .. "/obj" }
+    clean_dirs.fp32_dll   = { FP32 .. "/obj" }
+    clean_dirs.fp32_mt    = { FP32 .. "/obj" }
+    clean_dirs.fp32nt     = { FP32NT .. "/obj" }
+    clean_dirs.crtlib     = { CRTLIB_D .. "/obj" }
+
     -- run_nmake auto-mkdirs only <linux_dir>/obj/i386, so the parent
     -- TARGETPATH dirs (..\obj relative to each leaf) need pre-creation.
     local WIN = NT_ROOT .. "/PRIVATE/WINDOWS"

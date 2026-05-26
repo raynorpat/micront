@@ -295,12 +295,71 @@ static Module *new_module(void)
     return m;
 }
 
+/* If the CV source path is relative, prepend the build cwd recovered
+ * from this module's .obj path.  ml records `i386\lldiv.asm` (relative)
+ * for assembler input passed as `ml ... i386\lldiv.asm`, so without this
+ * the resulting DWARF lands a CU with comp_dir="i386" name="lldiv.asm"
+ * — useless for source attribution in coverage tools.  The build cwd is
+ * always the parent of `obj/<arch>/` in the .obj path: sstModule.ModName
+ * carries e.g. `Z:\...\HELPER\obj\i386\lldiv.obj`, so going up two
+ * directories gives `Z:\...\HELPER` which is where ml was invoked from.
+ * No-op for paths that are already absolute, or for .obj names that
+ * don't have an obj/<arch>/ component (prebuilt libs imported without
+ * a parent dir, like the original INT64.LIB's "LLDIV.OBJ"). */
+static void absolutize_against_obj(const char *obj_path,
+                                   const char *file, char *out, size_t out_sz)
+{
+    const char *p1, *p2, *p3;
+    size_t      cwd_len;
+
+    if (file[0] == '/' || (file[0] && file[1] == ':')) {
+        /* already absolute (POSIX or with-drive) */
+        strncpy(out, file, out_sz - 1); out[out_sz - 1] = '\0'; return;
+    }
+    p3 = strrchr(obj_path, '/');                 /* last  / : foo.obj  */
+    if (!p3) goto fallback;
+    p2 = p3 - 1; while (p2 > obj_path && *p2 != '/') p2--;  /* arch/    */
+    if (p2 <= obj_path || *p2 != '/') goto fallback;
+    p1 = p2 - 1; while (p1 > obj_path && *p1 != '/') p1--;  /* obj/     */
+    if (p1 <= obj_path || *p1 != '/') goto fallback;
+    /* p1 .. p3 spans /obj/<arch>/<name>.obj; cwd is everything before. */
+    cwd_len = (size_t)(p1 - obj_path);
+    if (cwd_len + 1 + strlen(file) + 1 > out_sz) goto fallback;
+    memcpy(out, obj_path, cwd_len);
+    out[cwd_len]     = '/';
+    strcpy(out + cwd_len + 1, file);
+    return;
+fallback:
+    strncpy(out, file, out_sz - 1); out[out_sz - 1] = '\0';
+}
+
 static unsigned long mod_add_file(Module *m, const char *fname)
 {
     unsigned long i;
     char *norm;
+    char  absbuf[1024];
+    char  normbuf[1024];
 
+    /* CV gives `i386\foo.asm` style for ml-with-relative-input.  Normalise
+     * (drop drive, swap \ → /) first, then prepend the module's build cwd
+     * if still relative.  Done at add time so files[i] and DW_AT_comp_dir
+     * downstream get the absolute path uniformly. */
     norm = path_normalize_dup(fname);
+    if (m->name && norm[0] != '/') {
+        absolutize_against_obj(m->name, norm, absbuf, sizeof(absbuf));
+        if (absbuf[0] == '/') {
+            /* path_normalize_dup-style cleanup not needed -- m->name was
+             * already normalized, and `file` came through path_normalize
+             * above.  Just adopt the joined string. */
+            strncpy(normbuf, absbuf, sizeof(normbuf) - 1);
+            normbuf[sizeof(normbuf) - 1] = '\0';
+            free(norm);
+            norm = (char *)malloc(strlen(normbuf) + 1);
+            if (!norm) { fputs("dbg2dwf: oom files\n", stderr); exit(2); }
+            strcpy(norm, normbuf);
+        }
+    }
+
     for (i = 0; i < m->n_files; i++) {
         if (strcmp(m->files[i], norm) == 0) {
             free(norm);
@@ -743,6 +802,56 @@ static void parse_alignsym(const unsigned char *base, unsigned long cb,
         rec = base + off + 4;  /* payload after reclen + rectyp */
 
         switch (rectyp) {
+        case 0x0009: /* S_OBJNAME (CV4) -- absolute path of this module's .obj.
+                      * sstModule.ModName is the linker-abbreviated relative
+                      * form (e.g. `obj/i386/llmul.obj`); this record carries
+                      * the original `Z:\...\HELPER\obj\i386\llmul.obj` from
+                      * the compiler.  Without it we can't recover the build
+                      * cwd for relatively-referenced sources (ml emits e.g.
+                      * `i386\llmul.asm` as the file path, so the resulting
+                      * DWARF lands comp_dir=`i386` name=`llmul.asm` -- no
+                      * way for coverage tools to find the source).
+                      *
+                      * Subsection order in NT 3.5-linked .DBGs puts
+                      * sstSrcModule before sstAlignSym, so the m->files[]
+                      * entries were already registered with the abbreviated
+                      * m->name -- replay them through absolutize_against_obj
+                      * with the better path so they snap to absolute.
+                      *
+                      * Layout (after reclen+rectyp): signature(4) + ST(name).
+                      */
+            if (m && reclen >= 6) {
+                char *abs_path;
+                unsigned long fi;
+                st_to_cstr(rec + 4, name_buf, sizeof(name_buf));
+                abs_path = path_normalize_dup(name_buf);
+                if (abs_path[0] == '/' && m->name && m->name[0] != '/') {
+                    free(m->name);
+                    m->name = abs_path;
+                    /* Retroactively absolutize any relative files that
+                     * mod_add_file already registered against the old
+                     * (relative) m->name. */
+                    for (fi = 0; fi < m->n_files; fi++) {
+                        char  buf[1024];
+                        char *cur = m->files[fi];
+                        if (cur[0] == '/') continue;
+                        absolutize_against_obj(m->name, cur, buf, sizeof(buf));
+                        if (buf[0] == '/') {
+                            char *np = (char *)malloc(strlen(buf) + 1);
+                            if (!np) {
+                                fputs("dbg2dwf: oom files\n", stderr);
+                                exit(2);
+                            }
+                            strcpy(np, buf);
+                            free(m->files[fi]);
+                            m->files[fi] = np;
+                        }
+                    }
+                } else {
+                    free(abs_path);
+                }
+            }
+            break;
         case S_GPROC32:
         case S_LPROC32: {
             /* PROCSYM32 layout (after reclen+rectyp), pack(1):

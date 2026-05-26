@@ -372,9 +372,18 @@ coverage: $(QCOV_SO) disk
 # genhtml resolves the repo-relative SF paths from the repo root; CRT /
 # compiler-runtime files carry their original build paths and have no
 # repo source, so missing-source is downgraded to a warning.
+#
+# --prefix $(REPO)/src/NT/PRIVATE: strip the NT-tree prefix from
+# displayed paths so the report reads NTOS/AFD/... and CRT32NT/STRING/...
+# instead of lcov's auto-prefix picking the longest common ancestor
+# (which is src/NT/PRIVATE/NTOS when NTOS dominates and leaves CRT32NT
+# entries at their full repo-relative form).  Must be absolute: genhtml
+# resolves each SF: against its cwd and builds the directory tree from
+# the *resolved* absolute path, not the literal SF: text.
 coverage-html: coverage
 	cd $(REPO) && genhtml $(COV_INFO) \
 	    --output-directory $(COV_HTML) \
 	    --title "MicroNT kernel coverage" \
+	    --prefix $(REPO)/src/NT/PRIVATE \
 	    --legend --ignore-errors source
 	@echo "[coverage-html] → $(COV_HTML)/index.html"

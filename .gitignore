@@ -78,6 +78,22 @@ src/NT/PUBLIC/SDK/LIB/I386/virtio.lib
 # into ntfs.sys.  Pure build output, no bootstrap dependency, same
 # treatment as virtio.lib.
 src/NT/PUBLIC/SDK/LIB/I386/lfs.lib
+# CRTLIB build outputs land in src/NT/PRIVATE/CRTLIB/LIB/I386/ as
+# intermediates before being installed (uppercase) into PUBLIC/SDK/LIB/
+# I386/.  The supplemental def (CRTDLL.X86, uppercase) is source; the
+# generated crtdll.def (lowercase, copy+cat of CRTDLL.DEF + CRTDLL.X86)
+# plus every link product is regenerated each build.
+src/NT/PRIVATE/CRTLIB/LIB/I386/*.dll
+src/NT/PRIVATE/CRTLIB/LIB/I386/*.lib
+src/NT/PRIVATE/CRTLIB/LIB/I386/*.exp
+src/NT/PRIVATE/CRTLIB/LIB/I386/*.res
+src/NT/PRIVATE/CRTLIB/LIB/I386/*.tmp
+src/NT/PRIVATE/CRTLIB/LIB/I386/*.obj
+src/NT/PRIVATE/CRTLIB/LIB/I386/crtdll.def
+# Per-subdir variant stamp dropped by build_crt_variant when CRT32/FP32
+# variants share a single source tree (see project_crt_variant_share).
+**/.crt-variant
+
 # Storage stack EXPORT_DRIVER + class lib outputs (DD/CLASS, DD/SCSIPORT).
 # The .sys ships via mkdisk.py; the .lib/.exp are link-time stubs only.
 src/NT/PUBLIC/SDK/LIB/I386/class.lib
