@@ -370,14 +370,13 @@ Return Value:
     newSocket->SendBufferSize = socketInfo->SendBufferSize;
     newSocket->Broadcast = socketInfo->Broadcast;
     newSocket->Debug = socketInfo->Debug;
-    newSocket->OobInline = socketInfo->OobInline;
     newSocket->ReuseAddresses = socketInfo->ReuseAddresses;
     newSocket->SendTimeout = socketInfo->SendTimeout;
     newSocket->ReceiveTimeout = socketInfo->ReceiveTimeout;
 
     //
-    // Set up the new socket to have the same blocking, inline, and
-    // timeout characteristics as the listening socket.
+    // Set up the new socket to have the same blocking and timeout
+    // characteristics as the listening socket.
     //
 
     error = SockSetInformation(
@@ -392,19 +391,6 @@ Return Value:
     }
 
     newSocket->NonBlocking = socketInfo->NonBlocking;
-
-    error = SockSetInformation(
-                newSocket,
-                AFD_INLINE_MODE,
-                &socketInfo->OobInline,
-                NULL,
-                NULL
-                );
-    if ( error != NO_ERROR ) {
-        goto exit;
-    }
-
-    newSocket->OobInline = socketInfo->OobInline;
 
     //
     // If the application has modified the send or receive buffer sizes,

@@ -293,8 +293,10 @@ local AFD_ABORTIVE_DISCONNECT        = 0x04
 local AFD_UNCONNECT_DATAGRAM         = 0x08
 
 -- AFD_POLL_* event bits (NTOS/AFD/AFD.H).
+-- AFD_POLL_RECEIVE_EXPEDITED (0x0002) is intentionally omitted: the
+-- kernel no longer registers a TDI_EVENT_RECEIVE_EXPEDITED handler
+-- and the bit never fires, so binding it would be misleading.
 local AFD_POLL_RECEIVE           = 0x0001
-local AFD_POLL_RECEIVE_EXPEDITED = 0x0002
 local AFD_POLL_SEND              = 0x0004
 local AFD_POLL_DISCONNECT        = 0x0008
 local AFD_POLL_ABORT             = 0x0010
@@ -305,7 +307,9 @@ local AFD_POLL_CONNECT_FAIL      = 0x0100
 
 -- AFD_INFORMATION.InformationType values.  Boolean classes read/write
 -- the low byte of Ulong; range classes use the whole Ulong.
-local AFD_INLINE_MODE          = 0x01   -- BOOLEAN; SET routes via AfdSetInLineMode on connected TCP
+-- AFD_INLINE_MODE (0x01) is intentionally omitted: the kernel returns
+-- STATUS_INVALID_PARAMETER for it now that OOB/expedited handling is
+-- stripped — binding it from Lua would only surface a kernel error.
 local AFD_NONBLOCKING_MODE     = 0x02   -- BOOLEAN
 local AFD_MAX_SEND_SIZE        = 0x03   -- ULONG   (read-only)
 local AFD_SENDS_PENDING        = 0x04   -- ULONG   (read-only)
@@ -865,11 +869,9 @@ end
 -- AFD information ioctls — get/set per-endpoint flags + window sizes.
 --
 -- The kernel side reads `Information.Ulong` for both range classes
--- (windows, max send) and Boolean classes (NonBlocking, InLine);
+-- (windows, max send) and Boolean classes (NonBlocking);
 -- the union shares its first 4 bytes with the Boolean's low byte, so
 -- writing the integer 0/1 reads back as BOOLEAN cleanly.
--- AFD_INLINE_MODE on a connected TCP endpoint is the path that drops
--- into AfdSetInLineMode (MISC.C:879).
 -- ------------------------------------------------------------------
 
 local function get_info(sock, info_class, timeout_secs)
@@ -1152,7 +1154,6 @@ return {
     -- AFD_POLL_* event bits — pass as the second element of each
     -- poll spec and bit.band against poll's return values.
     POLL_RECEIVE            = AFD_POLL_RECEIVE,
-    POLL_RECEIVE_EXPEDITED  = AFD_POLL_RECEIVE_EXPEDITED,
     POLL_SEND               = AFD_POLL_SEND,
     POLL_DISCONNECT         = AFD_POLL_DISCONNECT,
     POLL_ABORT              = AFD_POLL_ABORT,
@@ -1161,7 +1162,6 @@ return {
     POLL_ACCEPT             = AFD_POLL_ACCEPT,
     POLL_CONNECT_FAIL       = AFD_POLL_CONNECT_FAIL,
     -- AFD information classes — pass as info_class to get_info / set_info.
-    INLINE_MODE         = AFD_INLINE_MODE,
     NONBLOCKING_MODE    = AFD_NONBLOCKING_MODE,
     MAX_SEND_SIZE       = AFD_MAX_SEND_SIZE,
     SENDS_PENDING       = AFD_SENDS_PENDING,

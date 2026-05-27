@@ -17,7 +17,6 @@ extern	uint		DefaultRcvWin;
 extern	uint		MaxConnections;
 extern  uint        MaxConnectRexmitCount;
 extern  uint        MaxDataRexmitCount;
-extern	uint		BSDUrgent;
 /*INC*/
 
 #ifndef	FALSE
@@ -49,5 +48,4 @@ extern	uint		BSDUrgent;
 
 #define	DEFAULT_CONNECT_REXMIT_CNT	3
 #define	DEFAULT_DATA_REXMIT_CNT		5
-#define	DEFAULT_BSD_URGENT			TRUE
 

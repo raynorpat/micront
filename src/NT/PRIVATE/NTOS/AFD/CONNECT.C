@@ -194,7 +194,6 @@ Return Value:
                  &endpoint->TransportInfo->TransportDeviceName,
                  endpoint->AddressHandle,
                  endpoint->TdiBufferring,
-                 endpoint->InLine,
                  endpoint->OwningProcess,
                  &connection
                  );

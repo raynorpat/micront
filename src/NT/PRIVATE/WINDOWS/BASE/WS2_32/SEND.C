@@ -117,23 +117,19 @@ Return Value:
     if ( SendFlags != 0 ) {
 
         //
-        // The legal flags are MSG_OOB, MSG_DONTROUTE and MSG_PARTIAL.  
-        // MSG_OOB is not legal on datagram sockets.  
+        // The legal flags are MSG_DONTROUTE and MSG_PARTIAL.  MSG_OOB is
+        // rejected with WSAEOPNOTSUPP — out-of-band sends are not supported.
         //
-    
-        if ( ( (SendFlags & ~(MSG_OOB | MSG_DONTROUTE | MSG_PARTIAL)) != 0 ) ) {
+
+        if ( (SendFlags & ~(MSG_DONTROUTE | MSG_PARTIAL)) != 0 ) {
             error = WSAEOPNOTSUPP;
             goto exit;
         }
-    
+
         sendRequest.SendFlags = 0;
         pSendRequest = &sendRequest;
         sendRequestLength = sizeof(sendRequest);
-    
-        if ( (SendFlags & MSG_OOB) != 0 ) {
-            sendRequest.SendFlags |= TDI_SEND_EXPEDITED;
-        }
-    
+
         if ( (SendFlags & MSG_PARTIAL) != 0 ) {
             sendRequest.SendFlags |= TDI_SEND_PARTIAL;
         }

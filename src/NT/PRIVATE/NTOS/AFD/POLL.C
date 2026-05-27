@@ -372,19 +372,6 @@ AfdPoll (
                     found = TRUE;
                 }
 
-                //
-                // If the endpoint is set up for inline reception of
-                // expedited data, then any expedited data should
-                // be indicated as normal data.
-                //
-
-                if ( connection != NULL && endpoint->InLine &&
-                         IS_EXPEDITED_DATA_ON_CONNECTION( connection ) ) {
-                    pollHandleInfo->Handle = pollEndpointInfo->Handle;
-                    pollHandleInfo->PollEvents |= AFD_POLL_RECEIVE;
-                    found = TRUE;
-                }
-
             } else {
 
                 //
@@ -395,21 +382,6 @@ AfdPoll (
 
                 pollEndpointInfo->PollEvents &= ~AFD_POLL_RECEIVE;
                 pollEndpointInfo->PollEvents |= AFD_POLL_ACCEPT;
-            }
-        }
-
-        if ( (pollEndpointInfo->PollEvents & AFD_POLL_RECEIVE_EXPEDITED) != 0 ) {
-
-            //
-            // If the endpoint is set up for inline reception of 
-            // expedited data, do not indicate as expedited data.  
-            //
-
-            if ( connection != NULL && !endpoint->InLine &&
-                     IS_EXPEDITED_DATA_ON_CONNECTION( connection ) ) {
-                pollHandleInfo->Handle = pollEndpointInfo->Handle;
-                pollHandleInfo->PollEvents |= AFD_POLL_RECEIVE_EXPEDITED;
-                found = TRUE;
             }
         }
 

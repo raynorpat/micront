@@ -1519,42 +1519,14 @@ TCPSend(TCB *SendTCB, CTELockHandle TCBHandle)
                                 SendTCB->tcb_sendofs = Offset;
                             }
 
-                            if (CurSend->tsr_flags & TSR_FLAG_URG) {
-                                ushort          UP;
-                                // This send is urgent data. We need to figure
-                                // out what the urgent data pointer should be.
-                                // We know sendnext is the starting sequence
-                                // number of the frame, and that at the top of
-                                // this do loop sendnext identified a byte in
-                                // the CurSend at that time. We advanced CurSend
-                                // at the same rate we've decremented
-                                // AmountLeft (AmountToSend - AmountLeft ==
-                                // AmountBuilt), so sendnext +
-                                // (AmountToSend - AmountLeft) identifies a byte
-                                // in the current value of CurSend, and that
-                                // quantity plus tcb_sendsize is the sequence
-                                // number one beyond the current send.
-                                UP =
-                                    (ushort)(AmountToSend - AmountLeft) +
-                                    (ushort)SendTCB->tcb_sendsize -
-                                    ((SendTCB->tcb_flags & BSD_URGENT) ? 0 : 1);
-
-                                Header->tcp_urgent = net_short(UP);
-
-                                Header->tcp_flags |= TCP_FLAG_URG;
-                            }
-
                             // See if we've exhausted this send. If we have,
                             // set the PUSH bit in this frame and move on to
-                            // the next send. We also need to check the
-                            // urgent data bit.
+                            // the next send.
                             if (SendTCB->tcb_sendsize == 0) {
                                 Queue       *Next;
-                                uchar       PrevFlags;
 
                                 // We've exhausted this send. Set the PUSH bit.
                                 Header->tcp_flags |= TCP_FLAG_PUSH;
-                                PrevFlags = CurSend->tsr_flags;
                                 Next = QNEXT(&CurSend->tsr_req.tr_q);
                                 if (Next != QEND(&SendTCB->tcb_sendq)) {
                                     CurSend = STRUCT_OF(TCPSendReq,
@@ -1565,12 +1537,6 @@ TCPSend(TCB *SendTCB, CTELockHandle TCBHandle)
                                     SendTCB->tcb_sendbuf = CurSend->tsr_buffer;
                                     SendTCB->tcb_cursend = CurSend;
 
-                                    // Check the urgent flags. We can't combine
-                                    // new urgent data on to the end of old
-                                    // non-urgent data.
-                                    if ((PrevFlags & TSR_FLAG_URG) && !
-                                        (CurSend->tsr_flags & TSR_FLAG_URG))
-                                        break;
                                 } else {
                                     CTEAssert(AmountLeft == 0);
                                     SendTCB->tcb_cursend = NULL;
@@ -1859,8 +1825,9 @@ TdiSend(PTDI_REQUEST Request, ushort Flags, uint SendLength,
 						SendReq->tsr_offset = 0;
 						SendReq->tsr_lastbuf = NULL;
 						SendReq->tsr_time = TCPTime;
-						SendReq->tsr_flags = (Flags & TDI_SEND_EXPEDITED) ?
-							TSR_FLAG_URG : 0;
+						// OOB/urgent send is stripped: TDI_SEND_EXPEDITED is
+						// silently ignored so no TCP segment carries the URG flag.
+						SendReq->tsr_flags = 0;
 						SendTCB->tcb_unacked += SendLength;
 	
 						EmptyQ = EMPTYQ(&SendTCB->tcb_sendq);

@@ -79,7 +79,6 @@ Return Value:
                  &Endpoint->TransportInfo->TransportDeviceName,
                  Endpoint->AddressHandle,
                  Endpoint->TdiBufferring,
-                 Endpoint->InLine,
                  Endpoint->OwningProcess,
                  &connection
                  );
@@ -148,9 +147,6 @@ AfdAllocateConnection (
     //connection->ReceiveBytesIndicated = 0;
     //connection->ReceiveBytesTaken = 0;
     //connection->ReceiveBytesOutstanding = 0;
-    //connection->ReceiveExpeditedBytesIndicated = 0;
-    //connection->ReceiveExpeditedBytesTaken = 0;
-    //connection->ReceiveExpeditedBytesOutstanding = 0;
     //connection->ConnectDataBuffers = NULL;
     //connection->DisconnectIndicated = FALSE;
     //connection->AbortIndicated = FALSE;
@@ -195,7 +191,6 @@ AfdCreateConnection (
     IN PUNICODE_STRING TransportDeviceName,
     IN HANDLE AddressHandle,
     IN BOOLEAN TdiBufferring,
-    IN BOOLEAN InLine,
     IN PEPROCESS ProcessToCharge,
     OUT PAFD_CONNECTION *Connection
     )
@@ -219,9 +214,6 @@ Arguments:
     TdiBufferring - whether the TDI provider supports data bufferring.
         Only passed so that it can be stored in the connection
         structure.
-
-    InLine - if TRUE, the endpoint should be created in OOB inline
-        mode.
 
     ProcessToCharge - the process which should be charged the quota
         for this connection.
@@ -305,9 +297,7 @@ Return Value:
         InitializeListHead( &connection->VcReceiveBufferListHead );
 
         connection->VcBufferredReceiveBytes = 0;
-        connection->VcBufferredExpeditedBytes = 0;
         connection->VcBufferredReceiveCount = 0;
-        connection->VcBufferredExpeditedCount = 0;
 
         connection->VcReceiveBytesInTransport = 0;
         connection->VcReceiveCountInTransport = 0;
@@ -447,18 +437,6 @@ Return Value:
     KeDetachProcess( );
 
     //
-    // If requested, set the connection to be inline.
-    //
-
-    if ( InLine ) {
-        status = AfdSetInLineMode( connection, TRUE );
-        if ( !NT_SUCCESS(status) ) {
-            AfdDereferenceConnection( connection );
-            return status;
-        }
-    }
-
-    //
     // Set up the connection pointer and return.
     //
 
@@ -539,7 +517,6 @@ AfdFreeConnection (
             afdBuffer = CONTAINING_RECORD( listEntry, AFD_BUFFER, BufferListEntry );
 
             afdBuffer->DataOffset = 0;
-            afdBuffer->ExpeditedData = FALSE;
 
             AfdReturnBuffer( afdBuffer );
         }

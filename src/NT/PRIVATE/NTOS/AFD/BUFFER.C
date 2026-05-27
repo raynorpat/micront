@@ -542,7 +542,6 @@ Return Value:
     //
 
     ASSERT( AfdBuffer->DataOffset == 0 );
-    ASSERT( !AfdBuffer->ExpeditedData );
     ASSERT( AfdBuffer->TdiInputInfo.UserDataLength == 0 );
     ASSERT( AfdBuffer->TdiInputInfo.UserData == NULL );
     ASSERT( AfdBuffer->TdiInputInfo.OptionsLength == 0 );
@@ -706,7 +705,6 @@ Return Value:
 
     AfdBuffer->Irp->MdlAddress = AfdBuffer->Mdl;
     AfdBuffer->DataOffset = 0;
-    AfdBuffer->ExpeditedData = FALSE;
     AfdBuffer->PartialMessage = FALSE;
 
     //

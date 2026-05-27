@@ -173,8 +173,7 @@ AfdPartialDisconnect (
         // Determine whether there is pending data.
         //
 
-        if ( IS_DATA_ON_CONNECTION( connection ) ||
-                 IS_EXPEDITED_DATA_ON_CONNECTION( connection ) ) {
+        if ( IS_DATA_ON_CONNECTION( connection ) ) {
 
             //
             // There is unreceived data.  Abort the connection.
@@ -325,8 +324,6 @@ AfdDisconnectEventHandler (
 
             connection->VcBufferredReceiveBytes = 0;
             connection->VcBufferredReceiveCount = 0;
-            connection->VcBufferredExpeditedBytes = 0;
-            connection->VcBufferredExpeditedCount = 0;
             connection->VcReceiveBytesInTransport = 0;
             connection->VcReceiveCountInTransport = 0;
 
@@ -338,7 +335,6 @@ AfdDisconnectEventHandler (
                 listEntry = RemoveHeadList( &connection->VcReceiveBufferListHead );
                 afdBuffer = CONTAINING_RECORD( listEntry, AFD_BUFFER, BufferListEntry );
 
-                afdBuffer->ExpeditedData = FALSE;
                 afdBuffer->DataOffset = 0;
 
                 AfdReturnBuffer( afdBuffer );
@@ -472,17 +468,14 @@ AfdBeginAbort (
     }
 
     //
-    // Set the BytesTaken fields equal to the BytesIndicated fields so 
-    // that no more AFD_POLL_RECEIVE or AFD_POLL_RECEIVE_EXPEDITED 
-    // events get completed.  
+    // Set the BytesTaken field equal to the BytesIndicated field so
+    // that no more AFD_POLL_RECEIVE events get completed.
     //
 
     if ( endpoint->TdiBufferring ) {
 
         Connection->Common.Bufferring.ReceiveBytesTaken =
             Connection->Common.Bufferring.ReceiveBytesIndicated;
-        Connection->Common.Bufferring.ReceiveExpeditedBytesTaken =
-            Connection->Common.Bufferring.ReceiveExpeditedBytesIndicated;
 
         KeReleaseSpinLock( &AfdSpinLock, oldIrql );
     

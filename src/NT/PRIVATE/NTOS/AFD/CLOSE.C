@@ -163,10 +163,6 @@ Return Value:
 
              ||
 
-             IS_EXPEDITED_DATA_ON_CONNECTION( connection )
-
-             ||
-
              !RtlLargeIntegerEqualToZero( processExitTime )
 
              ||
@@ -189,15 +185,6 @@ Return Value:
                               connection->Common.Bufferring.ReceiveBytesIndicated,
                               connection->Common.Bufferring.ReceiveBytesTaken,
                               connection->Common.Bufferring.ReceiveBytesOutstanding ));
-            }
-
-            if ( IS_EXPEDITED_DATA_ON_CONNECTION( connection ) ) {
-                KdPrint(( "AfdCleanup: unrecv'd exp data on endp %lx, aborting.  "
-                          "%ld ind, %ld taken, %ld out\n",
-                              endpoint,
-                              connection->Common.Bufferring.ReceiveExpeditedBytesIndicated,
-                              connection->Common.Bufferring.ReceiveExpeditedBytesTaken,
-                              connection->Common.Bufferring.ReceiveExpeditedBytesOutstanding ));
             }
 
             if ( !RtlLargeIntegerEqualToZero( processExitTime ) ) {

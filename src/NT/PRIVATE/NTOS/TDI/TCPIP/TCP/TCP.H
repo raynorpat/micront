@@ -163,13 +163,6 @@ struct TCB {
 	IPOptInfo			tcb_opt;			// Option information.
 	RouteCacheEntry		*tcb_rce;			// RCE for this connection.
 	struct TCPConnReq	*tcb_discwait;		// Disc-Wait req., if there is one.
-	struct TCPRcvReq	*tcb_exprcv;		// Head of expedited recv. buffer
-											// queue.
-	struct IPRcvBuf		*tcb_urgpending;	// Urgent data queue.
-	uint				tcb_urgcnt;			// Byte count of data on urgent q.
-	uint				tcb_urgind;			// Urgent bytes indicated.
-	SeqNum				tcb_urgstart;		// Start of urgent data.
-	SeqNum				tcb_urgend;			// End of urgent data.
 
 };
 
@@ -215,10 +208,6 @@ typedef struct TCB TCB;
 #define	ACK_DELAYED		0x00000800			// We've delayed sending an ACK.
 
 #define	PMTU_BH_PROBE	0x00001000			// We're probing for a PMTU BH.
-#define	BSD_URGENT		0x00002000			// We're using BSD urgent semantics.
-#define	IN_DELIV_URG	0x00004000			// We're in the DeliverUrgent routine.
-#define	URG_VALID		0x00008000			// We've seen urgent data, and
-											// the urgent data fields are valid.
 
 #define	FIN_NEEDED		0x00010000			// We need to send a FIN.
 #define	NAGLING			0x00020000			// We are using Nagle's algorithm.
@@ -236,9 +225,6 @@ typedef struct TCB TCB;
 											// of recv.
 #define	GC_PENDING		0x01000000			// A graceful close is pending.
 #define	KEEPALIVE		0x02000000			// Doing keepalives on this TCB.
-#define	URG_INLINE		0x04000000			// Urgent data to be processed
-											// inline.
-
 #define	FIN_OUTSTANDING	0x10000000			// We've sent a FIN 'recently', i.e.
 											// since the last retransmit. When
 											// this flag is set sendnext ==
@@ -258,8 +244,8 @@ typedef struct TCB TCB;
 //* The defintion of the 'slow flags'. If any of these flags are set we'll
 //  be forced off of the fast path.
 
-#define	TCP_SLOW_FLAGS	(URG_VALID | FLOW_CNTLD | GC_PENDING | \
-							TW_PENDING | DISC_NOTIFIED | IN_DELIV_URG | \
+#define	TCP_SLOW_FLAGS	(FLOW_CNTLD | GC_PENDING | \
+							TW_PENDING | DISC_NOTIFIED | \
 							FIN_NEEDED | FIN_SENT | FIN_OUTSTANDING | \
 							DISC_PENDING | PMTU_BH_PROBE)
 
@@ -336,7 +322,6 @@ struct TCPRcvInfo {
 	SeqNum				tri_seq;			// Sequence number.
 	SeqNum				tri_ack;			// Ack number.
 	uint				tri_window;			// Window.
-	uint				tri_urgent;			// Urgent pointer.
 	uint				tri_flags;			// Flags.
 };
 

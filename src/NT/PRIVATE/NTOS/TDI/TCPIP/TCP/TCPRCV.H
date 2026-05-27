@@ -25,7 +25,6 @@ typedef struct TCPRAHdr {
 	SeqNum				trh_start;		// First sequence number.
 	uint				trh_size;		// Size in bytes of data in this TRH.
 	uint				trh_flags;		// Flags for this segment.
-	uint				trh_urg;		// Urgent pointer from this seg.
 	IPRcvBuf			*trh_buffer;	// Head of buffer list for this TRH.
 	IPRcvBuf			*trh_end;		// End of buffer list for this TRH.
 

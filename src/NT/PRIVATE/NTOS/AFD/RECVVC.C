@@ -29,8 +29,7 @@ AfdCancelReceive (
 
 PIRP
 AfdGetPendedReceiveIrp (
-    IN PAFD_CONNECTION Connection,
-    IN BOOLEAN Expedited
+    IN PAFD_CONNECTION Connection
     );
 
 PAFD_BUFFER
@@ -43,7 +42,6 @@ AfdGetReceiveBuffer (
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text( PAGEAFD, AfdBReceive )
 #pragma alloc_text( PAGEAFD, AfdBReceiveEventHandler )
-#pragma alloc_text( PAGEAFD, AfdBReceiveExpeditedEventHandler )
 #pragma alloc_text( PAGEAFD, AfdCancelReceive )
 #pragma alloc_text( PAGEAFD, AfdGetPendedReceiveIrp )
 #pragma alloc_text( PAGEAFD, AfdGetReceiveBuffer )
@@ -96,12 +94,6 @@ AfdBReceive (
 
         receiveRequest = Irp->AssociatedIrp.SystemBuffer;
 
-        if ( (receiveRequest->ReceiveFlags & TDI_RECEIVE_EXPEDITED) != 0 ) {
-            receiveFlags = TDI_RECEIVE_EXPEDITED;
-        } else {
-            receiveFlags = 0;
-        }
-
         if ( (receiveRequest->ReceiveFlags & TDI_RECEIVE_PEEK) != 0 ) {
             peek = TRUE;
             receiveFlags |= TDI_RECEIVE_PEEK;
@@ -139,15 +131,6 @@ AfdBReceive (
     //
 
     IrpSp->Parameters.DeviceIoControl.InputBufferLength = 0;
-
-    //
-    // If this is an inline endpoint, then either type of receive data
-    // can be used to satisfy this receive.
-    //
-
-    if ( endpoint->InLine ) {
-        receiveFlags |= TDI_RECEIVE_EXPEDITED | TDI_RECEIVE_NORMAL;
-    }
 
     //
     // Check whether the remote end has aborted the connection, in which 
@@ -242,27 +225,15 @@ AfdBReceive (
                 // Update the counts of bytes bufferred on the connection.
                 //
     
-                if ( afdBuffer->ExpeditedData ) {
-    
-                    ASSERT( connection->VcBufferredExpeditedBytes >= bytesReceived );
-                    ASSERT( connection->VcBufferredExpeditedCount > 0 );
-    
-                    connection->VcBufferredExpeditedBytes -= bytesReceived;
-                    connection->VcBufferredExpeditedCount -= 1;
-    
-                } else {
-    
-                    ASSERT( connection->VcBufferredReceiveBytes >= bytesReceived );
-                    ASSERT( connection->VcBufferredReceiveCount > 0 );
-    
-                    connection->VcBufferredReceiveBytes -= bytesReceived;
-                    connection->VcBufferredReceiveCount -= 1;
-                }
+                ASSERT( connection->VcBufferredReceiveBytes >= bytesReceived );
+                ASSERT( connection->VcBufferredReceiveCount > 0 );
+
+                connection->VcBufferredReceiveBytes -= bytesReceived;
+                connection->VcBufferredReceiveCount -= 1;
     
                 RemoveEntryList( &afdBuffer->BufferListEntry );
 
                 afdBuffer->DataOffset = 0;
-                afdBuffer->ExpeditedData = FALSE;
 
                 AfdReturnBuffer( afdBuffer );
 
@@ -279,13 +250,8 @@ AfdBReceive (
                 // Update the counts of bytes bufferred on the connection.
                 //
     
-                if ( afdBuffer->ExpeditedData ) {
-                    ASSERT( connection->VcBufferredExpeditedBytes >= bytesReceived );
-                    connection->VcBufferredExpeditedBytes -= bytesReceived;
-                } else {
-                    ASSERT( connection->VcBufferredReceiveBytes >= bytesReceived );
-                    connection->VcBufferredReceiveBytes -= bytesReceived;
-                }
+                ASSERT( connection->VcBufferredReceiveBytes >= bytesReceived );
+                connection->VcBufferredReceiveBytes -= bytesReceived;
     
                 //
                 // Not all of the buffer's data was taken.  Update the 
@@ -565,7 +531,6 @@ Return Value:
     NTSTATUS status;
     ULONG receiveLength;
     BOOLEAN userIrp;
-    BOOLEAN expedited;
     BOOLEAN completeMessage;
 
     DEBUG receiveLength = 0xFFFFFFFF;
@@ -623,10 +588,8 @@ Return Value:
     // or expedited data, and whether this is a complete message.
     //
 
-    expedited = (BOOLEAN)( (ReceiveFlags & TDI_RECEIVE_EXPEDITED) != 0 );
-
-    ASSERT( expedited || connection->VcReceiveBytesInTransport == 0 );
-    ASSERT( expedited || connection->VcReceiveCountInTransport == 0 );
+    ASSERT( connection->VcReceiveBytesInTransport == 0 );
+    ASSERT( connection->VcReceiveCountInTransport == 0 );
 
     completeMessage = (BOOLEAN)((ReceiveFlags & TDI_RECEIVE_ENTIRE_MESSAGE) != 0);
 
@@ -639,7 +602,7 @@ Return Value:
     IoAcquireCancelSpinLock( &cancelIrql );
     KeAcquireSpinLock( &endpoint->SpinLock, &oldIrql );
 
-    if ( !IsListEmpty( &connection->VcReceiveIrpListHead ) && !expedited ) {
+    if ( !IsListEmpty( &connection->VcReceiveIrpListHead ) ) {
 
         PIO_STACK_LOCATION irpSp;
 
@@ -776,7 +739,7 @@ Return Value:
             receiveLength = BytesAvailable;
         }
     
-    } else if ( !expedited ) {
+    } else {
 
         ASSERT( IsListEmpty( &connection->VcReceiveIrpListHead ) );
 
@@ -943,20 +906,6 @@ Return Value:
             receiveLength = BytesAvailable;
         }
 
-    } else {
-
-        //
-        // We're being indicated with expedited data.  Buffer it and
-        // complete any pended IRPs in the restart routine.  We always
-        // buffer expedited data to save complexity and because expedited
-        // data is not an important performance case.
-        //
-        // !!! do we need to perform flow control with expedited data?
-        //
-
-        userIrp = FALSE;
-        requiredAfdBufferSize = BytesAvailable;
-        receiveLength = BytesAvailable;
     }
 
     //
@@ -1015,7 +964,6 @@ Return Value:
     // Remember the type of data that we're receiving.
     //
 
-    afdBuffer->ExpeditedData = expedited;
     afdBuffer->PartialMessage = !completeMessage;
 
     //
@@ -1031,7 +979,7 @@ Return Value:
         AfdRestartBufferReceive,
         afdBuffer,
         irp->MdlAddress,
-        ReceiveFlags & (TDI_RECEIVE_EXPEDITED | TDI_RECEIVE_NORMAL),
+        ReceiveFlags & TDI_RECEIVE_NORMAL,
         receiveLength
         );
 
@@ -1049,46 +997,6 @@ Return Value:
 
 } // AfdBReceiveEventHandler
 
-
-NTSTATUS
-AfdBReceiveExpeditedEventHandler (
-    IN PVOID TdiEventContext,
-    IN CONNECTION_CONTEXT ConnectionContext,
-    IN ULONG ReceiveFlags,
-    IN ULONG BytesIndicated,
-    IN ULONG BytesAvailable,
-    OUT ULONG *BytesTaken,
-    IN PVOID Tsdu,
-    OUT PIRP *IoRequestPacket
-    )
-
-/*++
-
-Routine Description:
-
-    Handles receive expedited events for nonbufferring transports.
-
-Arguments:
-
-
-Return Value:
-
-
---*/
-
-{
-    return AfdBReceiveEventHandler (
-               TdiEventContext,
-               ConnectionContext,
-               ReceiveFlags | TDI_RECEIVE_EXPEDITED,
-               BytesIndicated,
-               BytesAvailable,
-               BytesTaken,
-               Tsdu,
-               IoRequestPacket
-               );
-
-} // AfdBReceiveExpeditedEventHandler
 
 
 NTSTATUS
@@ -1134,7 +1042,6 @@ Return Value:
     LIST_ENTRY completeIrpListHead;
     NTSTATUS status;
     PIRP userIrp;
-    BOOLEAN expedited;
     NTSTATUS irpStatus;
 
     afdBuffer = Context;
@@ -1241,12 +1148,9 @@ Return Value:
     IoAcquireCancelSpinLock( &cancelIrql );
     KeAcquireSpinLock( &endpoint->SpinLock, &oldIrql );
 
-    expedited = afdBuffer->ExpeditedData;
-
     while ( afdBuffer != NULL &&
                 (userIrp = AfdGetPendedReceiveIrp(
-                               connection,
-                               expedited )) != NULL ) {
+                               connection )) != NULL ) {
 
         PIO_STACK_LOCATION irpSp;
         ULONG receiveFlags;
@@ -1323,8 +1227,6 @@ Return Value:
     
             if ( status == STATUS_SUCCESS ) {
     
-                afdBuffer->ExpeditedData = FALSE;
-
                 AfdReturnBuffer( afdBuffer );
                 afdBuffer = NULL;
 
@@ -1435,13 +1337,8 @@ Return Value:
             &afdBuffer->BufferListEntry
             );
 
-        if ( expedited ) {
-            connection->VcBufferredExpeditedBytes += afdBuffer->DataLength;
-            connection->VcBufferredExpeditedCount += 1;
-        } else {
-            connection->VcBufferredReceiveBytes += afdBuffer->DataLength;
-            connection->VcBufferredReceiveCount += 1;
-        }
+        connection->VcBufferredReceiveBytes += afdBuffer->DataLength;
+        connection->VcBufferredReceiveCount += 1;
 
         //
         // Remember whether we got a full or partial receive in the
@@ -1465,17 +1362,11 @@ Return Value:
     IoReleaseCancelSpinLock( cancelIrql );
 
     //
-    // If there was leftover data, complete polls as necessary.  Indicate
-    // expedited data if the endpoint is not InLine and expedited data
-    // was received; otherwise, indicate normal data.
+    // If there was leftover data, complete polls as necessary.
     //
 
     if ( afdBuffer != NULL ) {
-        if ( expedited && !endpoint->InLine ) {
-            AfdIndicatePollEvent( endpoint, AFD_POLL_RECEIVE_EXPEDITED, STATUS_SUCCESS );
-        } else {
-            AfdIndicatePollEvent( endpoint, AFD_POLL_RECEIVE, STATUS_SUCCESS );
-        }
+        AfdIndicatePollEvent( endpoint, AFD_POLL_RECEIVE, STATUS_SUCCESS );
     }
 
     //
@@ -1649,71 +1540,13 @@ Return Value:
     }
 
     //
-    // Act based on the type of data we're trying to get.
+    // Return the first bufferred data buffer, if any.
     //
 
-    switch ( ReceiveFlags & (TDI_RECEIVE_NORMAL | TDI_RECEIVE_EXPEDITED) ) {
-
-    case 0:
-
-        //
-        // Walk the connection's list of data buffers until we find the 
-        // first data buffer that is of the appropriate type.  
-        //
-
-        while ( listEntry != &Connection->VcReceiveBufferListHead &&
-                    afdBuffer->ExpeditedData ) {
-
-            listEntry = afdBuffer->BufferListEntry.Flink;
-            afdBuffer = CONTAINING_RECORD( listEntry, AFD_BUFFER, BufferListEntry );
-        }
-
-        if ( listEntry != &Connection->VcReceiveBufferListHead ) {
-            return afdBuffer;
-        } else {
-            return NULL;
-        }
-
-    case TDI_RECEIVE_NORMAL | TDI_RECEIVE_EXPEDITED:
-
-        //
-        // Just return the first buffer, if there is one.
-        //
-
-        if ( listEntry != &Connection->VcReceiveBufferListHead ) {
-            return afdBuffer;
-        } else {
-            return NULL;
-        }
-
-    case TDI_RECEIVE_EXPEDITED:
-
-        if ( Connection->VcBufferredExpeditedCount == 0 ) {
-            return NULL;
-        }
-
-        //
-        // Walk the connection's list of data buffers until we find the 
-        // first data buffer that is of the appropriate type.  
-        //
-
-        while ( listEntry != &Connection->VcReceiveBufferListHead &&
-                    !afdBuffer->ExpeditedData ) {
-
-            listEntry = afdBuffer->BufferListEntry.Flink;
-            afdBuffer = CONTAINING_RECORD( listEntry, AFD_BUFFER, BufferListEntry );
-        }
-
-        if ( listEntry != &Connection->VcReceiveBufferListHead ) {
-            return afdBuffer;
-        } else {
-            return NULL;
-        }
-
-    case TDI_RECEIVE_NORMAL:
-    default:
-
-        ASSERT( FALSE );
+    if ( listEntry != &Connection->VcReceiveBufferListHead ) {
+        return afdBuffer;
+    } else {
+        return NULL;
     }
 
 } // AfdGetReceiveBuffer
@@ -1721,8 +1554,7 @@ Return Value:
 
 PIRP
 AfdGetPendedReceiveIrp (
-    IN PAFD_CONNECTION Connection,
-    IN BOOLEAN Expedited
+    IN PAFD_CONNECTION Connection
     )
 
 /*++
@@ -1741,9 +1573,6 @@ Arguments:
 
     Connection - a pointer to the connection to search for an IRP.
 
-    Expedited - TRUE if this routine should return a receive IRP which
-        can receive expedited data.
-
 Return Value:
 
     PIRP - a pointer to an IRP which can receive data of the specified
@@ -1754,79 +1583,20 @@ Return Value:
 
 {
     PIRP irp;
-    PIO_STACK_LOCATION irpSp;
-    ULONG receiveFlags;
     PLIST_ENTRY listEntry;
 
     ASSERT( KeGetCurrentIrql( ) == DISPATCH_LEVEL );
 
     //
-    // Walk the list of pended receive IRPs looking for one which can
-    // be completed with the specified type of data.
+    // Pop the head of the connection's pended-receive-IRP list, if any.
     //
 
-    for ( listEntry = Connection->VcReceiveIrpListHead.Flink;
-          listEntry != &Connection->VcReceiveIrpListHead;
-          listEntry = listEntry->Flink ) {
-
-        //
-        // Get a pointer to the IRP and our stack location in the IRP.
-        //
-
-        irp = CONTAINING_RECORD( listEntry, IRP, Tail.Overlay.ListEntry );
-        irpSp = IoGetCurrentIrpStackLocation( irp );
-
-        //
-        // Determine whether this IRP can receive the data type we need.
-        //
-
-        receiveFlags = (ULONG)irpSp->Parameters.DeviceIoControl.Type3InputBuffer;
-        receiveFlags &= TDI_RECEIVE_NORMAL | TDI_RECEIVE_EXPEDITED;
-
-        if ( receiveFlags == 0 && !Expedited ) {
-
-            //
-            // We have a normal receive and normal data.  Remove this
-            // IRP from the connection's list and return it.
-            //
-
-            RemoveEntryList( listEntry );
-            return irp;
-        }
-
-        if ( receiveFlags == (TDI_RECEIVE_NORMAL | TDI_RECEIVE_EXPEDITED) ) {
-
-            //
-            // This is an "either" receive.  It can take the data 
-            // regardless of the data type.  
-            //
-
-            RemoveEntryList( listEntry );
-            return irp;
-        }
-
-        if ( receiveFlags == TDI_RECEIVE_EXPEDITED && Expedited ) {
-
-            //
-            // We have an expedited receive and expedited data.  Remove 
-            // this IRP from the connection's list and return it.  
-            //
-
-            RemoveEntryList( listEntry );
-            return irp;
-        }
-
-        //
-        // This IRP did not meet our criteria.  Continue scanning the
-        // connection's list of pended IRPs for a good IRP.
-        //
+    if ( IsListEmpty( &Connection->VcReceiveIrpListHead ) ) {
+        return NULL;
     }
 
-    //
-    // There were no IRPs which could be completed with the specified
-    // type of data.
-    //
-
-    return NULL;
+    listEntry = RemoveHeadList( &Connection->VcReceiveIrpListHead );
+    irp = CONTAINING_RECORD( listEntry, IRP, Tail.Overlay.ListEntry );
+    return irp;
 
 } // AfdGetPendedReceiveIrp

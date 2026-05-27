@@ -42,7 +42,6 @@ AfdRestartDeviceControl (
 #pragma alloc_text( PAGE, AfdQueryHandles )
 #pragma alloc_text( PAGE, AfdGetInformation )
 #pragma alloc_text( PAGE, AfdSetInformation )
-#pragma alloc_text( PAGE, AfdSetInLineMode )
 #pragma alloc_text( PAGE, AfdGetContext )
 #pragma alloc_text( PAGE, AfdGetContextLength )
 #pragma alloc_text( PAGE, AfdSetContext )
@@ -731,31 +730,6 @@ Return Value:
         endpoint->NonBlocking = afdInfo->Information.Boolean;
         break;
 
-    case AFD_INLINE_MODE:
-
-        //
-        // Set the inline mode of the endpoint.  If TRUE, a receive for
-        // normal data will be completed with either normal data or
-        // expedited data.  If the endpoint is connected, we need to
-        // tell the TDI provider that the endpoint is inline so that it
-        // delivers data to us in order.  If the endpoint is not yet
-        // connected, then we will set the inline mode when we create
-        // the TDI connection object.
-        //
-
-        if ( endpoint->Type == AfdBlockTypeVcConnecting ) {
-            status = AfdSetInLineMode(
-                         AFD_CONNECTION_FROM_ENDPOINT( endpoint ),
-                         afdInfo->Information.Boolean
-                         );
-            if ( !NT_SUCCESS(status) ) {
-                return status;
-            }
-        }
-
-        endpoint->InLine = afdInfo->Information.Boolean;
-        break;
-
     case AFD_RECEIVE_WINDOW_SIZE:
     case AFD_SEND_WINDOW_SIZE: {
 
@@ -874,121 +848,6 @@ Return Value:
 
 } // AfdSetInformation
 
-
-NTSTATUS
-AfdSetInLineMode (
-    IN PAFD_CONNECTION Connection,
-    IN BOOLEAN InLine
-    )
-
-/*++
-
-Routine Description:
-
-    Sets a connection to be in inline mode.  In inline mode, urgent data
-    is delivered in the order in which it is received.  We must tell the
-    TDI provider about this so that it indicates data in the proper
-    order.
-
-Arguments:
-
-    Connection - the AFD connection to set as inline.
-
-    InLine - TRUE to enable inline mode, FALSE to disable inline mode.
-
-Return Value:
-
-    NTSTATUS -- Indicates whether the request was successfully
-        performed.
-
---*/
-
-{
-    NTSTATUS status;
-    PTCP_REQUEST_SET_INFORMATION_EX setInfoEx;
-    PIO_STATUS_BLOCK ioStatusBlock;
-    HANDLE event;
-
-    PAGED_CODE( );
-
-    //
-    // Allocate space to hold the TDI set information buffers and the IO
-    // status block.
-    //
-
-    ioStatusBlock = AFD_ALLOCATE_POOL(
-                        NonPagedPool,
-                        sizeof(*ioStatusBlock) + sizeof(*setInfoEx) +
-                            sizeof(TCPSocketOption)
-                        );
-    if ( ioStatusBlock == NULL ) {
-        return STATUS_NO_MEMORY;
-    }
-
-    //
-    // Initialize the TDI information buffers.
-    //
-
-    setInfoEx = (PTCP_REQUEST_SET_INFORMATION_EX)(ioStatusBlock + 1);
-
-    setInfoEx->ID.toi_entity.tei_entity = CO_TL_ENTITY;
-    setInfoEx->ID.toi_entity.tei_instance = TL_INSTANCE;
-    setInfoEx->ID.toi_class = INFO_CLASS_PROTOCOL;
-    setInfoEx->ID.toi_type = INFO_TYPE_CONNECTION;
-    setInfoEx->ID.toi_id = TCP_SOCKET_OOBINLINE;
-
-    *(PULONG)setInfoEx->Buffer = (ULONG)InLine;
-    setInfoEx->BufferSize = sizeof(ULONG);
-
-    KeAttachProcess( AfdSystemProcess );
-
-    status = ZwCreateEvent(
-                 &event,
-                 EVENT_ALL_ACCESS,
-                 NULL,
-                 SynchronizationEvent,
-                 FALSE
-                 );
-    if ( !NT_SUCCESS(status) ) {
-        AFD_FREE_POOL( ioStatusBlock );
-        return status;
-    }
-
-    //
-    // Make the actual TDI set information call.
-    //
-
-    status = ZwDeviceIoControlFile(
-                 Connection->Handle,
-                 event,
-                 NULL,
-                 NULL,
-                 ioStatusBlock,
-                 IOCTL_TCP_SET_INFORMATION_EX,
-                 setInfoEx,
-                 sizeof(*setInfoEx) + setInfoEx->BufferSize,
-                 NULL,
-                 0
-                 );
-
-    if ( status == STATUS_PENDING ) {
-        status = ZwWaitForSingleObject( event, FALSE, NULL );
-        ASSERT( NT_SUCCESS(status) );
-        status = ioStatusBlock->Status;
-    }
-
-    ZwClose( event );
-
-    KeDetachProcess( );
-    AFD_FREE_POOL( ioStatusBlock );
-
-    //
-    // Since this option is only supported for TCP/IP, always return success.
-    //
-
-    return STATUS_SUCCESS;
-
-} // AfdSetInLineMode
 
 
 NTSTATUS

@@ -398,18 +398,6 @@ Return Value:
         
             status = AfdSetEventHandler(
                          endpoint->AddressHandle,
-                         TDI_EVENT_RECEIVE_EXPEDITED,
-                         AfdReceiveExpeditedEventHandler,
-                         endpoint
-                         );
-#if DBG
-            if ( !NT_SUCCESS(status) ) {
-                DbgPrint( "AFD: Setting TDI_EVENT_RECEIVE_EXPEDITED failed: %lx\n", status );
-            }
-#endif
-        
-            status = AfdSetEventHandler(
-                         endpoint->AddressHandle,
                          TDI_EVENT_SEND_POSSIBLE,
                          AfdSendPossibleEventHandler,
                          endpoint
@@ -433,26 +421,6 @@ Return Value:
                 DbgPrint( "AFD: Setting TDI_EVENT_RECEIVE failed: %lx\n", status );
             }
 #endif
-
-            //
-            // Only attempt to set the expedited event handler if the
-            // TDI provider supports expedited data.
-            //
-
-            if ( (endpoint->TransportInfo->ProviderInfo.ServiceFlags &
-                     TDI_SERVICE_EXPEDITED_DATA) != 0 ) {
-                status = AfdSetEventHandler(
-                             endpoint->AddressHandle,
-                             TDI_EVENT_RECEIVE_EXPEDITED,
-                             AfdBReceiveExpeditedEventHandler,
-                             endpoint
-                             );
-#if DBG
-                if ( !NT_SUCCESS(status) ) {
-                    DbgPrint( "AFD: Setting TDI_EVENT_RECEIVE_EXPEDITED failed: %lx\n", status );
-                }
-#endif
-            }
         }
     }
 

@@ -56,8 +56,6 @@ struct AddrObj {
     PVOID                   ao_rcvcontext; // Receive context.
     PRcvDGEvent             ao_rcvdg;   // Receive DG event handler
     PVOID                   ao_rcvdgcontext; // Receive DG context.
-    PRcvEvent               ao_exprcv;  // Expedited receive event handler
-    PVOID                   ao_exprcvcontext; // Expedited receive context.
 	struct AOMCastAddr		*ao_mcastlist;	// List of active multicast 
 										// addresses.
 }; /* AddrObj */

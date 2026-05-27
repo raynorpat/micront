@@ -42,7 +42,6 @@
 							TDI_SERVICE_ERROR_FREE_DELIVERY	| \
 							TDI_SERVICE_BROADCAST_SUPPORTED	| \
 							TDI_SERVICE_DELAYED_ACCEPTANCE	| \
-							TDI_SERVICE_EXPEDITED_DATA		| \
 							TDI_SERVICE_NO_ZERO_LENGTH)
 #else
 #define	MY_SERVICE_FLAGS	(TDI_SERVICE_CONNECTIONLESS_MODE	| \
@@ -519,22 +518,10 @@ TdiQueryInformationEx(PTDI_REQUEST Request, TDIObjectID *ID,
 				if (QueryTCB != NULL) {
 					CTEStructAssert(QueryTCB, tcb);		
 					CTEGetLock(&QueryTCB->tcb_lock, &TCBHandle);
-					if ((QueryTCB->tcb_flags & (URG_INLINE | URG_VALID)) ==
-						(URG_INLINE | URG_VALID)) {
-						// We're in inline mode, and the urgent data fields are
-						// valid.
-						AMInfo->tsa_size = QueryTCB->tcb_urgend -
-							QueryTCB->tcb_urgstart + 1;
-						// Rcvnext - pendingcnt is the sequence number of the
-						// next byte of data that will be delivered to the
-						// client. Urgend - that value is the offset in the
-						// data stream of the end of urgent data.
-						AMInfo->tsa_offset = QueryTCB->tcb_urgend -
-							(QueryTCB->tcb_rcvnext - QueryTCB->tcb_pendingcnt);
-					} else {
-						AMInfo->tsa_size = 0;
-						AMInfo->tsa_offset = 0;
-					}
+					// OOB / urgent data not supported; the SIOCATMARK
+					// surrogate fields are constant zero.
+					AMInfo->tsa_size = 0;
+					AMInfo->tsa_offset = 0;
 					CTEFreeLock(&QueryTCB->tcb_lock, TCBHandle);
 					*Size = sizeof(TCPSocketAMInfo);
 					CopyFlatToNdis(Buffer, InfoBuffer, sizeof(TCPSocketAMInfo),
@@ -790,12 +777,6 @@ TdiSetInformationEx(PTDI_REQUEST Request, TDIObjectID *ID, void *Buffer,
 						break;
 					case TCP_SOCKET_KEEPALIVE:
 						Flag = KEEPALIVE;
-						break;
-					case TCP_SOCKET_BSDURGENT:
-						Flag = BSD_URGENT;
-						break;
-					case TCP_SOCKET_OOBINLINE:
-						Flag = URG_INLINE;
 						break;
 					default:
 						Status = TDI_INVALID_PARAMETER;

@@ -209,7 +209,6 @@ Return Value:
              OptionName == SO_DEBUG ||
              OptionName == SO_DONTLINGER ||
              OptionName == SO_LINGER ||
-             OptionName == SO_OOBINLINE ||
              OptionName == SO_RCVBUF ||
              OptionName == SO_REUSEADDR ||
              OptionName == SO_SNDBUF ||
@@ -268,8 +267,13 @@ Return Value:
 
         case SO_OOBINLINE:
 
-            *OptionValue = socket->OobInline;
-            break;
+            //
+            // Out-of-band data is not supported; the option is rejected
+            // rather than silently returning a value we never honor.
+            //
+
+            error = WSAENOPROTOOPT;
+            goto exit;
 
         case SO_RCVBUF: {
 
@@ -694,7 +698,8 @@ Return Value:
 
         //
         // Return the number of bytes that can be read from the socket
-        // without blocking.
+        // without blocking.  Out-of-band data is not supported, so only
+        // normal-receive bytes contribute.
         //
 
         error = GetReceiveInformation( socket, &receiveInformation );
@@ -702,19 +707,7 @@ Return Value:
             goto exit;
         }
 
-        //
-        // If this socket is set for reading out-of-band data inline,
-        // include the number of expedited bytes available in the result.
-        // If the socket is not set for SO_OOBINLINE, just return the
-        // number of normal bytes available.
-        //
-
-        if ( socket->OobInline ) {
-            *Argument = receiveInformation.BytesAvailable +
-                            receiveInformation.ExpeditedBytesAvailable;
-        } else {
-            *Argument = receiveInformation.BytesAvailable;
-        }
+        *Argument = receiveInformation.BytesAvailable;
 
         //
         // If there are more bytes available than the size of the socket's
@@ -742,20 +735,12 @@ Return Value:
         }
 
         //
-        // Return a BOOL that indicates whether there is expedited data
-        // to be read on the socket.
+        // Out-of-band data is not supported, so there is never an urgent
+        // mark in the stream.  Report TRUE unconditionally — the caller's
+        // read pointer is always "at the mark" of the empty urgent stream.
         //
 
-        error = GetReceiveInformation( socket, &receiveInformation );
-        if ( error != NO_ERROR ) {
-            goto exit;
-        }
-
-        if ( receiveInformation.ExpeditedBytesAvailable != 0 ) {
-            *argument = FALSE;
-        } else {
-            *argument = TRUE;
-        }
+        *argument = TRUE;
 
         break;
     }
@@ -1051,31 +1036,15 @@ Return Value:
 
             break;
 
-        case SO_OOBINLINE: {
+        case SO_OOBINLINE:
 
-            BOOLEAN inLine;
+            //
+            // Out-of-band data is not supported; the option is rejected
+            // rather than silently accepted and ignored.
+            //
 
-            if ( optionValue == 0 ) {
-                inLine = FALSE;
-            } else {
-                inLine = TRUE;
-            }
-
-            error = SockSetInformation(
-                        socket,
-                        AFD_INLINE_MODE,
-                        &inLine,
-                        NULL,
-                        NULL
-                        );
-            if ( error != NO_ERROR ) {
-                goto exit;
-            }
-
-            socket->OobInline = inLine;
-
-            break;
-        }
+            error = WSAENOPROTOOPT;
+            goto exit;
 
         case SO_RCVBUF:
 
@@ -1421,7 +1390,6 @@ IsValidOptionForSocket (
     case SO_DONTLINGER:
     case SO_KEEPALIVE:
     case SO_LINGER:
-    case SO_OOBINLINE:
     case SO_ACCEPTCONN:
 
         //

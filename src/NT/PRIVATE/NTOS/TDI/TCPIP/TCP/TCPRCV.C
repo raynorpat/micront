@@ -1351,7 +1351,6 @@ PullFromRAQ(TCB *RcvTCB, TCPRcvInfo *RcvInfo,  uint *Size)
             Overlap = NextSeq - CurrentTRH->trh_start;
             RcvInfo->tri_seq = NextSeq;
             RcvInfo->tri_flags = CurrentTRH->trh_flags;
-            RcvInfo->tri_urgent = CurrentTRH->trh_urg;
 
             if (Overlap != (int) CurrentTRH->trh_size) {
                 NewBuf = FreePartialRB(CurrentTRH->trh_buffer, Overlap);
@@ -1438,7 +1437,6 @@ CreateTRH(TCPRAHdr *PrevTRH, IPRcvBuf *RcvBuf, TCPRcvInfo *RcvInfo, int Size)
     NewTRH->trh_start = RcvInfo->tri_seq;
     NewTRH->trh_flags = RcvInfo->tri_flags;
     NewTRH->trh_size = Size;
-    NewTRH->trh_urg = RcvInfo->tri_urgent;
     NewTRH->trh_buffer = NewRcvBuf;
     NewTRH->trh_end = NewRcvBuf;
 
@@ -1533,32 +1531,20 @@ PutOnRAQ(TCB *RcvTCB, TCPRcvInfo *RcvInfo, IPRcvBuf *RcvBuf, uint Size)
                     FrontOverlap = CurrentTRH->trh_start - RcvInfo->tri_seq;
                     if (FrontOverlap > 0) {
                         // Have overlap in front. Allocate an IPRcvBuf to
-                        // to hold it, and copy it, unless we would have to
-                        // combine non-urgent with urgent.
-                        if (!(RcvInfo->tri_flags & TCP_FLAG_URG) &&
-                            (CurrentTRH->trh_flags & TCP_FLAG_URG)) {
-                            if (CreateTRH(PrevTRH, RcvBuf, RcvInfo,
-                                CurrentTRH->trh_start - RcvInfo->tri_seq)) {
-                                PrevTRH = PrevTRH->trh_next;
-                                CurrentTRH = PrevTRH->trh_next;
-                            }
-                            FrontOverlap = 0;
+                        // hold it, and copy it.
+                        NewRB = CTEAllocMem(sizeof(IPRcvBuf) + FrontOverlap);
+                        if (NewRB == NULL)
+                            return;             // Couldn't get the buffer.
 
-                        } else {
-                            NewRB = CTEAllocMem(sizeof(IPRcvBuf) + FrontOverlap);
-                            if (NewRB == NULL)
-                                return;             // Couldn't get the buffer.
-
-                            NewRB->ipr_owner = IPR_OWNER_TCP;
-                            NewRB->ipr_size = FrontOverlap;
-                            NewRB->ipr_buffer = (uchar *)(NewRB + 1);
-                            CopyRcvToBuffer(NewRB->ipr_buffer, RcvBuf,
-                                FrontOverlap, 0);
-                            CurrentTRH->trh_size += FrontOverlap;
-                            NewRB->ipr_next = CurrentTRH->trh_buffer;
-                            CurrentTRH->trh_buffer = NewRB;
-                            CurrentTRH->trh_start = RcvInfo->tri_seq;
-                        }
+                        NewRB->ipr_owner = IPR_OWNER_TCP;
+                        NewRB->ipr_size = FrontOverlap;
+                        NewRB->ipr_buffer = (uchar *)(NewRB + 1);
+                        CopyRcvToBuffer(NewRB->ipr_buffer, RcvBuf,
+                            FrontOverlap, 0);
+                        CurrentTRH->trh_size += FrontOverlap;
+                        NewRB->ipr_next = CurrentTRH->trh_buffer;
+                        CurrentTRH->trh_buffer = NewRB;
+                        CurrentTRH->trh_start = RcvInfo->tri_seq;
                     }
 
                     // We've updated the starting sequence number of this TRH
@@ -1568,28 +1554,6 @@ PutOnRAQ(TCB *RcvTCB, TCPRcvInfo *RcvInfo, IPRcvBuf *RcvBuf, uint Size)
                     // overlap.
                     if (!(CurrentTRH->trh_flags & TCP_FLAG_FIN)) {
                         BackOverlap = RcvInfo->tri_seq + Size - NextTRHSeq;
-                        if ((BackOverlap > 0) &&
-                            (RcvInfo->tri_flags & TCP_FLAG_URG) &&
-                            !(CurrentTRH->trh_flags & TCP_FLAG_URG) &&
-                            (FrontOverlap <= 0)) {
-                                int     AmountToTrim;
-                            // The incoming segment has urgent data and overlaps
-                            // on the back but not the front, and the current
-                            // TRH has no urgent data. We can't combine into
-                            // this TRH, so trim the front of the incoming
-                            // segment to NextTRHSeq and move to the next
-                            // TRH.
-                            AmountToTrim = NextTRHSeq - RcvInfo->tri_seq;
-                            CTEAssert(AmountToTrim >= 0);
-                            CTEAssert(AmountToTrim < (int) Size);
-                            RcvBuf = FreePartialRB(RcvBuf, (uint)AmountToTrim);
-                            RcvInfo->tri_seq += AmountToTrim;
-                            RcvInfo->tri_urgent -= AmountToTrim;
-                            PrevTRH = CurrentTRH;
-                            CurrentTRH = PrevTRH->trh_next;
-                            continue;
-                        }
-
                     } else
                         BackOverlap = 0;
 
@@ -1612,28 +1576,6 @@ PutOnRAQ(TCB *RcvTCB, TCPRcvInfo *RcvInfo, IPRcvBuf *RcvBuf, uint Size)
                             CurrentTRH->trh_end->ipr_next = NewRB;
                             CurrentTRH->trh_end = NewRB;
                         }
-                    }
-
-                    // Everything should be consistent now. If there's an
-                    // urgent data pointer in the incoming segment, update the
-                    // one in the TRH now.
-                    if (RcvInfo->tri_flags & TCP_FLAG_URG) {
-                        SeqNum      UrgSeq;
-                        // Have an urgent pointer. If the current TRH already
-                        // has an urgent pointer, see which is bigger. Otherwise
-                        // just use this one.
-                        UrgSeq = RcvInfo->tri_seq + RcvInfo->tri_urgent;
-                        if (CurrentTRH->trh_flags & TCP_FLAG_URG) {
-                            SeqNum      TRHUrgSeq;
-
-                            TRHUrgSeq = CurrentTRH->trh_start +
-                                CurrentTRH->trh_urg;
-                            if (SEQ_LT(UrgSeq, TRHUrgSeq))
-                                UrgSeq = TRHUrgSeq;
-                        } else
-                            CurrentTRH->trh_flags |= TCP_FLAG_URG;
-
-                        CurrentTRH->trh_urg = UrgSeq - CurrentTRH->trh_start;
                     }
 
                 } else {
@@ -1754,8 +1696,12 @@ TCPRcv(void *IPContext, IPAddr Dest, IPAddr Src, IPAddr LocalAddr,
         RcvInfo.tri_seq = net_long(TCPH->tcp_seq);
         RcvInfo.tri_ack = net_long(TCPH->tcp_ack);
         RcvInfo.tri_window = (uint)net_short(TCPH->tcp_window);
-        RcvInfo.tri_urgent = (uint)net_short(TCPH->tcp_urgent);
-        RcvInfo.tri_flags = (uint)TCPH->tcp_flags;
+        // OOB / urgent / expedited data is not supported.  Mask off
+        // TCP_FLAG_URG at parse so urgent bytes flow through the normal
+        // receive queue in stream order; the urgent-pointer state, the
+        // expedited delivery path, and the reassembly URG branches are
+        // all gone.
+        RcvInfo.tri_flags = (uint)TCPH->tcp_flags & ~TCP_FLAG_URG;
         DataOffset = TCP_HDR_SIZE(TCPH);
 		
 		if (DataOffset <= Size) {
@@ -2107,14 +2053,6 @@ TCPRcv(void *IPContext, IPAddr Dest, IPAddr Src, IPAddr LocalAddr,
                 // window info.
                 RcvTCB->tcb_rcvnext = ++RcvInfo.tri_seq;
 				
-				if (RcvInfo.tri_flags & TCP_FLAG_URG) {
-					// Urgent data. Update the pointer.
-					if (RcvInfo.tri_urgent != 0)
-						RcvInfo.tri_urgent--;
-					else
-						RcvInfo.tri_flags &= ~TCP_FLAG_URG;
-				}
-				
                 RcvTCB->tcb_remmss = FindMSS(TCPH);
 
                 // If there are options, update them now. We already have an
@@ -2205,7 +2143,6 @@ NotSYNSent:
 					// Had a SYN. Clip it off and update the sequence number.
 					RcvInfo.tri_flags &= ~TCP_FLAG_SYN;
 					RcvInfo.tri_seq++;
-					RcvInfo.tri_urgent--;
 				}
 				
 				// Advance the receive buffer to point at the new data.
@@ -2227,17 +2164,11 @@ NotSYNSent:
 				// drop the frame.
 				Size -= AmountToClip;
 				RcvInfo.tri_seq += AmountToClip;
-				RcvInfo.tri_urgent -= AmountToClip;
 				RcvBuf = TrimRcvBuf(RcvBuf, AmountToClip);
 				CTEAssert(RcvBuf != NULL);
 				CTEAssert(RcvBuf->ipr_size != 0 ||
 					(Size == 0 && FinByte));
 				
-				if (*(int *)&RcvInfo.tri_urgent < 0) {
-					RcvInfo.tri_urgent = 0;
-					RcvInfo.tri_flags &= ~TCP_FLAG_URG;
-				}
-					
 			}
 
             // We've made sure the front is OK. Now make sure part of it doesn't
@@ -2596,18 +2527,6 @@ NotSYNSent:
 
                     do {
 
-                        // Handle urgent data, if any.
-                        if (RcvInfo.tri_flags & TCP_FLAG_URG) {
-                            HandleUrgent(RcvTCB, &RcvInfo, RcvBuf, &Size);
-						
-						// Since we may have freed the lock, we need to recheck
-						// and see if we're closing here.
-						if (CLOSING(RcvTCB))
-							break;
-
-                        }
-
-
                         // OK, the data is in sequence, we've updated the
                         // reassembly queue and handled any urgent data. If we
                         // have any data go ahead and process it now.
@@ -2645,42 +2564,6 @@ NotSYNSent:
 							// If we're closing now, we're done, so get out.
 							if (CLOSING(RcvTCB))
 								break;
-                        }
-
-                        // See if we need to advance over some urgent data.
-                        if (RcvTCB->tcb_flags & URG_VALID) {
-							uint		AdvanceNeeded;
-							
-							// We only need to advance if we're not doing
-							// urgent inline. Urgent inline also has some
-							// implications for when we can clear the URG_VALID
-							// flag. If we're not doing urgent inline, we can
-							// clear it when rcvnext advances beyond urgent end.
-							// If we are doing inline, we clear it when rcvnext
-							// advances one receive window beyond urgend.
-							if (!(RcvTCB->tcb_flags & URG_INLINE)) {
-                            	if (RcvTCB->tcb_rcvnext == RcvTCB->tcb_urgstart)
-                                	RcvTCB->tcb_rcvnext = RcvTCB->tcb_urgend +
-                                		1;
-                            	else
-                                	CTEAssert(SEQ_LT(RcvTCB->tcb_rcvnext,
-                                    	RcvTCB->tcb_urgstart) ||
-                                    	SEQ_GT(RcvTCB->tcb_rcvnext,
-                                    	RcvTCB->tcb_urgend));
-								AdvanceNeeded = 0;
-							} else
-								AdvanceNeeded = RcvTCB->tcb_defaultwin;
-
-                            // See if we can clear the URG_VALID flag.
-                            if (SEQ_GT(RcvTCB->tcb_rcvnext - AdvanceNeeded,
-                                RcvTCB->tcb_urgend)) {
-                                RcvTCB->tcb_flags &= ~URG_VALID;
-								if (--(RcvTCB->tcb_slowcount) == 0) {
-									RcvTCB->tcb_fastchk &= ~TCP_FLAG_SLOW;
-									CheckTCBRcv(RcvTCB);
-								}
-							}
-
                         }
 
                         // We've handled the data. If the FIN bit is set, we

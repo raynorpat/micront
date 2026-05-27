@@ -442,7 +442,6 @@ Return Value:
     UNICODE_STRING     UKeyName;
     ULONG              maxConnectRexmits = 0;
     ULONG              maxDataRexmits = 0;
-	ULONG              useRFC1122UrgentPointer = 0;
 
 
 	//
@@ -457,7 +456,6 @@ Return Value:
 	MaxConnections = DEFAULT_MAX_CONNECTIONS;
 	maxConnectRexmits = MAX_CONNECT_REXMIT_CNT;
 	maxDataRexmits = MAX_REXMIT_CNT;
-	BSDUrgent = TRUE;
 
 
 	//
@@ -535,16 +533,6 @@ Return Value:
         if (maxDataRexmits > 255) {
             maxDataRexmits = 255;
         }
-
-        TCPInitializeParameter(
-            keyHandle,
-        	L"TcpUseRFC1122UrgentPointer",
-        	&useRFC1122UrgentPointer
-        	);
-
-        if (useRFC1122UrgentPointer) {
-			BSDUrgent = FALSE;
-		}
 
 	    //
 	    // Read a few IP optional (hidden) registry parameters that TCP

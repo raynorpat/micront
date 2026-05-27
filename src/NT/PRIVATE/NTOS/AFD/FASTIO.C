@@ -512,18 +512,15 @@ AfdFastIoDeviceControl (
 
         //
         // Determine whether we'll be able to perform fast IO.  In order 
-        // to do fast IO, there must be some bufferred data on the 
-        // connection, there must not be any pended receives on the 
-        // connection, and there must not be any bufferred expedited 
-        // data on the connection.  This last requirement is for
-        // the sake of simplicity only.
+        // to do fast IO, there must be some bufferred data on the
+        // connection, and there must not be any pended receives on the
+        // connection.
         //
 
         KeAcquireSpinLock( &endpoint->SpinLock, &oldIrql );
 
         if ( connection->VcBufferredReceiveCount == 0 ||
-                 !IsListEmpty( &connection->VcReceiveIrpListHead ) ||
-                 connection->VcBufferredExpeditedCount != 0 ) {
+                 !IsListEmpty( &connection->VcReceiveIrpListHead ) ) {
 
             KeReleaseSpinLock( &endpoint->SpinLock, oldIrql );
             return FALSE;
@@ -541,8 +538,6 @@ AfdFastIoDeviceControl (
                         AFD_BUFFER,
                         BufferListEntry
                         );
-
-        ASSERT( !afdBuffer->ExpeditedData );
 
         //
         // If the buffer contains a partial message, bail out of the 
@@ -618,7 +613,6 @@ AfdFastIoDeviceControl (
                                     BufferListEntry
                                     );
 
-                    ASSERT( !afdBuffer->ExpeditedData );
                     ASSERT( afdBuffer->DataOffset == 0 );
 
                     if ( endpoint->EndpointType == AfdEndpointTypeStream &&

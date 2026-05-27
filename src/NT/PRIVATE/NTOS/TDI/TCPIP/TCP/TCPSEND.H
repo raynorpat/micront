@@ -61,7 +61,6 @@ typedef struct TCPSendReq {
 #endif
 } TCPSendReq;
 
-#define	TSR_FLAG_URG		0x01		// Urgent data.
 
 //* Structure defining the context received during a send completes.
 

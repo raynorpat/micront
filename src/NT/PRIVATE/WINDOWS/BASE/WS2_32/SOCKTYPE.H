@@ -89,7 +89,6 @@ typedef struct _SOCKET_INFORMATION {
     ULONG SendBufferSize;
     BOOLEAN Broadcast;
     BOOLEAN Debug;
-    BOOLEAN OobInline;
     BOOLEAN ReuseAddresses;
     BOOLEAN NonBlocking;
     BOOLEAN DontUseWildcard;

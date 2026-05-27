@@ -26,9 +26,6 @@ extern void IndicatePendingData(struct TCB *RcvTCB, struct TCPRcvReq *RcvReq,
 	CTELockHandle TCBHandle);
 #endif
 
-extern	void HandleUrgent(struct TCB *RcvTCB, struct TCPRcvInfo *RcvInfo, 
-	IPRcvBuf *RcvBuf, uint *Size);
-
 extern	TDI_STATUS TdiReceive(PTDI_REQUEST Request, ushort *Flags, 
 	uint *RcvLength, PNDIS_BUFFER Buffer);
 extern	IPRcvBuf *FreePartialRB(IPRcvBuf *RB, uint Size);

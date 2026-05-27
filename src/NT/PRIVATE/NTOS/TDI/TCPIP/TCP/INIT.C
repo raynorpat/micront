@@ -54,7 +54,6 @@ uint		DefaultRcvWin;
 uint		MaxConnections;
 uint        MaxConnectRexmitCount;
 uint        MaxDataRexmitCount;
-uint		BSDUrgent;
 
 #ifdef VXD
 TDIDispatchTable    TLDispatch;

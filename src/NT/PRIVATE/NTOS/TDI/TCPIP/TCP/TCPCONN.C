@@ -722,21 +722,8 @@ CloseTCB(TCB *ClosedTCB, CTELockHandle Handle)
         FreeRcvReq(RcvReq);
     }
 
-    while (ClosedTCB->tcb_exprcv != NULL) {
-        TCPRcvReq       *RcvReq;
-
-        RcvReq = ClosedTCB->tcb_exprcv;
-        CTEStructAssert(RcvReq, trr);
-        ClosedTCB->tcb_exprcv = RcvReq->trr_next;
-        (*RcvReq->trr_rtn)(RcvReq->trr_context, Status, 0);
-        FreeRcvReq(RcvReq);
-    }
-
     if (ClosedTCB->tcb_pendhead != NULL)
         FreeRBChain(ClosedTCB->tcb_pendhead);
-
-    if (ClosedTCB->tcb_urgpending != NULL)
-        FreeRBChain(ClosedTCB->tcb_urgpending);
 
     while (ClosedTCB->tcb_raq != NULL) {
         TCPRAHdr        *Hdr;
@@ -867,7 +854,7 @@ TdiOpenConnection(PTDI_REQUEST Request, PVOID Context)
             Request->Handle.ConnectionContext = (CONNECTION_CONTEXT)ConnID;
             NewConn->tc_refcnt = 0;
             NewConn->tc_flags = 0;
-    		NewConn->tc_tcbflags =  NAGLING | (BSDUrgent ? BSD_URGENT : 0);
+    		NewConn->tc_tcbflags = NAGLING;
 			if (DefaultRcvWin != 0) {
             	NewConn->tc_window = DefaultRcvWin;
 				NewConn->tc_flags |= CONN_WINSET;
@@ -1908,8 +1895,8 @@ uint
 OKToNotify(TCB *NotifyTCB)
 {
     CTEStructAssert(NotifyTCB, tcb);
-    if (NotifyTCB->tcb_pendingcnt == 0 && NotifyTCB->tcb_urgcnt == 0 &&
-        NotifyTCB->tcb_rcvhead == NULL && NotifyTCB->tcb_exprcv == NULL)
+    if (NotifyTCB->tcb_pendingcnt == 0 &&
+        NotifyTCB->tcb_rcvhead == NULL)
         return TRUE;
     else
         return FALSE;

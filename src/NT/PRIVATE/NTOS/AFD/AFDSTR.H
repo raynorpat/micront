@@ -101,10 +101,7 @@ typedef struct _AFD_CONNECTION {
             LARGE_INTEGER ReceiveBytesIndicated;
             LARGE_INTEGER ReceiveBytesTaken;
             LARGE_INTEGER ReceiveBytesOutstanding;
-        
-            LARGE_INTEGER ReceiveExpeditedBytesIndicated;
-            LARGE_INTEGER ReceiveExpeditedBytesTaken;
-            LARGE_INTEGER ReceiveExpeditedBytesOutstanding;
+
             BOOLEAN NonBlockingSendPossible;
             BOOLEAN ZeroByteReceiveIndicated;
         } Bufferring;
@@ -115,9 +112,7 @@ typedef struct _AFD_CONNECTION {
             LIST_ENTRY SendIrpListHead;
 
             CLONG BufferredReceiveBytes;
-            CLONG BufferredExpeditedBytes;
             CSHORT BufferredReceiveCount;
-            CSHORT BufferredExpeditedCount;
 
             CLONG ReceiveBytesInTransport;
             CLONG BufferredSendBytes;
@@ -163,9 +158,7 @@ typedef struct _AFD_CONNECTION {
 #define VcSendIrpListHead Common.NonBufferring.SendIrpListHead
 
 #define VcBufferredReceiveBytes Common.NonBufferring.BufferredReceiveBytes
-#define VcBufferredExpeditedBytes Common.NonBufferring.BufferredExpeditedBytes
 #define VcBufferredReceiveCount Common.NonBufferring.BufferredReceiveCount
-#define VcBufferredExpeditedCount Common.NonBufferring.BufferredExpeditedCount
 
 #define VcReceiveBytesInTransport Common.NonBufferring.ReceiveBytesInTransport
 #define VcReceiveCountInTransport Common.NonBufferring.ReceiveCountInTransport
@@ -205,7 +198,6 @@ typedef struct _AFD_ENDPOINT {
     UCHAR State;
 
     BOOLEAN NonBlocking;
-    BOOLEAN InLine;
     BOOLEAN TdiBufferring;
 
     LIST_ENTRY GlobalEndpointListEntry;
@@ -327,7 +319,6 @@ typedef struct _AFD_BUFFER {
     PVOID SourceAddress;           // pointer to address of datagram sender
     CLONG SourceAddressLength;     // length of datagram sender's address
     USHORT AllocatedAddressLength; // length allocated for address
-    BOOLEAN ExpeditedData;         // TRUE if the buffer contains expedited data
     BOOLEAN PartialMessage;        // TRUE if this is a partial message
     TDI_CONNECTION_INFORMATION TdiInputInfo;   // holds info for TDI requests
     TDI_CONNECTION_INFORMATION TdiOutputInfo;  // holds info for TDI requests

@@ -159,19 +159,9 @@ AfdReceiveDatagram (
             } else {
 
                 PTDI_REQUEST_RECEIVE receiveRequest;
-    
+
                 receiveRequest = Irp->AssociatedIrp.SystemBuffer;
 
-                //
-                // It is illegal to attempt to receive expedited data on a
-                // datagram endpoint.
-                //
-        
-                if ( (receiveRequest->ReceiveFlags & TDI_RECEIVE_EXPEDITED) != 0 ) {
-                    status = STATUS_NOT_SUPPORTED;
-                    goto complete;
-                }
-        
                 peek = (BOOLEAN)( (receiveRequest->ReceiveFlags & TDI_RECEIVE_PEEK) != 0 );
             }
         

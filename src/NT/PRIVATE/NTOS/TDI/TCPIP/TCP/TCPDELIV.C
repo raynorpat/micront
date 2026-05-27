@@ -1157,305 +1157,7 @@ IrpCancelled2:
 
 }
 
-//* DeliverUrgent - Deliver urgent data to a client.
-//
-//  Called to deliver urgent data to a client. We assume the input
-//  urgent data is in a buffer we can keep. The buffer can be NULL, in
-//  which case we'll just look on the urgent pending queue for data.
-//
-//  Input:  RcvTCB      - TCB to deliver on.
-//          RcvBuf      - RcvBuffer for urgent data.
-//          Size        - Number of bytes of urgent data to deliver.
-//
-//  Returns: Nothing.
-//
-void
-DeliverUrgent(TCB *RcvTCB, IPRcvBuf *RcvBuf, uint Size,
-	CTELockHandle *TCBHandle)
-{
-    CTELockHandle       AOHandle, AOTblHandle, ConnHandle;
-    TCPRcvReq           *RcvReq, *PrevReq;
-    uint                BytesTaken = 0;
-    IPRcvBuf            *LastBuf;
-#ifdef NT
-    EventRcvBuffer     *ERB;
-#else
-    EventRcvBuffer      ERB;
-#endif
-    PRcvEvent           ExpRcv;
-    PVOID               ExpRcvContext;
-    PVOID               ConnContext;
-    TDI_STATUS          Status;
 
-    CTEStructAssert(RcvTCB, tcb);
-    CTEAssert(RcvTCB->tcb_refcnt != 0);
-
-    CheckRBList(RcvTCB->tcb_urgpending, RcvTCB->tcb_urgcnt);
-
-    // See if we have new data, or are processing old data.
-    if (RcvBuf != NULL) {
-        // We have new data. If the pending queue is not NULL, or we're already
-        // in this routine, just put the buffer on the end of the queue.
-        if (RcvTCB->tcb_urgpending != NULL || (RcvTCB->tcb_flags & IN_DELIV_URG)) {
-            IPRcvBuf        *PrevRcvBuf;
-
-            // Put him on the end of the queue.
-            PrevRcvBuf = STRUCT_OF(IPRcvBuf, &RcvTCB->tcb_urgpending, ipr_next);
-            while (PrevRcvBuf->ipr_next != NULL)
-                PrevRcvBuf = PrevRcvBuf->ipr_next;
-
-            PrevRcvBuf->ipr_next = RcvBuf;
-            return;
-        }
-    } else {
-        // The input buffer is NULL. See if we have existing data, or are in
-        // this routine. If we have no existing data or are in this routine
-        // just return.
-        if (RcvTCB->tcb_urgpending == NULL ||
-        	(RcvTCB->tcb_flags & IN_DELIV_URG)) {
-            return;
-        } else {
-			RcvBuf = RcvTCB->tcb_urgpending;
-            Size = RcvTCB->tcb_urgcnt;
-            RcvTCB->tcb_urgpending = NULL;
-            RcvTCB->tcb_urgcnt = 0;
-        }
-    }
-
-
-    CTEAssert(RcvBuf != NULL);
-    CTEAssert(!(RcvTCB->tcb_flags & IN_DELIV_URG));
-
-    // We know we have data to deliver, and we have a pointer and a size.
-    // Go into a loop, trying to deliver the data. On each iteration, we'll
-    // try to find a buffer for the data. If we find one, we'll copy and
-    // complete it right away. Otherwise we'll try and indicate it. If we
-    // can't indicate it, we'll put it on the pending queue and leave.
-    RcvTCB->tcb_flags |= IN_DELIV_URG;
-	RcvTCB->tcb_slowcount++;
-	RcvTCB->tcb_fastchk |= TCP_FLAG_SLOW;
-	CheckTCBRcv(RcvTCB);
-
-    do {
-    	CheckRBList(RcvTCB->tcb_urgpending, RcvTCB->tcb_urgcnt);
-		
-        BytesTaken = 0;
-
-        // First check the expedited queue.
-        if ((RcvReq = RcvTCB->tcb_exprcv) != NULL)
-            RcvTCB->tcb_exprcv = RcvReq->trr_next;
-        else {
-            // Nothing in the expedited rcv. queue. Walk down the ordinary
-            // receive queue, looking for a buffer that we can steal.
-            PrevReq = STRUCT_OF(TCPRcvReq, &RcvTCB->tcb_rcvhead, trr_next);
-            RcvReq = PrevReq->trr_next;
-            while (RcvReq != NULL) {
-                CTEStructAssert(RcvReq, trr);
-                if (RcvReq->trr_flags & TDI_RECEIVE_EXPEDITED) {
-                    // This is a candidate.
-                    if (RcvReq->trr_amt == 0) {
-
-                        CTEAssert(RcvTCB->tcb_rcvhndlr == BufferData);
-
-                        // And he has nothing currently in him. Pull him
-                        // out of the queue.
-                        if (RcvTCB->tcb_rcvtail == RcvReq) {
-                            if (RcvTCB->tcb_rcvhead == RcvReq)
-                                RcvTCB->tcb_rcvtail = NULL;
-                            else
-                                RcvTCB->tcb_rcvtail = PrevReq;
-                        }
-
-                        PrevReq->trr_next = RcvReq->trr_next;
-                        if (RcvTCB->tcb_currcv == RcvReq) {
-                            RcvTCB->tcb_currcv = RcvReq->trr_next;
-                            if (RcvTCB->tcb_currcv == NULL) {
-                                // We've taken the last receive from the list.
-                                // Reset the rcvhndlr.
-                                if (RcvTCB->tcb_rcvind != NULL &&
-                                    RcvTCB->tcb_indicated == 0)
-                                    RcvTCB->tcb_rcvhndlr = IndicateData;
-                                else
-                                    RcvTCB->tcb_rcvhndlr = PendData;
-                            }
-                        }
-
-                        break;
-                    }
-                }
-                PrevReq = RcvReq;
-                RcvReq = PrevReq->trr_next;
-            }
-        }
-
-        // We've done our best to get a buffer. If we got one, copy into it
-        // now, and complete the request.
-
-        if (RcvReq != NULL) {
-            // Got a buffer.
-            CTEFreeLock(&RcvTCB->tcb_lock, *TCBHandle);
-            BytesTaken = CopyRcvToNdis(RcvBuf, RcvReq->trr_buffer, Size, 0);
-            (*RcvReq->trr_rtn)(RcvReq->trr_context, TDI_SUCCESS, BytesTaken);
-            FreeRcvReq(RcvReq);
-            CTEGetLock(&RcvTCB->tcb_lock, TCBHandle);
-            RcvTCB->tcb_urgind -= MIN(RcvTCB->tcb_urgind, BytesTaken);
-
-        } else {
-            // No posted buffer. If we can indicate, do so.
-            if (RcvTCB->tcb_urgind == 0) {
-                TCPConn         *Conn;
-
-                // See if he has an expedited rcv handler.
-                ConnContext = RcvTCB->tcb_conncontext;
-                CTEFreeLock(&RcvTCB->tcb_lock, *TCBHandle);
-                CTEGetLock(&AddrObjTableLock, &AOTblHandle);
-                CTEGetLock(&ConnTableLock, &ConnHandle);
-                CTEGetLock(&RcvTCB->tcb_lock, TCBHandle);
-                if ((Conn = RcvTCB->tcb_conn) != NULL) {
-                    CTEStructAssert(Conn, tc);
-                    CTEAssert(Conn->tc_tcb == RcvTCB);
-                    CTEFreeLock(&RcvTCB->tcb_lock, *TCBHandle);
-                    if (Conn->tc_ao != NULL) {
-                        AddrObj         *AO;
-
-                        AO = Conn->tc_ao;
-                        CTEGetLock(&AO->ao_lock, &AOHandle);
-                        if (AO_VALID(AO) && (ExpRcv = AO->ao_exprcv) != NULL) {
-                            ExpRcvContext = AO->ao_exprcvcontext;
-                            CTEFreeLock(&AO->ao_lock, AOHandle);
-
-                            // We're going to indicate.
-                            RcvTCB->tcb_urgind = Size;
-                            CTEFreeLock(&ConnTableLock, ConnHandle);
-                            CTEFreeLock(&AddrObjTableLock, AOTblHandle);
-
-                            Status = (*ExpRcv)(ExpRcvContext, ConnContext,
-                                TDI_RECEIVE_COPY_LOOKAHEAD |
-                                TDI_RECEIVE_ENTIRE_MESSAGE |
-                                TDI_RECEIVE_EXPEDITED,
-                                RcvBuf->ipr_size, Size, &BytesTaken,
-                                RcvBuf->ipr_buffer, &ERB);
-
-							CTEGetLock(&RcvTCB->tcb_lock, TCBHandle);
-
-                            // See what he did with it.
-                            if (Status == TDI_MORE_PROCESSING) {
-								uint		CopySize;
-
-                                // He gave us a buffer.
-                                if (BytesTaken == Size) {
-                                    // He gave us a buffer, but took all of
-                                    // it. We'll just return it to him.
-									CopySize = 0;
-                                } else {
-                                    // We have some data to copy in.
-                                    RcvBuf = FreePartialRB(RcvBuf, BytesTaken);
-
-#ifdef NT
-                                    CopySize = CopyRcvToNdis(RcvBuf,
-                                        ERB->MdlAddress,
-										TCPGetMdlChainByteCount(ERB->MdlAddress),
-										0);
-#else // NT
-                                    CopySize = CopyRcvToNdis(RcvBuf,
-                                        ERB.erb_buffer, ERB.erb_size, 0);
-#endif // NT
-
-                                }
-								BytesTaken += CopySize;
-                                RcvTCB->tcb_urgind -= MIN(RcvTCB->tcb_urgind,
-                                    BytesTaken);
-								CTEFreeLock(&RcvTCB->tcb_lock, *TCBHandle);
-
-#ifdef NT
-
-                                ERB->IoStatus.Status = TDI_SUCCESS;
-								ERB->IoStatus.Information = CopySize;
-								IoCompleteRequest(ERB, 2);
-
-#else // NT
-                                (*ERB.erb_rtn)(ERB.erb_context, TDI_SUCCESS,
-                                    CopySize);
-#endif // NT
-
-								CTEGetLock(&RcvTCB->tcb_lock, TCBHandle);
-
-                            } else {
-
-                                // No buffer to deal with.
-                                if (Status == TDI_NOT_ACCEPTED)
-                                    BytesTaken = 0;
-
-                                RcvTCB->tcb_urgind -= MIN(RcvTCB->tcb_urgind,
-                                    BytesTaken);
-
-                            }
-							goto checksize;
-                        } else      // No rcv. handler.
-                            CTEFreeLock(&AO->ao_lock, AOHandle);
-                    }
-                    // Conn->tc_ao == NULL.
-                    CTEFreeLock(&ConnTableLock, ConnHandle);
-                    CTEFreeLock(&AddrObjTableLock, AOTblHandle);
-					CTEGetLock(&RcvTCB->tcb_lock, TCBHandle);
-                } else {
-                    // RcvTCB has invalid index.
-                    CTEFreeLock(&ConnTableLock, *TCBHandle);
-                    CTEFreeLock(&AddrObjTableLock, ConnHandle);
-					*TCBHandle = AOTblHandle;
-                }
-
-            }
-
-            // For whatever reason we couldn't indicate the data. At this point
-            // we hold the lock on the TCB. Push the buffer onto the pending
-            // queue and return.
-    		CheckRBList(RcvTCB->tcb_urgpending, RcvTCB->tcb_urgcnt);
-			
-            LastBuf = FindLastBuffer(RcvBuf);
-            LastBuf->ipr_next = RcvTCB->tcb_urgpending;
-            RcvTCB->tcb_urgpending = RcvBuf;
-            RcvTCB->tcb_urgcnt += Size;
-            break;
-        }
-
-checksize:
-        // See how much we took. If we took it all, check the pending queue.
-		// At this point, we should hold the lock on the TCB.
-        if (Size == BytesTaken) {
-            // Took it all.
-            FreeRBChain(RcvBuf);
-            RcvBuf = RcvTCB->tcb_urgpending;
-            Size = RcvTCB->tcb_urgcnt;
-        } else {
-            // We didn't manage to take it all. Free what we did take,
-            // and then merge with the pending queue.
-            RcvBuf = FreePartialRB(RcvBuf, BytesTaken);
-            Size = Size - BytesTaken + RcvTCB->tcb_urgcnt;
-            if (RcvTCB->tcb_urgpending != NULL) {
-
-                // Find the end of the current RcvBuf chain, so we can
-                // merge.
-
-                LastBuf = FindLastBuffer(RcvBuf);
-                LastBuf->ipr_next = RcvTCB->tcb_urgpending;
-            }
-        }
-
-        RcvTCB->tcb_urgpending = NULL;
-        RcvTCB->tcb_urgcnt = 0;
-
-    } while (RcvBuf != NULL);
-
-    CheckRBList(RcvTCB->tcb_urgpending, RcvTCB->tcb_urgcnt);
-	
-    RcvTCB->tcb_flags &= ~IN_DELIV_URG;
-	if (--(RcvTCB->tcb_slowcount) == 0) {
-		RcvTCB->tcb_fastchk &= ~TCP_FLAG_SLOW;
-		CheckTCBRcv(RcvTCB);
-	}
-
-}
 
 //* PushData - Push all data back to the client.
 //
@@ -1479,14 +1181,7 @@ PushData(TCB *PushTCB)
         RcvReq = RcvReq->trr_next;
     }
 
-    RcvReq = PushTCB->tcb_exprcv;
-    while (RcvReq != NULL) {
-        CTEStructAssert(RcvReq, trr);
-        RcvReq->trr_flags |= TRR_PUSHED;
-        RcvReq = RcvReq->trr_next;
-    }
-
-    if (PushTCB->tcb_rcvhead != NULL || PushTCB->tcb_exprcv != NULL)
+    if (PushTCB->tcb_rcvhead != NULL)
         DelayAction(PushTCB, NEED_RCV_CMPLT);
 
 }
@@ -1563,214 +1258,6 @@ SplitRcvBuf(IPRcvBuf *RcvBuf, uint Size, uint Offset, uint SecondSize,
 
 }
 
-//* HandleUrgent - Handle urgent data.
-//
-//  Called when an incoming segment has urgent data in it. We make sure there
-//  really is urgent data in the segment, and if there is we try to dispose
-//  of it either by putting it into a posted buffer or calling an exp. rcv.
-//  indication handler.
-//
-//	This routine is called at DPC level, and with the TCP locked.
-//
-//	Urgent data handling is a little complicated. Each TCB has the starting
-//	and ending sequence numbers of the 'current' (last received) bit of urgent
-//	data. It is possible that the start of the current urgent data might be
-//	greater than tcb_rcvnext, if urgent data came in, we handled it, and then
-//	couldn't take the preceding normal data. The urgent valid flag is cleared
-//	when the next byte of data the user would read (rcvnext - pendingcnt) is
-//	greater than the end of urgent data - we do this so that we can correctly
-//	support SIOCATMARK. We always seperate urgent data out of the data stream.
-//	If the urgent valid field is set when we get into this routing we have
-//	to play a couple of games. If the incoming segment starts in front of the
-//	current urgent data, we truncate it before the urgent data, and put any
-//	data after the urgent data on the reassemble queue. These gyrations are
-//	done to avoid delivering the same urgent data twice. If the urgent valid
-//	field in the TCB is set and the segment starts after the current urgent
-//	data the new urgent information will replace the current urgent information.
-//
-//  Input:  RcvTCB          - TCB to recv the data on.
-//          RcvInfo         - RcvInfo structure for the incoming segment.
-//          RcvBuf          - Pointer to IPRcvBuf train containing the
-//                              incoming segment.
-//          Size            - Pointer to size in bytes of data in the segment.
-//
-//  Returns: Nothing.
-//
-void
-HandleUrgent(TCB *RcvTCB, TCPRcvInfo *RcvInfo, IPRcvBuf *RcvBuf, uint *Size)
-{
-    uint            BytesInFront, BytesInBack;  // Bytes in front of and in
-                                                // back of the urgent data.
-    uint            UrgSize;                    // Size in bytes of urgent data.
-    SeqNum          UrgStart, UrgEnd;
-    IPRcvBuf        *EndBuf, *UrgBuf;
-    TCPRcvInfo      NewRcvInfo;
-	CTELockHandle 	TCBHandle;
-	
-    CTEStructAssert(RcvTCB, tcb);
-    CTEAssert(RcvTCB->tcb_refcnt != 0);
-    CTEAssert(RcvInfo->tri_flags & TCP_FLAG_URG);
-    CTEAssert(SEQ_EQ(RcvInfo->tri_seq, RcvTCB->tcb_rcvnext));
-
-    // First, validate the urgent pointer.
-    if (RcvTCB->tcb_flags & BSD_URGENT) {
-        // We're using BSD style urgent data. We assume that the urgent
-        // data is one byte long, and that the urgent pointer points one
-        // after the urgent data instead of at the last byte of urgent data.
-        // See if the urgent data is in this segment.
-		
-        if (RcvInfo->tri_urgent == 0 || RcvInfo->tri_urgent > *Size) {
-            // Not in this segment. Clear the urgent flag and return.
-            RcvInfo->tri_flags &= ~TCP_FLAG_URG;
-            return;
-        }
-
-        UrgSize = 1;
-        BytesInFront = RcvInfo->tri_urgent - 1;
-
-    } else {
-
-        // This is not BSD style urgent. We assume that the urgent data
-        // starts at the front of the segment and the last byte is pointed
-        // to by the urgent data pointer.
-
-        BytesInFront = 0;
-        UrgSize = MIN(RcvInfo->tri_urgent + 1, *Size);
-
-    }
-
-    BytesInBack = *Size - BytesInFront - UrgSize;
-
-	// UrgStart and UrgEnd are the first and last sequence numbers of the
-	// urgent data in this segment.
-	
-    UrgStart = RcvInfo->tri_seq + BytesInFront;
-    UrgEnd = UrgStart + UrgSize - 1;
-
-	if (!(RcvTCB->tcb_flags & URG_INLINE)) {
-		
-		EndBuf = NULL;
-		
-	    // Now see if this overlaps with any urgent data we've already seen.
-	    if (RcvTCB->tcb_flags & URG_VALID) {
-	        // We have some urgent data still around. See if we've advanced
-	        // rcvnext beyond the urgent data. If we have, this is new urgent
-	        // data, and we can go ahead and process it (although anyone doing
-	        // an SIOCATMARK socket command might get confused). If we haven't
-	        // consumed the data in front of the existing urgent data yet, we'll
-	        // truncate this seg. to that amount and push the rest onto the
-	        // reassembly queue. Note that rcvnext should never fall between
-	        // tcb_urgstart and tcb_urgend.
-			
-			CTEAssert(SEQ_LT(RcvTCB->tcb_rcvnext, RcvTCB->tcb_urgstart) ||
-				SEQ_GT(RcvTCB->tcb_rcvnext, RcvTCB->tcb_urgend));
-				
-	        if (SEQ_LT(RcvTCB->tcb_rcvnext, RcvTCB->tcb_urgstart)) {
-				
-				// There appears to be some overlap in the data stream. Split
-				// the buffer up into pieces that come before the current urgent
-				// data and after the current urgent data, putting the latter
-				// on the reassembly queue.
-	
-				UrgSize = RcvTCB->tcb_urgend - RcvTCB->tcb_urgstart + 1;
-				
-	           	BytesInFront = MIN(RcvTCB->tcb_urgstart - RcvTCB->tcb_rcvnext,
-	           		(int) *Size);
-				
-				if (SEQ_GT(RcvTCB->tcb_rcvnext + *Size, RcvTCB->tcb_urgend)) {
-					// We have data after this piece of urgent data.
-					BytesInBack = RcvTCB->tcb_rcvnext + *Size -
-						RcvTCB->tcb_urgend;
-				} else
-					BytesInBack = 0;
-					
-	            SplitRcvBuf(RcvBuf, *Size, BytesInFront, UrgSize, NULL,
-	            	(BytesInBack ? &EndBuf : NULL));
-					
-	            if (EndBuf != NULL) {
-	                NewRcvInfo.tri_seq = RcvTCB->tcb_urgend + 1;
-	                NewRcvInfo.tri_flags = RcvInfo->tri_flags;
-	                NewRcvInfo.tri_urgent = UrgEnd - NewRcvInfo.tri_seq;
-	                if (RcvTCB->tcb_flags & BSD_URGENT)
-	                    NewRcvInfo.tri_urgent++;
-	                NewRcvInfo.tri_ack = RcvInfo->tri_ack;
-	                NewRcvInfo.tri_window = RcvInfo->tri_window;
-	                PutOnRAQ(RcvTCB, &NewRcvInfo, EndBuf, BytesInBack);
-	            }
-	
-	            *Size = BytesInFront;
-	            RcvInfo->tri_flags &= ~TCP_FLAG_URG;
-	            return;
-	        }
-	    }
-	
-	    // We have urgent data we can process now. Split it into its component
-	    // parts, the first part, the urgent data, and the stuff after the
-	    // urgent data.
-	    SplitRcvBuf(RcvBuf, *Size, BytesInFront, UrgSize, &UrgBuf,
-	    	(BytesInBack ? &EndBuf : NULL));
-			
-	    // If we managed to split out the end stuff, put it on the queue now.
-	    if (EndBuf != NULL) {
-	        NewRcvInfo.tri_seq = RcvInfo->tri_seq + BytesInFront + UrgSize;
-	        NewRcvInfo.tri_flags = RcvInfo->tri_flags & ~TCP_FLAG_URG;
-	        NewRcvInfo.tri_ack = RcvInfo->tri_ack;
-	        NewRcvInfo.tri_window = RcvInfo->tri_window;
-	        PutOnRAQ(RcvTCB, &NewRcvInfo, EndBuf, BytesInBack);
-	    }
-	
-		
-	    if (UrgBuf != NULL) {
-	        // We succesfully split the urgent data out.
-			if (!(RcvTCB->tcb_flags & URG_VALID)) {
-	        	RcvTCB->tcb_flags |= URG_VALID;
-				RcvTCB->tcb_slowcount++;
-				RcvTCB->tcb_fastchk |= TCP_FLAG_SLOW;
-				CheckTCBRcv(RcvTCB);
-			}
-	        RcvTCB->tcb_urgstart = UrgStart;
-	        RcvTCB->tcb_urgend = UrgEnd;
-#ifdef VXD
-#ifdef DEBUG
-			TCBHandle = DEFAULT_SIMIRQL;
-#endif
-#else
-			TCBHandle = DISPATCH_LEVEL;
-#endif
-	    	DeliverUrgent(RcvTCB, UrgBuf, UrgSize, &TCBHandle);
-	    }
-	
-	    *Size = BytesInFront;
-		
-	} else {
-		// Urgent data is to be processed inline. We just need to remember
-		// where it is and treat it as normal data. If there's already urgent
-		// data, we remember the latest urgent data.
-		
-		RcvInfo->tri_flags &= ~TCP_FLAG_URG;
-		
-		if (RcvTCB->tcb_flags & URG_VALID) {
-			// There is urgent data. See if this stuff comes after the existing
-			// urgent data.
-			
-			if (SEQ_LTE(UrgEnd, RcvTCB->tcb_urgend)) {
-				// The existing urgent data completely overlaps this stuff,
-				// so ignore this.
-				return;
-			}
-		} else {
-        	RcvTCB->tcb_flags |= URG_VALID;
-			RcvTCB->tcb_slowcount++;
-			RcvTCB->tcb_fastchk |= TCP_FLAG_SLOW;
-			CheckTCBRcv(RcvTCB);
-		}
-		
-        RcvTCB->tcb_urgstart = UrgStart;
-        RcvTCB->tcb_urgend = UrgEnd;
-	}
-		
-    return;
-}
 
 //* TdiReceive - Process a receive request.
 //
@@ -1813,8 +1300,7 @@ TdiReceive(PTDI_REQUEST Request, ushort *Flags, uint *RcvLength,
             UFlags = *Flags;
 
             if ((DATA_RCV_STATE(RcvTCB->tcb_state)  ||
-                (RcvTCB->tcb_pendingcnt != 0 && (UFlags & TDI_RECEIVE_NORMAL)) ||
-                (RcvTCB->tcb_urgcnt != 0 && (UFlags & TDI_RECEIVE_EXPEDITED)))
+                (RcvTCB->tcb_pendingcnt != 0 && (UFlags & TDI_RECEIVE_NORMAL)))
                 && !CLOSING(RcvTCB)) {
                 // We have a TCB, and it's valid. Get a receive request now.
 
@@ -1831,31 +1317,24 @@ TdiReceive(PTDI_REQUEST Request, ushort *Flags, uint *RcvLength,
                     RcvReq->trr_offset = 0;
                     RcvReq->trr_amt = 0;
                     RcvReq->trr_flags = (uint)UFlags;
-                    if ((UFlags & (TDI_RECEIVE_NORMAL | TDI_RECEIVE_EXPEDITED))
-                        != TDI_RECEIVE_EXPEDITED) {
-                        // This is not an expedited only receive. Put him
-                        // on the normal receive queue.
-                        RcvReq->trr_next = NULL;
-                        if (RcvTCB->tcb_rcvhead == NULL) {
-                            // The receive queue is empty. Put him on the front.
-                            RcvTCB->tcb_rcvhead = RcvReq;
-                            RcvTCB->tcb_rcvtail = RcvReq;
-                        } else {
-                            RcvTCB->tcb_rcvtail->trr_next = RcvReq;
-                            RcvTCB->tcb_rcvtail = RcvReq;
-                        }
+                    // Put the receive request on the normal receive queue.
+                    RcvReq->trr_next = NULL;
+                    if (RcvTCB->tcb_rcvhead == NULL) {
+                        // The receive queue is empty. Put him on the front.
+                        RcvTCB->tcb_rcvhead = RcvReq;
+                        RcvTCB->tcb_rcvtail = RcvReq;
+                    } else {
+                        RcvTCB->tcb_rcvtail->trr_next = RcvReq;
+                        RcvTCB->tcb_rcvtail = RcvReq;
+                    }
 
-                        // If this recv. can't hold urgent data or there isn't
-						// any pending urgent data continue processing.
-						if (!(UFlags & TDI_RECEIVE_EXPEDITED) ||
-							RcvTCB->tcb_urgcnt == 0) {
-							// If tcb_currcv is NULL, there is no currently
-							// active receive. In this case, check to see if
-							// there is pending data and that we are not
-							// currently in a receive indication handler. If
-							// both of these are true then deal with the
-							// pending data.
-							if (RcvTCB->tcb_currcv == NULL) {
+                    // If tcb_currcv is NULL, there is no currently
+                    // active receive. In this case, check to see if
+                    // there is pending data and that we are not
+                    // currently in a receive indication handler. If
+                    // both of these are true then deal with the
+                    // pending data.
+                    if (RcvTCB->tcb_currcv == NULL) {
 								RcvTCB->tcb_currcv = RcvReq;
 								// No currently active receive.
 								if (!(RcvTCB->tcb_flags & IN_RCV_IND)) {
@@ -1919,36 +1398,8 @@ TdiReceive(PTDI_REQUEST Request, ushort *Flags, uint *RcvLength,
                             }
                             // A rcv. is currently active. No need to do
                             // anything else.
-                            CTEFreeLock(&RcvTCB->tcb_lock, ConnTableHandle);
-                            return TDI_PENDING;
-                        } else {
-                            // This buffer can hold urgent data and we have
-                            // some pending. Deliver it now.
-							RcvTCB->tcb_refcnt++;
-                            DeliverUrgent(RcvTCB, NULL, 0, &ConnTableHandle);
-                            DerefTCB(RcvTCB, ConnTableHandle);
-                            return TDI_PENDING;
-                        }
-                    } else {
-                        TCPRcvReq           *Temp;
-
-                        // This is an expedited only receive. Just put him
-                        // on the end of the expedited receive queue.
-                        Temp = STRUCT_OF(TCPRcvReq, &RcvTCB->tcb_exprcv,
-                            trr_next);
-                        while (Temp->trr_next != NULL)
-                            Temp = Temp->trr_next;
-
-                        RcvReq->trr_next = NULL;
-                        Temp->trr_next = RcvReq;
-                        if (RcvTCB->tcb_urgpending != NULL) {
-							RcvTCB->tcb_refcnt++;
-                            DeliverUrgent(RcvTCB, NULL, 0, &ConnTableHandle);
-                            DerefTCB(RcvTCB, ConnTableHandle);
-                            return TDI_PENDING;
-                        } else
-                            Error = TDI_PENDING;
-                    }
+                        CTEFreeLock(&RcvTCB->tcb_lock, ConnTableHandle);
+                        return TDI_PENDING;
                 } else {
                     // Couldn't get a rcv. req.
                     Error = TDI_NO_RESOURCES;

@@ -1631,10 +1631,6 @@ TdiSetEvent(PVOID Handle, int Type, PVOID Handler, PVOID Context)
             EventAO->ao_rcvdg = Handler;
             EventAO->ao_rcvdgcontext = Context;
             break;
-        case TDI_EVENT_RECEIVE_EXPEDITED:
-            EventAO->ao_exprcv = Handler;
-            EventAO->ao_exprcvcontext = Context;
-            break;
         default:
             Status = TDI_BAD_EVENT_TYPE;
             break;

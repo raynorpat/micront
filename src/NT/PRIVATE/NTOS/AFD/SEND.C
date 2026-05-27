@@ -165,15 +165,6 @@ AfdSend (
         PAFD_SEND_CONN_DATAGRAM_CONTEXT context;
 
         //
-        // It is illegal to send expedited data on a datagram socket.
-        //
-
-        if ( (sendFlags & TDI_SEND_EXPEDITED) != 0 ) {
-            status = STATUS_NOT_SUPPORTED;
-            goto complete;
-        }
-
-        //
         // Allocate space to hold the connection information structure
         // we'll use on input.
         //

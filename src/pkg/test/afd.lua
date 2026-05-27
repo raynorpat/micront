@@ -187,9 +187,9 @@ end)
 -- ------------------------------------------------------------------
 -- 5. AFD information ioctls — IOCTL_AFD_GET/SET_INFORMATION.
 --
--- Covers AFD/MISC.C:AfdGetInformation, AfdSetInformation, and
--- AfdSetInLineMode (which fires only for connected stream endpoints
--- when INLINE_MODE is set).
+-- Covers AFD/MISC.C:AfdGetInformation, AfdSetInformation.  The OOB /
+-- expedited path is gone, so the inline-mode info class is no longer
+-- exercised here.
 -- ------------------------------------------------------------------
 
 t.test("GET AFD_MAX_SEND_SIZE is positive on TCP and UDP", function()
@@ -234,11 +234,14 @@ t.test("SET AFD_NONBLOCKING_MODE accepts BOOLEAN values", function()
     t.ok(true, "set_info NONBLOCKING_MODE round-tripped")
 end)
 
-t.test("SET AFD_INLINE_MODE on connected TCP exercises AfdSetInLineMode", function()
-    -- AfdSetInLineMode (MISC.C:879) only runs when the endpoint is in
-    -- AfdBlockTypeVcConnecting state, i.e. after the TCP connection
-    -- handshake has populated the connection block.  Loopback gives
-    -- us that state without any external dependency.
+t.test("SET AFD_INLINE_MODE on connected TCP is rejected", function()
+    -- OOB / urgent / expedited handling was stripped from the kernel;
+    -- the AFD_INLINE_MODE (0x01) info class no longer has a case-arm
+    -- in AfdSetInformation, so it falls through to the default and
+    -- returns STATUS_INVALID_PARAMETER even on a fully-connected
+    -- stream endpoint (which is the path that used to drop into the
+    -- now-deleted AfdSetInLineMode).  Locking in the rejection
+    -- catches a future accidental resurrection of the case-arm.
     local server = afd.tcp()
     afd.bind(server, "127.0.0.1", 0)
     afd.listen(server, 1)
@@ -248,19 +251,42 @@ t.test("SET AFD_INLINE_MODE on connected TCP exercises AfdSetInLineMode", functi
     afd.bind(client, "127.0.0.1", 0)
     afd.connect(client, "127.0.0.1", port, LOOPBACK_TIMEOUT)
 
-    -- Server-side accepted endpoint is the connected one we want.
     local conn = afd.accept(server, LOOPBACK_TIMEOUT)
 
-    -- Toggle INLINE_MODE on the connected endpoint — drops into
-    -- AfdSetInLineMode, which issues IOCTL_TDI_SET_EVENT_HANDLER
-    -- against the TDI provider to register the inline mode.
-    afd.set_info(conn, afd.INLINE_MODE, 1)
-    afd.set_info(conn, afd.INLINE_MODE, 0)
+    local AFD_INLINE_MODE = 0x01
+    local ok, err_obj = pcall(afd.set_info, conn, AFD_INLINE_MODE, 1)
+    t.ok(not ok, "set_info INLINE_MODE should have failed")
+    t.ok(err_obj and tostring(err_obj):find('0xc000000d', 1, true),
+         "expected STATUS_INVALID_PARAMETER (0xC000000D), got " ..
+         tostring(err_obj))
 
     conn:close()
     client:close()
     server:close()
-    t.ok(true, "set_info INLINE_MODE on connected TCP round-tripped")
+end)
+
+t.test("AFD_POLL_RECEIVE_EXPEDITED bit is never set by the kernel", function()
+    -- AfdReceiveExpeditedEventHandler and the TDI_EVENT_RECEIVE_EXPEDITED
+    -- registration are gone; the POLL.C arm that ORed in the bit is gone
+    -- too.  A poll with the bit set should complete on timeout with the
+    -- bit cleared in the returned mask, even on a connected TCP socket.
+    local server = afd.tcp()
+    afd.bind(server, "127.0.0.1", 0)
+    afd.listen(server, 1)
+    local _, port = afd.getsockname(server)
+
+    local client = afd.tcp()
+    afd.bind(client, "127.0.0.1", 0)
+    afd.connect(client, "127.0.0.1", port, LOOPBACK_TIMEOUT)
+    local conn = afd.accept(server, LOOPBACK_TIMEOUT)
+
+    local AFD_POLL_RECEIVE_EXPEDITED = 0x0002
+    local events = afd.poll({{conn, AFD_POLL_RECEIVE_EXPEDITED}}, 0.1)
+    t.eq(events[1], 0, "expedited poll bit must not fire")
+
+    conn:close()
+    client:close()
+    server:close()
 end)
 
 t.test("SET / GET AFD_RECEIVE_WINDOW_SIZE roundtrip on UDP", function()

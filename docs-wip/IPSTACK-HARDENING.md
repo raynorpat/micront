@@ -713,7 +713,13 @@ pinned on first analysis.
     is non-negative in both branches given the bounds above.
 - **Decision:** 2026-05-13 — INVALID. Bounds checks present and
   reachable on both URG dispositions.
-- **Status:** INVALID — defended in tree.
+- **2026-05-27 update.** Becomes additionally unreachable as a side
+  effect of the OOB / urgent / expedited strip (H-021): `TCPRCV.C`
+  masks `TCP_FLAG_URG` off `tri_flags` at parse, so `HandleUrgent`
+  is never invoked. The bounds checks remain in tree as dead-code
+  defence-in-depth pending the deeper TCP/IP cleanup tracked under
+  H-021.
+- **Status:** INVALID — defended in tree, and unreachable post-strip.
 
 ### H-018 — UDP broadcast amplification (Fraggle)
 
@@ -827,6 +833,94 @@ pinned on first analysis.
 - **Test:** verified by clean build; runtime probe pending the test
   harness.
 - **Status:** INVALID — code path removed.
+
+### H-021 — OOB / urgent / expedited data path
+
+- **Where:** AFD (`RECEIVE.C`, `RECVVC.C`, `MISC.C`, `BIND.C`,
+  `POLL.C`, `AFDSTR.H`, `AFDPROCS.H`, ...); TCP/IP
+  (`TCPRCV.C` URG parse + reassembly URG branches, `TCPSEND.C`
+  `TSR_FLAG_URG`, `TCPDELIV.C` `HandleUrgent`/`DeliverUrgent`,
+  `TCP.H` `tcb_urg*` / `tcb_exprcv` / `URG_VALID` / `URG_INLINE`
+  / `BSD_URGENT` / `IN_DELIV_URG`, `ADDR.H` `ao_exprcv`,
+  `INFO.C` provider service flags + URG query + socket-option
+  arms); ws2_32 (`SEND.C`, `RECV.C`, `SOCKOPT.C`).
+- **Class:** Parser surface + protocol semantics ambiguity. Two
+  off-by-one interpretations of the urgent pointer (RFC 793 vs
+  BSD); historical WinNuke BSOD class lives here (H-017). No
+  in-tree caller uses `MSG_OOB`.
+- **Severity:** N/A (feature removed) — was H-017's parent class.
+- **Reachable:** Was T1 post-bind for the original WinNuke
+  trigger; now unreachable.
+- **Analysis:** 2026-05-27 — three-layer strip designed to make
+  the entire OOB plumbing structurally absent. Rationale matches
+  prior whole-feature strips (IP fragmentation, IP forwarding,
+  IP options, NDIS non-Ethernet): deployment scope (cloud
+  workload host, no telnet / no app-layer OOB consumer) +
+  bug-class precedent (RFC/BSD urgent-pointer ambiguity is
+  exactly the kind of parser corner the audit retires
+  wholesale).
+- **Decision:** 2026-05-27 — STRIP. Three layers landed
+  together:
+  - **AFD (deep).** `AfdReceiveExpeditedEventHandler`,
+    `AfdBReceiveExpeditedEventHandler`, `AfdSetInLineMode`
+    deleted; `TDI_EVENT_RECEIVE_EXPEDITED` registrations gone
+    in `BIND.C`; `AFD_INLINE_MODE` info-class falls through to
+    `STATUS_INVALID_PARAMETER`; `AFD_POLL_RECEIVE_EXPEDITED`
+    arm removed; struct fields gone
+    (`ReceiveExpeditedBytes{Indicated,Taken,Outstanding}`,
+    `BufferredExpedited{Bytes,Count}`, `InLine`, `ExpeditedData`);
+    `IS_EXPEDITED_DATA_ON_CONNECTION` macros and the `InLine`
+    parameter through `AfdCreateConnection` removed.
+  - **TCP/IP.** Initial minimum-viable strip masks `TCP_FLAG_URG`
+    off `tri_flags` at parse (`TCPRCV.C`), zeros `tsr_flags`
+    unconditionally on send (`TCPSEND.C`), drops
+    `TDI_SERVICE_EXPEDITED_DATA` from the provider's advertised
+    service flags (`INFO.C`). Follow-up deep cleanup landed in
+    the same commit: deleted `HandleUrgent`, `DeliverUrgent`,
+    the URG-conditional reassembly branches in `TCPRCV.C`
+    (front-overlap URG check in `PutOnRAQ`, back-overlap
+    URG-trim, post-overlap urgent-pointer update, SYN-state
+    `tri_urgent--`, clip-front URG decrement, the
+    `URG_VALID`-conditional `rcvnext` advance, the HandleUrgent
+    call site itself), the outgoing URG-flag setter
+    (`TCPSEND.C` urgent-pointer arithmetic and the
+    PrevFlags / TSR_FLAG_URG combine check), the TCB struct
+    fields (`tcb_urg{pending,cnt,ind,start,end}`,
+    `tcb_exprcv`), the urgent flags (`URG_VALID`, `URG_INLINE`,
+    `BSD_URGENT`, `IN_DELIV_URG`) and their references in
+    `TCP_SLOW_FLAGS`, `tri_urgent` in `TCPRcvInfo`, `trh_urg`
+    in TRH, `TSR_FLAG_URG` in `TCPSEND.H`, `ao_exprcv` /
+    `ao_exprcvcontext` on `AddrObj` and the
+    `TDI_EVENT_RECEIVE_EXPEDITED` arm in `ADDR.C`, the
+    `TCPSocketAMInfo` URG query and the `TCP_SOCKET_BSDURGENT`
+    / `TCP_SOCKET_OOBINLINE` setsockopt arms in `INFO.C`, the
+    `BSDUrgent` global plus its `TcpUseRFC1122UrgentPointer`
+    registry read in `NTINIT.C`, the urgent cleanup loops in
+    `TCPCONN.C` and the urgent-empty check in `OKToNotify`,
+    plus `BSD_URGENT` from new-connection flag init. TdiReceive
+    in `TCPDELIV.C` simplifies: the expedited-only receive
+    path and the urgent-data-pending branch both go;
+    `PushData` no longer walks `tcb_exprcv`. Wire-layout
+    fields stay (`tcp_urgent` in `TCPHeader`, `TCP_FLAG_URG`
+    define) — only the wire-bit mask in `TCPRCV.C` remains as
+    runtime documentation.
+  - **ws2_32 (clean rejection at the API boundary).**
+    `send(MSG_OOB)` / `recv(MSG_OOB)` / `WSARecvEx(MSG_OOB)`
+    → `WSAEOPNOTSUPP`; `setsockopt(SO_OOBINLINE)` /
+    `getsockopt(SO_OOBINLINE)` → `WSAENOPROTOOPT`;
+    `ioctlsocket(SIOCATMARK)` → `*argp = TRUE` (always at the
+    mark of the empty urgent stream); `FIONREAD` no longer
+    adds `ExpeditedBytesAvailable`. The public macros
+    (`MSG_OOB`, `SO_OOBINLINE`, `SIOCATMARK`) stay defined in
+    `winsock.h` for source-compat — only the implementation is
+    gone.
+- **Test:** Regression tests in `src/pkg/test/afd.lua` flip from
+  exercise to rejection (`AFD_INLINE_MODE` → `STATUS_INVALID_PARAMETER`;
+  `AFD_POLL_RECEIVE_EXPEDITED` mask bit never fires on a
+  connected TCP endpoint). Lua-side `afd.lua` drops the
+  `AFD_INLINE_MODE` and `AFD_POLL_RECEIVE_EXPEDITED` constants
+  from its public exports.
+- **Status:** PATCHED (AFD + ws2_32 + TCP/IP, full strip).
 
 ## 6a. LOGGED priority queue
 
@@ -1073,3 +1167,40 @@ Tracked separately from per-finding TBDs because they cut across findings.
   separate commit. Direction = **SYN cookies**, deferred as a larger
   structural work item. H-012 status ANALYSED → DEFERRED, out of the
   §6a queue; new head = H-013.
+
+- 2026-05-27 — **Decision: strip OOB / urgent / expedited data
+  handling.** Fifth in the wholesale-feature-removal series after
+  IP fragmentation (2026-05-11), NDIS non-Ethernet (2026-05-11),
+  IP forwarding + ICMP redirect + source routing (2026-05-12), and
+  IP option processing (2026-05-13). Three layers touched: AFD
+  (deep strip — handlers, struct fields, TDI registrations,
+  `AFD_INLINE_MODE` / `AFD_POLL_RECEIVE_EXPEDITED` arms gone),
+  TCP/IP (minimum-viable — URG masked off at parse, `TSR_FLAG_URG`
+  zeroed on send, `TDI_SERVICE_EXPEDITED_DATA` no longer
+  advertised; `HandleUrgent` / `DeliverUrgent` / TCB urgent
+  fields / `ao_exprcv` remain as unreachable dead code), ws2_32
+  (`MSG_OOB` → `WSAEOPNOTSUPP`, `SO_OOBINLINE` → `WSAENOPROTOOPT`,
+  `SIOCATMARK` → always `TRUE`). Public macros remain defined in
+  `winsock.h` for source compatibility. Selftest converted from
+  exercise to rejection-regression coverage. Rationale: no in-tree
+  caller of `MSG_OOB`; telnet / RAS / NetBT out of scope per §1;
+  the RFC 793 vs BSD urgent-pointer disagreement is exactly the
+  parser-surface bug class the audit retires wholesale (H-017
+  WinNuke class, previously INVALID-by-bounds-check, becomes
+  additionally INVALID-by-unreachability). Net diff: ~894 lines
+  deleted across 18 source files. New finding H-021 records the
+  strip; H-017 status line updated to note the unreachability
+  addition. Deep cleanup followed in the same commit: deleted
+  `HandleUrgent` / `DeliverUrgent`, the `tcb_urg*` / `tcb_exprcv`
+  fields, the `URG_VALID` / `URG_INLINE` / `BSD_URGENT` /
+  `IN_DELIV_URG` flags (with `TCP_SLOW_FLAGS` updated), the
+  `tri_urgent` / `trh_urg` / `TSR_FLAG_URG` data members, the
+  URG-conditional reassembly branches in `TCPRCV.C`, the
+  outgoing URG setter in `TCPSEND.C`, the `ao_exprcv` setter
+  in `ADDR.C`, the `TCP_SOCKET_BSDURGENT` / `TCP_SOCKET_OOBINLINE`
+  arms and the `TCPSocketAMInfo` URG query in `INFO.C`, the
+  `BSDUrgent` global and registry read in `NTINIT.C` /
+  `TCPCFG.H` / `INIT.C`, the urgent cleanup loops and notify
+  check in `TCPCONN.C`, and the ws2_32 `OobInline` socket
+  field plus its `ACCEPT.C` inheritance. Final net diff:
+  ~1685 lines deleted across 31 source files.

@@ -117,36 +117,30 @@ Return Value:
     //
 
     if ( ReceiveFlags != 0 ) {
-        
+
         //
-        // The legal flags are MSG_OOB and MSG_PEEK.  MSG_OOB is not 
-        // legal on datagram sockets.  
+        // The only legal flag is MSG_PEEK.  MSG_OOB is rejected with
+        // WSAEOPNOTSUPP — out-of-band receives are not supported.
         //
-    
-        if ( (ReceiveFlags & ~(MSG_OOB | MSG_PEEK)) != 0 ) {
+
+        if ( (ReceiveFlags & ~MSG_PEEK) != 0 ) {
             error = WSAEOPNOTSUPP;
             goto exit;
         }
-    
+
         //
-        // Set up the receive flags in the TDI send structure.  Note 
-        // that we don't use an InputBuffer in the NtDeviceIoControlFile 
-        // call if there is nothing special about the call.  This is 
-        // because there is usually nothing special about the call and 
-        // it is faster to have no InputBuffer, since this avoids an 
-        // allocation in the IO system.  
+        // Set up the receive flags in the TDI send structure.  Note
+        // that we don't use an InputBuffer in the NtDeviceIoControlFile
+        // call if there is nothing special about the call.  This is
+        // because there is usually nothing special about the call and
+        // it is faster to have no InputBuffer, since this avoids an
+        // allocation in the IO system.
         //
-    
-        receiveRequest.ReceiveFlags = 0;
+
+        receiveRequest.ReceiveFlags = TDI_RECEIVE_NORMAL;
         pReceiveRequest = &receiveRequest;
         receiveRequestLength = sizeof(receiveRequest);
 
-        if ( (ReceiveFlags & MSG_OOB) != 0 ) {
-            receiveRequest.ReceiveFlags |= TDI_RECEIVE_EXPEDITED;
-        } else {
-            receiveRequest.ReceiveFlags |= TDI_RECEIVE_NORMAL;
-        }
-    
         if ( (ReceiveFlags & MSG_PEEK) != 0 ) {
             receiveRequest.ReceiveFlags |= TDI_RECEIVE_PEEK;
         }
@@ -722,11 +716,11 @@ Return Value:
     error = NO_ERROR;
 
     //
-    // The legal flags are MSG_OOB and MSG_PEEK.  MSG_OOB is not legal on
-    // datagram sockets.
+    // The only legal flag is MSG_PEEK.  MSG_OOB is rejected with
+    // WSAEOPNOTSUPP — out-of-band receives are not supported.
     //
 
-    if ( (*ReceiveFlags & ~(MSG_OOB | MSG_PEEK)) != 0 ) {
+    if ( (*ReceiveFlags & ~MSG_PEEK) != 0 ) {
         error = WSAEOPNOTSUPP;
         goto exit;
     }
@@ -734,13 +728,8 @@ Return Value:
     //
     // Set up the receive flags in the TDI send structure.
     //
-    // !!! need SO_OOBINLINE support here!
 
-    if ( (*ReceiveFlags & MSG_OOB) != 0 ) {
-        receiveRequest.ReceiveFlags = TDI_RECEIVE_EXPEDITED;
-    } else {
-        receiveRequest.ReceiveFlags = TDI_RECEIVE_NORMAL;
-    }
+    receiveRequest.ReceiveFlags = TDI_RECEIVE_NORMAL;
 
     if ( (*ReceiveFlags & MSG_PEEK) != 0 ) {
         receiveRequest.ReceiveFlags |= TDI_RECEIVE_PEEK;
@@ -821,14 +810,6 @@ Return Value:
 
     case STATUS_RECEIVE_PARTIAL:
         *ReceiveFlags = MSG_PARTIAL;
-        break;
-
-    case STATUS_RECEIVE_EXPEDITED:
-        *ReceiveFlags = MSG_OOB;
-        break;
-
-    case STATUS_RECEIVE_PARTIAL_EXPEDITED:
-        *ReceiveFlags = MSG_PARTIAL | MSG_OOB;
         break;
 
     default:

@@ -32,7 +32,6 @@ AfdRestartReceive (
 #pragma alloc_text( PAGEAFD, AfdReceive )
 #pragma alloc_text( PAGEAFD, AfdRestartReceive )
 #pragma alloc_text( PAGEAFD, AfdReceiveEventHandler )
-#pragma alloc_text( PAGEAFD, AfdReceiveExpeditedEventHandler )
 #pragma alloc_text( PAGEAFD, AfdQueryReceiveInformation )
 #endif
 
@@ -52,7 +51,6 @@ AfdReceive (
     BOOLEAN peek;
     LARGE_INTEGER bytesExpected;
     BOOLEAN isDataOnConnection;
-    BOOLEAN isExpeditedDataOnConnection;
 
     //
     // Make sure that the endpoint is in the correct state.
@@ -181,16 +179,6 @@ AfdReceive (
     ASSERT( connection->Type == AfdBlockTypeConnection );
 
     //
-    // If this endpoint is set up for inline reception of expedited data,
-    // change the receive flags to use either normal or expedited data.
-    //
-
-    if ( endpoint->InLine ) {
-        receiveRequest->ReceiveFlags |= TDI_RECEIVE_NORMAL;
-        receiveRequest->ReceiveFlags |= TDI_RECEIVE_EXPEDITED;
-    }
-
-    //
     // Determine whether this is a request to just peek at the data.
     //
 
@@ -200,7 +188,6 @@ AfdReceive (
 
     if ( endpoint->NonBlocking ) {
         isDataOnConnection = IS_DATA_ON_CONNECTION( connection );
-        isExpeditedDataOnConnection = IS_EXPEDITED_DATA_ON_CONNECTION( connection );
     }
 
     if ( (receiveRequest->ReceiveFlags & TDI_RECEIVE_NORMAL) != 0 ) {
@@ -212,7 +199,7 @@ AfdReceive (
         // yet--there may be expedited data available to be read.
         //
 
-        if ( endpoint->NonBlocking && !endpoint->InLine &&
+        if ( endpoint->NonBlocking &&
                  IrpSp->MajorFunction != IRP_MJ_READ ) {
 
             if ( !isDataOnConnection &&
@@ -296,96 +283,6 @@ AfdReceive (
         }
     }
 
-    if ( (receiveRequest->ReceiveFlags & TDI_RECEIVE_EXPEDITED) != 0 ) {
-
-        if ( endpoint->NonBlocking && IrpSp->MajorFunction != IRP_MJ_READ &&
-                 !isExpeditedDataOnConnection &&
-                 !connection->AbortIndicated &&
-                 !connection->DisconnectIndicated ) {
-
-            //
-            // If this is an inline endpoint and there is normal data,
-            // don't fail.
-            //
-
-            if ( !(endpoint->InLine && isDataOnConnection) ) {
-
-                IF_DEBUG(RECEIVE) {
-                    KdPrint(( "AfdReceive: failing nonblocking EXP receive, ind %ld, "
-                              "taken %ld, out %ld\n",
-                                  connection->Common.Bufferring.ReceiveExpeditedBytesIndicated.LowPart,
-                                  connection->Common.Bufferring.ReceiveExpeditedBytesTaken.LowPart,
-                                  connection->Common.Bufferring.ReceiveExpeditedBytesOutstanding.LowPart ));
-                }
-
-                KeReleaseSpinLock( &AfdSpinLock, oldIrql );
-                status = STATUS_DEVICE_NOT_READY;
-                goto complete;
-            }
-        }
-
-        //
-        // If this is a nonblocking endpoint for a message-oriented 
-        // transport, limit the number of bytes that can be received to the 
-        // amount that has been indicated.  This prevents the receive
-        // from blocking in the case where only part of a message has been
-        // received.
-        //
-    
-        if ( endpoint->EndpointType != AfdEndpointTypeStream &&
-                 endpoint->NonBlocking &&
-                 IS_EXPEDITED_DATA_ON_CONNECTION( connection ) ) {
-    
-            bytesExpected = RtlLargeIntegerSubtract(
-                                connection->Common.Bufferring.ReceiveExpeditedBytesIndicated,
-                                RtlLargeIntegerAdd(
-                                    connection->Common.Bufferring.ReceiveExpeditedBytesTaken,
-                                    connection->Common.Bufferring.ReceiveExpeditedBytesOutstanding )
-                                );
-            ASSERT( bytesExpected.HighPart == 0 );
-            ASSERT( bytesExpected.LowPart != 0 );
-    
-            //
-            // If the request is for more bytes than are available, cut back 
-            // the number of bytes requested to what we know is actually 
-            // available.  
-            //
-    
-            if ( IrpSp->Parameters.DeviceIoControl.OutputBufferLength >
-                     bytesExpected.LowPart ) {
-                IrpSp->Parameters.DeviceIoControl.OutputBufferLength =
-                    bytesExpected.LowPart;
-            }
-        }
-    
-        //
-        // Increment the count of posted expedited receive bytes
-        // outstanding.  This count is used for polling and nonblocking
-        // receives.  Note that we do not increment this count if this
-        // is only a PEEK receive.
-        //
-
-        IF_DEBUG(RECEIVE) {
-            KdPrint(( "AfdReceive: conn %lx for %ld bytes, ind %ld, "
-                      "taken %ld, out %ld EXP %s\n",
-                         connection,
-                         IrpSp->Parameters.DeviceIoControl.OutputBufferLength,
-                         connection->Common.Bufferring.ReceiveExpeditedBytesIndicated.LowPart,
-                         connection->Common.Bufferring.ReceiveExpeditedBytesTaken.LowPart,
-                         connection->Common.Bufferring.ReceiveExpeditedBytesOutstanding.LowPart,
-                         peek ? "PEEK" : "" ));
-        }
-
-        if ( !peek ) {
-
-            connection->Common.Bufferring.ReceiveExpeditedBytesOutstanding =
-                RtlLargeIntegerAdd(
-                    connection->Common.Bufferring.ReceiveExpeditedBytesOutstanding,
-                    RtlConvertUlongToLargeInteger(
-                        IrpSp->Parameters.DeviceIoControl.OutputBufferLength )
-                    );
-        }
-    }
 
     KeReleaseSpinLock( &AfdSpinLock, oldIrql );
 
@@ -451,7 +348,6 @@ AfdRestartReceive (
     LARGE_INTEGER requestedBytes;
     KIRQL oldIrql;
     ULONG receiveFlags;
-    BOOLEAN expedited;
     PTDI_REQUEST_RECEIVE receiveRequest;
 
     ASSERT( endpoint->Type == AfdBlockTypeVcConnecting );
@@ -465,19 +361,8 @@ AfdRestartReceive (
                          irpSp->Parameters.DeviceIoControl.OutputBufferLength
                          );
 
-    //
-    // Determine whether we received normal or expedited data.
-    //
-
     receiveRequest = irpSp->Parameters.DeviceIoControl.Type3InputBuffer;
     receiveFlags = receiveRequest->ReceiveFlags;
-
-    if ( Irp->IoStatus.Status == STATUS_RECEIVE_EXPEDITED ||
-         Irp->IoStatus.Status == STATUS_RECEIVE_PARTIAL_EXPEDITED ) {
-        expedited = TRUE;
-    } else {
-        expedited = FALSE;
-    }
 
     //
     // Free the receive request structure.
@@ -494,11 +379,9 @@ AfdRestartReceive (
 
         IF_DEBUG(RECEIVE) {
             KdPrint(( "AfdRestartReceive: IRP %lx, endpoint %lx, conn %lx, "
-                      "status %X\n",
+                      "status %X, PEEKed only.\n",
                         Irp, endpoint, endpoint->Common.VcConnecting.Connection,
                         Irp->IoStatus.Status ));
-            KdPrint(( "    %s data, PEEKed only.\n",
-                        expedited ? "expedited" : "normal" ));
         }
 
         AfdCompleteOutstandingIrp( endpoint, Irp );
@@ -514,131 +397,52 @@ AfdRestartReceive (
     connection = endpoint->Common.VcConnecting.Connection;
     ASSERT( connection->Type == AfdBlockTypeConnection );
 
-    if ( !expedited ) {
-
-        if ( actualBytes.LowPart == 0 ) {
-            ASSERT( actualBytes.HighPart == 0 );
-            connection->VcZeroByteReceiveIndicated = FALSE;
-        } else {
-            connection->Common.Bufferring.ReceiveBytesTaken =
-                RtlLargeIntegerAdd( actualBytes, connection->Common.Bufferring.ReceiveBytesTaken );
-        }
-
-        //
-        // If the number taken exceeds the number indicated, then this
-        // receive got some unindicated bytes because the receive was
-        // posted when the indication arrived.  If this is the case, set
-        // the amount indicated equal to the amount received.
-        //
-
-        if ( RtlLargeIntegerGreaterThan(
-                 connection->Common.Bufferring.ReceiveBytesTaken,
-                 connection->Common.Bufferring.ReceiveBytesIndicated ) ) {
-
-            connection->Common.Bufferring.ReceiveBytesIndicated =
-                connection->Common.Bufferring.ReceiveBytesTaken;
-        }
-
-        //
-        // Decrement the count of outstanding receive bytes on this connection
-        // by the receive size that was requested.
-        //
-
-        connection->Common.Bufferring.ReceiveBytesOutstanding =
-            RtlLargeIntegerSubtract(
-                connection->Common.Bufferring.ReceiveBytesOutstanding,
-                requestedBytes
-                );
-
-        //
-        // If the endpoint is inline, decrement the count of outstanding
-        // expedited bytes.
-        //
-
-        if ( endpoint->InLine ) {
-            connection->Common.Bufferring.ReceiveExpeditedBytesOutstanding =
-                RtlLargeIntegerSubtract(
-                    connection->Common.Bufferring.ReceiveExpeditedBytesOutstanding,
-                    requestedBytes
-                    );
-        }
-
-        IF_DEBUG(RECEIVE) {
-            KdPrint(( "AfdRestartReceive: IRP %lx, endpoint %lx, conn %lx, "
-                      "status %X\n",
-                        Irp, endpoint, connection,
-                        Irp->IoStatus.Status ));
-            KdPrint(( "    req. bytes %ld, actual %ld, ind %ld, "
-                      " taken %ld, out %ld\n",
-                          requestedBytes.LowPart, actualBytes.LowPart,
-                          connection->Common.Bufferring.ReceiveBytesIndicated.LowPart,
-                          connection->Common.Bufferring.ReceiveBytesTaken.LowPart,
-                          connection->Common.Bufferring.ReceiveBytesOutstanding.LowPart
-                          ));
-        }
-
+    if ( actualBytes.LowPart == 0 ) {
+        ASSERT( actualBytes.HighPart == 0 );
+        connection->VcZeroByteReceiveIndicated = FALSE;
     } else {
+        connection->Common.Bufferring.ReceiveBytesTaken =
+            RtlLargeIntegerAdd( actualBytes, connection->Common.Bufferring.ReceiveBytesTaken );
+    }
 
-        connection->Common.Bufferring.ReceiveExpeditedBytesTaken =
-            RtlLargeIntegerAdd( actualBytes, connection->Common.Bufferring.ReceiveExpeditedBytesTaken );
+    //
+    // If the number taken exceeds the number indicated, then this
+    // receive got some unindicated bytes because the receive was
+    // posted when the indication arrived.  If this is the case, set
+    // the amount indicated equal to the amount received.
+    //
 
-        //
-        // If the number taken exceeds the number indicated, then this
-        // receive got some unindicated bytes because the receive was
-        // posted when the indication arrived.  If this is the case, set
-        // the amount indicated equal to the amount received.
-        //
+    if ( RtlLargeIntegerGreaterThan(
+             connection->Common.Bufferring.ReceiveBytesTaken,
+             connection->Common.Bufferring.ReceiveBytesIndicated ) ) {
 
-        if ( RtlLargeIntegerGreaterThan(
-                 connection->Common.Bufferring.ReceiveExpeditedBytesTaken,
-                 connection->Common.Bufferring.ReceiveExpeditedBytesIndicated ) ) {
+        connection->Common.Bufferring.ReceiveBytesIndicated =
+            connection->Common.Bufferring.ReceiveBytesTaken;
+    }
 
-            connection->Common.Bufferring.ReceiveExpeditedBytesIndicated =
-                connection->Common.Bufferring.ReceiveExpeditedBytesTaken;
-        }
+    //
+    // Decrement the count of outstanding receive bytes on this connection
+    // by the receive size that was requested.
+    //
 
-        //
-        // Decrement the count of outstanding receive bytes on this connection
-        // by the receive size that was requested.
-        //
+    connection->Common.Bufferring.ReceiveBytesOutstanding =
+        RtlLargeIntegerSubtract(
+            connection->Common.Bufferring.ReceiveBytesOutstanding,
+            requestedBytes
+            );
 
-        ASSERT( connection->Common.Bufferring.ReceiveExpeditedBytesOutstanding.LowPart > 0 ||
-                    connection->Common.Bufferring.ReceiveExpeditedBytesOutstanding.HighPart > 0 ||
-                    requestedBytes.LowPart == 0 );
-
-        connection->Common.Bufferring.ReceiveExpeditedBytesOutstanding =
-            RtlLargeIntegerSubtract(
-                connection->Common.Bufferring.ReceiveExpeditedBytesOutstanding,
-                requestedBytes
-                );
-
-        //
-        // If the endpoint is inline, decrement the count of outstanding
-        // normal bytes.
-        //
-
-        if ( endpoint->InLine ) {
-            connection->Common.Bufferring.ReceiveBytesOutstanding =
-                RtlLargeIntegerSubtract(
-                    connection->Common.Bufferring.ReceiveBytesOutstanding,
-                    requestedBytes
-                    );
-        }
-
-        IF_DEBUG(RECEIVE) {
-            KdPrint(( "AfdRestartReceive: (exp) IRP %lx, endpoint %lx, conn %lx, "
-                      "status %X\n",
-                        Irp, endpoint, connection,
-                        Irp->IoStatus.Status ));
-            KdPrint(( "    req. bytes %ld, actual %ld, ind %ld, "
-                      " taken %ld, out %ld\n",
-                          requestedBytes.LowPart, actualBytes.LowPart,
-                          connection->Common.Bufferring.ReceiveExpeditedBytesIndicated.LowPart,
-                          connection->Common.Bufferring.ReceiveExpeditedBytesTaken.LowPart,
-                          connection->Common.Bufferring.ReceiveExpeditedBytesOutstanding.LowPart
-                          ));
-        }
-
+    IF_DEBUG(RECEIVE) {
+        KdPrint(( "AfdRestartReceive: IRP %lx, endpoint %lx, conn %lx, "
+                  "status %X\n",
+                    Irp, endpoint, connection,
+                    Irp->IoStatus.Status ));
+        KdPrint(( "    req. bytes %ld, actual %ld, ind %ld, "
+                  " taken %ld, out %ld\n",
+                      requestedBytes.LowPart, actualBytes.LowPart,
+                      connection->Common.Bufferring.ReceiveBytesIndicated.LowPart,
+                      connection->Common.Bufferring.ReceiveBytesTaken.LowPart,
+                      connection->Common.Bufferring.ReceiveBytesOutstanding.LowPart
+                      ));
     }
 
     KeReleaseSpinLock( &AfdSpinLock, oldIrql );
@@ -771,109 +575,6 @@ AfdReceiveEventHandler (
 
 } // AfdReceiveEventHandler
 
-
-NTSTATUS
-AfdReceiveExpeditedEventHandler (
-    IN PVOID TdiEventContext,
-    IN CONNECTION_CONTEXT ConnectionContext,
-    IN ULONG ReceiveFlags,
-    IN ULONG BytesIndicated,
-    IN ULONG BytesAvailable,
-    OUT ULONG *BytesTaken,
-    IN PVOID Tsdu,
-    OUT PIRP *IoRequestPacket
-    )
-{
-    PAFD_CONNECTION connection;
-    PAFD_ENDPOINT endpoint;
-    KIRQL oldIrql;
-
-    connection = (PAFD_CONNECTION)ConnectionContext;
-    endpoint = connection->Endpoint;
-
-    ASSERT( connection->Type == AfdBlockTypeConnection );
-
-    //
-    // Bump the count of bytes indicated on the connection to account for
-    // the expedited bytes indicated by this event.
-    //
-
-    KeAcquireSpinLock( &AfdSpinLock, &oldIrql );
-
-    connection->Common.Bufferring.ReceiveExpeditedBytesIndicated =
-        RtlLargeIntegerAdd(
-            connection->Common.Bufferring.ReceiveExpeditedBytesIndicated,
-            RtlConvertUlongToLargeInteger( BytesAvailable )
-            );
-
-    IF_DEBUG(RECEIVE) {
-        KdPrint(( "AfdReceiveExpeditedEventHandler: conn %lx, bytes %ld, "
-                  "ind %ld, taken %ld, out %ld, offset %ld\n",
-                      connection, BytesAvailable,
-                      connection->Common.Bufferring.ReceiveExpeditedBytesIndicated.LowPart,
-                      connection->Common.Bufferring.ReceiveExpeditedBytesTaken.LowPart,
-                      connection->Common.Bufferring.ReceiveExpeditedBytesOutstanding.LowPart ));
-    }
-
-    //
-    // If the receive side of the endpoint has been shut down, tell
-    // the provider that we took all the data.  Also, account for these
-    // bytes in our count of bytes taken from the transport.
-    //
-    //
-
-    if ( (endpoint->DisconnectMode & AFD_PARTIAL_DISCONNECT_RECEIVE) != 0 ) {
-
-        IF_DEBUG(RECEIVE) {
-            KdPrint(( "AfdReceiveExpeditedEventHandler: receive shutdown, "
-                      "%ld bytes dropped.\n", BytesAvailable ));
-        }
-
-        connection->Common.Bufferring.ReceiveExpeditedBytesTaken =
-            RtlLargeIntegerAdd(
-                connection->Common.Bufferring.ReceiveExpeditedBytesTaken,
-                RtlConvertUlongToLargeInteger( BytesAvailable )
-                );
-
-        KeReleaseSpinLock( &AfdSpinLock, oldIrql );
-
-        *BytesTaken = BytesAvailable;
-
-        //
-        // Abort the connection.  Note that if the abort attempt fails
-        // we can't do anything about it.
-        //
-
-        (VOID)AfdBeginAbort( connection );
-
-    } else {
-
-        KeReleaseSpinLock( &AfdSpinLock, oldIrql );
-
-        //
-        // Note to the TDI provider that we didn't take any of the data here.
-        //
-        // !!! needs bufferring for non-bufferring transports!
-
-        *BytesTaken = 0;
-
-        //
-        // If there are any outstanding poll IRPs for this endpoint/
-        // event, complete them.  Indicate this data as normal data if
-        // this endpoint is set up for inline reception of expedited
-        // data.
-        //
-
-        AfdIndicatePollEvent(
-            endpoint,
-            endpoint->InLine ? AFD_POLL_RECEIVE : AFD_POLL_RECEIVE_EXPEDITED,
-            STATUS_SUCCESS
-            );
-    }
-
-    return STATUS_SUCCESS;
-
-} // AfdReceiveExpeditedEventHandler
 
 
 NTSTATUS
@@ -923,8 +624,7 @@ AfdQueryReceiveInformation (
 
             receiveInformation->BytesAvailable =
                 connection->VcBufferredReceiveBytes;
-            receiveInformation->ExpeditedBytesAvailable =
-                connection->VcBufferredExpeditedBytes;
+            receiveInformation->ExpeditedBytesAvailable = 0;
 
         } else {
     
@@ -942,19 +642,7 @@ AfdQueryReceiveInformation (
     
             receiveInformation->BytesAvailable = result.LowPart;
     
-            //
-            // Determine the number of expedited bytes available to be read.
-            //
-    
-            result = RtlLargeIntegerSubtract(
-                         connection->Common.Bufferring.ReceiveExpeditedBytesIndicated,
-                         RtlLargeIntegerAdd(
-                             connection->Common.Bufferring.ReceiveExpeditedBytesTaken,
-                             connection->Common.Bufferring.ReceiveExpeditedBytesOutstanding ) );
-    
-            ASSERT( result.HighPart == 0 );
-    
-            receiveInformation->ExpeditedBytesAvailable = result.LowPart;
+            receiveInformation->ExpeditedBytesAvailable = 0;
         }
 
     } else {

@@ -248,12 +248,6 @@ AfdSetEventHandler (
     );
 
 NTSTATUS
-AfdSetInLineMode (
-    IN PAFD_CONNECTION Connection,
-    IN BOOLEAN InLine
-    );
-
-NTSTATUS
 AfdReceive (
     IN PIRP Irp,
     IN PIO_STACK_LOCATION IrpSp
@@ -303,30 +297,6 @@ AfdReceiveDatagramEventHandler (
     IN int OptionsLength,
     IN PVOID Options,
     IN ULONG ReceiveDatagramFlags,  
-    IN ULONG BytesIndicated,
-    IN ULONG BytesAvailable,
-    OUT ULONG *BytesTaken,
-    IN PVOID Tsdu,
-    OUT PIRP *IoRequestPacket
-    );
-
-NTSTATUS
-AfdReceiveExpeditedEventHandler (
-    IN PVOID TdiEventContext,
-    IN CONNECTION_CONTEXT ConnectionContext,
-    IN ULONG ReceiveFlags,
-    IN ULONG BytesIndicated,
-    IN ULONG BytesAvailable,
-    OUT ULONG *BytesTaken,
-    IN PVOID Tsdu,
-    OUT PIRP *IoRequestPacket
-    );
-
-NTSTATUS
-AfdBReceiveExpeditedEventHandler (
-    IN PVOID TdiEventContext,
-    IN CONNECTION_CONTEXT ConnectionContext,
-    IN ULONG ReceiveFlags,
     IN ULONG BytesIndicated,
     IN ULONG BytesAvailable,
     OUT ULONG *BytesTaken,
@@ -436,7 +406,6 @@ AfdCreateConnection (
     IN PUNICODE_STRING TransportDeviceName,
     IN HANDLE AddressHandle OPTIONAL,
     IN BOOLEAN TdiBufferring,
-    IN BOOLEAN InLine,
     IN PEPROCESS ProcessToCharge,
     OUT PAFD_CONNECTION *Connection
     );
@@ -578,28 +547,13 @@ AfdReturnBuffer (
                      (conn)->Common.Bufferring.ReceiveBytesOutstanding )) ||  \
              (conn)->VcZeroByteReceiveIndicated)
 
-#define IS_EXPEDITED_DATA_ON_CONNECTION_B(conn)                               \
-            (RtlLargeIntegerGreaterThan(                                      \
-                 (conn)->Common.Bufferring.ReceiveExpeditedBytesIndicated,    \
-                 RtlLargeIntegerAdd(                                          \
-                     (conn)->Common.Bufferring.ReceiveExpeditedBytesTaken,    \
-                     (conn)->Common.Bufferring.ReceiveExpeditedBytesOutstanding)) )
-
 #define IS_DATA_ON_CONNECTION_NB(conn)                                        \
             ( (conn)->Common.NonBufferring.BufferredReceiveCount != 0 )
-
-#define IS_EXPEDITED_DATA_ON_CONNECTION_NB(conn)                              \
-            ( (conn)->Common.NonBufferring.BufferredExpeditedCount != 0 )
 
 #define IS_DATA_ON_CONNECTION(conn)                                           \
             ( (conn)->Endpoint->TdiBufferring ?                               \
                 IS_DATA_ON_CONNECTION_B(conn) :                               \
                 IS_DATA_ON_CONNECTION_NB(conn) )
-
-#define IS_EXPEDITED_DATA_ON_CONNECTION(conn)                                 \
-            ( (conn)->Endpoint->TdiBufferring ?                               \
-                IS_EXPEDITED_DATA_ON_CONNECTION_B(conn) :                     \
-                IS_EXPEDITED_DATA_ON_CONNECTION_NB(conn) )
 
 #define ARE_DATAGRAMS_ON_ENDPOINT(endp)                              \
             ( (endp)->BufferredDatagramCount != 0 )
