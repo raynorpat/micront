@@ -365,9 +365,7 @@ end
 
 function Mutex:unlock()  return M.NtReleaseMutant(self._h) end
 function Mutex:handle()  return self._h end
-function Mutex:close()
-    if self._h then self._h:close(); self._h = nil end
-end
+Mutex.close = handle.close_h
 
 -- Query state (via NtQueryMutant). Returns table with current_count,
 -- owned_by_caller, abandoned.
@@ -412,9 +410,7 @@ function Semaphore:query()
 end
 
 function Semaphore:handle() return self._h end
-function Semaphore:close()
-    if self._h then self._h:close(); self._h = nil end
-end
+Semaphore.close = handle.close_h
 
 -- Factory. opts.initial = initial count (default 0), opts.maximum
 -- = max count (required — there's no sensible default).
@@ -461,9 +457,7 @@ function Timer:query()
 end
 
 function Timer:handle() return self._h end
-function Timer:close()
-    if self._h then self._h:close(); self._h = nil end
-end
+Timer.close = handle.close_h
 
 -- Factory. opts.notify true → NotificationTimer (stays signaled);
 -- false → SynchronizationTimer (auto-reset on wake).
@@ -529,9 +523,7 @@ function EventPair:wait_low()    M.NtWaitLowEventPair (self._h) end
 function EventPair:signal_high_wait_low() M.NtSetHighWaitLowEventPair(self._h) end
 function EventPair:signal_low_wait_high() M.NtSetLowWaitHighEventPair(self._h) end
 function EventPair:handle() return self._h end
-function EventPair:close()
-    if self._h then self._h:close(); self._h = nil end
-end
+EventPair.close = handle.close_h
 
 -- EventPair has its own access-mask constant in winnt.h — 0x1F0003 is
 -- STANDARD_RIGHTS_REQUIRED|SYNCHRONIZE|3, the "all access" flavor.
@@ -942,9 +934,7 @@ function IoCompletion:remove(seconds)
 end
 
 function IoCompletion:handle() return self._h end
-function IoCompletion:close()
-    if self._h then self._h:close(); self._h = nil end
-end
+IoCompletion.close = handle.close_h
 
 local IO_COMPLETION_ALL_ACCESS = 0x1F0003
 

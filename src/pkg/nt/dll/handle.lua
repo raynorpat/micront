@@ -39,6 +39,25 @@
 --                         reachable. Do not save it past the wrapper.
 --                         Errors if `h` isn't an NT_HANDLE.
 --
+--   handle.to_payload(h)  Serialise an NT_HANDLE's raw value to a
+--                         decimal string suitable for passing through
+--                         nt.thread.run's PAYLOAD slot. Inverse of
+--                         from_payload. The CALLER must keep the
+--                         owning NT_HANDLE alive in the parent until
+--                         the child has finished with it — the string
+--                         carries the kernel handle value, not a
+--                         lifetime reference. Closing the parent's
+--                         handle before the child finishes leaves the
+--                         child looking at a recycled (or invalid)
+--                         kernel object.
+--
+--   handle.from_payload(s) Decode a string produced by to_payload
+--                         (or any decimal-encoded HANDLE integer)
+--                         back into a BORROWED NT_HANDLE. The child
+--                         must not call :close() on it; the parent
+--                         still owns the handle. Returns an NT_HANDLE
+--                         with __owned=0, so __gc is a no-op.
+--
 --   h:close()             Explicit NtClose. Idempotent (safe to call
 --                         more than once, and still safe after __gc
 --                         fires). Prefer this over letting __gc run
@@ -136,6 +155,47 @@ function M.raw(h)
         error("expected NT_HANDLE, got " .. tostring(h), 3)
     end
     return h.__raw
+end
+
+-- ------------------------------------------------------------------
+-- Cross-thread serialisation — string<->handle bridging for the
+-- nt.thread.run PAYLOAD convention. The parent serialises an
+-- NT_HANDLE it owns; the child borrows it back into a fresh wrapper
+-- inside its own lua_State. The kernel handle itself is process-wide,
+-- so no duplication is needed — same process means same handle table.
+--
+-- Lifetime invariant: the parent's owning NT_HANDLE must outlive
+-- every child that calls from_payload on its serialised form. If the
+-- parent's wrapper is GC'd (or :close() is called) while a child
+-- still holds a borrowed view, the child's handle dangles — and the
+-- kernel may have already recycled the slot for an unrelated object.
+-- ------------------------------------------------------------------
+
+function M.to_payload(h)
+    return tostring(tonumber(ffi.cast('intptr_t', M.raw(h))))
+end
+
+function M.from_payload(payload_str)
+    return M.borrow(ffi.cast('HANDLE', tonumber(payload_str)))
+end
+
+-- ------------------------------------------------------------------
+-- Idempotent close for table-wrappers that hold an NT_HANDLE in
+-- self._h.  Used as the `:close()` method on the Lua-idiomatic
+-- objects in nt.dll.ke (Event), nt.dll.ex (Mutex, Semaphore, Timer,
+-- EventPair, IoCompletion) and any future wrapper that follows the
+-- same convention.
+--
+-- Assign with `Foo.close = handle.close_h` so the metatable picks it
+-- up as a `self`-method.  Safe to call any number of times; after
+-- the first call self._h is nil and subsequent calls short-circuit.
+-- Pairs naturally with the NT_HANDLE __gc which is itself idempotent.
+-- ------------------------------------------------------------------
+function M.close_h(self)
+    if self._h then
+        self._h:close()
+        self._h = nil
+    end
 end
 
 -- Canonical pseudo-handle accessors.  NT's NtCurrentProcess() /

@@ -149,7 +149,7 @@ end
 function Port:handle() return self._h end
 
 function Port:close()
-    if self._h then self._h:close(); self._h = nil end
+    handle.close_h(self)
     if self._is_default then
         _default_registered = false
         self._is_default = false

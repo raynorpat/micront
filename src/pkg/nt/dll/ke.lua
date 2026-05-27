@@ -197,9 +197,7 @@ end
 
 function Event:handle() return self._h end
 
-function Event:close()
-    if self._h then self._h:close(); self._h = nil end
-end
+Event.close = handle.close_h
 
 local EVENT_ALL_ACCESS = 0x1F0003
 

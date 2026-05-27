@@ -101,8 +101,8 @@ local handle = require('nt.dll.handle')
 
 -- Same process → the port handle is valid in this thread. Borrow it
 -- (non-owning: the parent owns and closes the real handle).
-local porth = handle.borrow(ffi.cast('HANDLE', tonumber(PAYLOAD)))
-local port  = setmetatable({ _h = porth }, ex.IoCompletion)
+local port = setmetatable({ _h = handle.from_payload(PAYLOAD) },
+                          ex.IoCompletion)
 
 local seen = {}
 while true do
@@ -132,7 +132,7 @@ t.test("N completions drain across K consumer threads, exactly once", function()
     t.ok(queued, "all " .. N .. " completions queued (depth=" .. c:depth() .. ")")
 
     -- Spawn K consumers racing to drain the same port.
-    local porth  = tostring(ptr_value(handle.raw(c:handle())))
+    local porth    = handle.to_payload(c:handle())
     local consumers = {}
     for k = 1, K do
         consumers[k] = thread.run(CONSUMER, porth)
@@ -197,8 +197,12 @@ local err    = require('nt.dll.errors')
 local handle = require('nt.dll.handle')
 
 local pa, ea, ia = PAYLOAD:match("^(%d+):(%d+):(%d+)$")
+-- `porth` stays a raw HANDLE cdata, NOT an NT_HANDLE wrapper: this
+-- consumer talks straight to ntdll.NtRemoveIoCompletion to inject
+-- bad IoStatusBlock pointers at the raw probe layer.  doneh just
+-- gets waited on, so the borrowed NT_HANDLE form is fine.
 local porth  = ffi.cast('HANDLE', tonumber(pa))
-local doneh  = handle.borrow(ffi.cast('HANDLE', tonumber(ea)))
+local doneh  = handle.from_payload(ea)
 local inject = (ia == "1")
 
 local STATUS_TIMEOUT = 0x102
@@ -250,8 +254,8 @@ t.test("concurrent producer + consumers + fault injection: exactly once", functi
     local src  = iosrc.new(c, 0xC0DE)
     local done = ke.event()      -- notification event: set when production ends
 
-    local port_int = tostring(ptr_value(handle.raw(c:handle())))
-    local done_int = tostring(ptr_value(handle.raw(done:handle())))
+    local port_int = handle.to_payload(c:handle())
+    local done_int = handle.to_payload(done:handle())
 
     -- Consumers start FIRST so they drain while the producer feeds.
     local consumers = {}

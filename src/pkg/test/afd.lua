@@ -4,12 +4,13 @@
 -- second. Each step prints a DIAG line so we can see exactly which
 -- call hangs if any test never returns.
 
-local ffi  = require('ffi')
-local bit  = require('bit')
-local t    = require('test')
-local ke   = require('nt.dll.ke')
-local afd  = require('nt.net.afd')
-local dns  = require('nt.net.dns')
+local ffi    = require('ffi')
+local bit    = require('bit')
+local t      = require('test')
+local ke     = require('nt.dll.ke')
+local handle = require('nt.dll.handle')
+local afd    = require('nt.net.afd')
+local dns    = require('nt.net.dns')
 
 t.suite("afd")
 
@@ -91,20 +92,16 @@ t.test("TCP loopback exchange on 127.0.0.1", function()
     local _, listener_port = afd.getsockname(listener)
     diag("listener on port %d", listener_port)
 
-    local handle_int = tostring(tonumber(ffi.cast('intptr_t',
-        require('nt.dll.handle').raw(listener))))
     diag("spawning child thread for accept")
     local th = thread.run([[
-        local ffi    = require('ffi')
         local handle = require('nt.dll.handle')
         local afd    = require('nt.net.afd')
-        local listener_h = ffi.cast('HANDLE', tonumber(PAYLOAD))
-        local listener  = handle.borrow(listener_h)
+        local listener = handle.from_payload(PAYLOAD)
         local peer = afd.accept(listener, 2.0)
         afd.send(peer, "hello", 1.0)
         peer:close()
         return "ok"
-    ]], handle_int)
+    ]], handle.to_payload(listener))
 
     diag("client connect")
     local client = afd.tcp()
@@ -281,8 +278,8 @@ t.test("AFD_POLL_RECEIVE_EXPEDITED bit is never set by the kernel", function()
     local conn = afd.accept(server, LOOPBACK_TIMEOUT)
 
     local AFD_POLL_RECEIVE_EXPEDITED = 0x0002
-    local events = afd.poll({{conn, AFD_POLL_RECEIVE_EXPEDITED}}, 0.1)
-    t.eq(events[1], 0, "expedited poll bit must not fire")
+    local events = afd.poll({[conn] = AFD_POLL_RECEIVE_EXPEDITED}, 0.1)
+    t.eq(events[conn], 0, "expedited poll bit must not fire")
 
     conn:close()
     client:close()
@@ -319,9 +316,9 @@ t.test("POLL: zero-timeout, no events ready, returns empty mask", function()
     -- pending.
     local u = afd.udp()
     afd.bind(u, "127.0.0.1", 0)
-    local result = afd.poll({{u, afd.POLL_RECEIVE}}, 0)
+    local result = afd.poll({[u] = afd.POLL_RECEIVE}, 0)
+    t.eq(result[u], 0, "no events should be ready on a fresh UDP socket")
     u:close()
-    t.eq(result[1], 0, "no events should be ready on a fresh UDP socket")
 end)
 
 t.test("POLL: short timeout, no events ready, returns after timeout", function()
@@ -330,10 +327,10 @@ t.test("POLL: short timeout, no events ready, returns after timeout", function()
     local u = afd.udp()
     afd.bind(u, "127.0.0.1", 0)
     local t0 = nt_now()
-    local result = afd.poll({{u, afd.POLL_RECEIVE}}, 0.2)
+    local result = afd.poll({[u] = afd.POLL_RECEIVE}, 0.2)
     local elapsed = nt_now() - t0
+    t.eq(result[u], 0, "timeout-with-no-events should leave the mask clear")
     u:close()
-    t.eq(result[1], 0, "timeout-with-no-events should leave the mask clear")
     -- Lower bound: did the kernel timer actually engage?  Allow some
     -- slop for the HAL clock granularity (10ms ticks under our PIT).
     t.ok(elapsed >= 0.15, "poll returned too early: " .. elapsed .. "s")
@@ -363,10 +360,10 @@ t.test("POLL: UDP socket with already-delivered datagram reports RECEIVE",
     -- kernel one scheduling pass is cheap insurance.
     ke.NtDelayExecution(false, ke.timeout(0.02))
 
-    local result = afd.poll({{server, afd.POLL_RECEIVE}}, 0)
-    t.ok(bit.band(result[1], afd.POLL_RECEIVE) ~= 0,
+    local result = afd.poll({[server] = afd.POLL_RECEIVE}, 0)
+    t.ok(bit.band(result[server], afd.POLL_RECEIVE) ~= 0,
          "POLL_RECEIVE bit should be set, got mask 0x"
-         .. bit.tohex(result[1]))
+         .. bit.tohex(result[server]))
 
     server:close(); client:close()
 end)
@@ -391,10 +388,10 @@ t.test("POLL: TCP listener with pending connection reports ACCEPT",
     -- Give scheduler one pass for the TDI Connect indication.
     ke.NtDelayExecution(false, ke.timeout(0.02))
 
-    local result = afd.poll({{server, afd.POLL_ACCEPT}}, 0)
-    t.ok(bit.band(result[1], afd.POLL_ACCEPT) ~= 0,
+    local result = afd.poll({[server] = afd.POLL_ACCEPT}, 0)
+    t.ok(bit.band(result[server], afd.POLL_ACCEPT) ~= 0,
          "POLL_ACCEPT bit should be set, got mask 0x"
-         .. bit.tohex(result[1]))
+         .. bit.tohex(result[server]))
 
     -- Drain so closing the listener doesn't strand an accepted-but-
     -- unaccepted connection.
@@ -526,15 +523,13 @@ t.test("QUERY_HANDLES: address_handle populated after bind", function()
     -- Before bind: neither handle is set.
     local s = afd.tcp()
     local h0 = afd.query_handles(s)
-    t.eq(h0.address_handle,    0, "fresh socket should have no address handle")
-    t.eq(h0.connection_handle, 0, "fresh socket should have no connection handle")
-    -- After bind: TdiOpenAddress ran → address_handle non-zero.
+    t.eq(h0.address_handle,    nil, "fresh socket should have no address handle")
+    t.eq(h0.connection_handle, nil, "fresh socket should have no connection handle")
+    -- After bind: TdiOpenAddress ran → address_handle populated.
     afd.bind(s, "127.0.0.1", 0)
     local h1 = afd.query_handles(s)
-    t.ok(h1.address_handle ~= 0,
-         "expected non-zero address_handle after bind, got 0x" ..
-         bit.tohex(h1.address_handle))
-    t.eq(h1.connection_handle, 0, "no connection until connect/accept")
+    t.ok(h1.address_handle ~= nil, "expected an address_handle after bind")
+    t.eq(h1.connection_handle, nil, "no connection until connect/accept")
     s:close()
 end)
 
@@ -544,23 +539,23 @@ t.test("QUERY_HANDLES: connection_handle populated after connect", function()
     -- connect+accept returns, so there's no data-flow race to dodge.
     local server, client = tcp_pair()
     local hc = afd.query_handles(client)
-    t.ok(hc.address_handle    ~= 0, "client address_handle should be set")
-    t.ok(hc.connection_handle ~= 0, "client connection_handle should be set")
+    t.ok(hc.address_handle    ~= nil, "client address_handle should be set")
+    t.ok(hc.connection_handle ~= nil, "client connection_handle should be set")
     local hs = afd.query_handles(server)
-    t.ok(hs.address_handle    ~= 0, "server address_handle should be set")
-    t.ok(hs.connection_handle ~= 0, "server connection_handle should be set")
+    t.ok(hs.address_handle    ~= nil, "server address_handle should be set")
+    t.ok(hs.connection_handle ~= nil, "server connection_handle should be set")
     server:close(); client:close()
 end)
 
 t.test("QUERY_HANDLES: flags select which handle is fetched", function()
-    -- Asking for only ADDRESS_HANDLE leaves connection_handle as 0
+    -- Asking for only ADDRESS_HANDLE leaves connection_handle unset
     -- regardless of socket state.  Just smoke-tests the flag dispatch.
     local s = afd.tcp()
     afd.bind(s, "127.0.0.1", 0)
     local addr_only = afd.query_handles(s, afd.QUERY_ADDRESS_HANDLE)
-    t.ok(addr_only.address_handle ~= 0,
+    t.ok(addr_only.address_handle ~= nil,
          "ADDRESS_HANDLE-only request should still return address handle")
-    t.eq(addr_only.connection_handle, 0)
+    t.eq(addr_only.connection_handle, nil)
     s:close()
 end)
 
@@ -582,11 +577,6 @@ end)
 -- ------------------------------------------------------------------
 
 local thread = require('nt.thread')
-local nt_handle = require('nt.dll.handle')
-
-local function listener_handle_int(listener)
-    return tostring(tonumber(ffi.cast('intptr_t', nt_handle.raw(listener))))
-end
 
 t.test("RECEIVE: recv that pends until peer sends → AfdRestartReceive",
        function()
@@ -599,18 +589,17 @@ t.test("RECEIVE: recv that pends until peer sends → AfdRestartReceive",
     local _, port = afd.getsockname(listener)
 
     local th = thread.run([[
-        local ffi    = require('ffi')
         local handle = require('nt.dll.handle')
         local afd    = require('nt.net.afd')
         local ke     = require('nt.dll.ke')
-        local listener = handle.borrow(ffi.cast('HANDLE', tonumber(PAYLOAD)))
+        local listener = handle.from_payload(PAYLOAD)
         local peer = afd.accept(listener, 2.0)
         -- Long enough for the client's recv IRP to definitely pend.
         ke.NtDelayExecution(false, ke.timeout(0.15))
         afd.send(peer, "deferred", 1.0)
         peer:close()
         return "ok"
-    ]], listener_handle_int(listener))
+    ]], handle.to_payload(listener))
 
     local client = afd.tcp()
     afd.bind(client, "127.0.0.1", 0)
@@ -622,7 +611,8 @@ t.test("RECEIVE: recv that pends until peer sends → AfdRestartReceive",
 
     client:close(); listener:close()
     t.ok(th:wait(2.0))
-    t.eq(({th:result()})[1], "ok")
+    local s = th:result()
+    t.eq(s, "ok")
     th:close()
 end)
 
@@ -638,15 +628,14 @@ t.test("RECEIVE: peer sends before our recv → AfdReceiveEventHandler",
     local _, port = afd.getsockname(listener)
 
     local th = thread.run([[
-        local ffi    = require('ffi')
         local handle = require('nt.dll.handle')
         local afd    = require('nt.net.afd')
-        local listener = handle.borrow(ffi.cast('HANDLE', tonumber(PAYLOAD)))
+        local listener = handle.from_payload(PAYLOAD)
         local peer = afd.accept(listener, 2.0)
         afd.send(peer, "early", 1.0)
         peer:close()
         return "ok"
-    ]], listener_handle_int(listener))
+    ]], handle.to_payload(listener))
 
     local client = afd.tcp()
     afd.bind(client, "127.0.0.1", 0)
@@ -654,7 +643,8 @@ t.test("RECEIVE: peer sends before our recv → AfdReceiveEventHandler",
 
     -- Wait long enough that the child has definitely sent and closed.
     t.ok(th:wait(2.0))
-    t.eq(({th:result()})[1], "ok")
+    local s = th:result()
+    t.eq(s, "ok")
     th:close()
 
     -- Data is sitting in our AFD-side receive buffer; recv returns
@@ -725,11 +715,10 @@ t.test("SEND: cancel a pending send via short io_wait timeout " ..
     local _, port = afd.getsockname(listener)
 
     local th = thread.run([[
-        local ffi    = require('ffi')
         local handle = require('nt.dll.handle')
         local afd    = require('nt.net.afd')
         local ke     = require('nt.dll.ke')
-        local listener = handle.borrow(ffi.cast('HANDLE', tonumber(PAYLOAD)))
+        local listener = handle.from_payload(PAYLOAD)
         local peer = afd.accept(listener, 2.0)
         afd.set_info(peer, afd.RECEIVE_WINDOW_SIZE, 1024)
         -- Hold the peer open without draining long enough that the
@@ -737,7 +726,7 @@ t.test("SEND: cancel a pending send via short io_wait timeout " ..
         ke.NtDelayExecution(false, ke.timeout(1.5))
         peer:close()
         return "ok"
-    ]], listener_handle_int(listener))
+    ]], handle.to_payload(listener))
 
     local client = afd.tcp()
     afd.bind(client, "127.0.0.1", 0)
@@ -780,11 +769,10 @@ t.test("SEND: large send pends and completes when peer drains the window",
     local _, port = afd.getsockname(listener)
 
     local th = thread.run([[
-        local ffi    = require('ffi')
         local handle = require('nt.dll.handle')
         local afd    = require('nt.net.afd')
         local ke     = require('nt.dll.ke')
-        local listener = handle.borrow(ffi.cast('HANDLE', tonumber(PAYLOAD)))
+        local listener = handle.from_payload(PAYLOAD)
         local peer = afd.accept(listener, 2.0)
         -- Shrink the receive window on the accepted (connected) endpoint.
         afd.set_info(peer, afd.RECEIVE_WINDOW_SIZE, 1024)
@@ -801,7 +789,7 @@ t.test("SEND: large send pends and completes when peer drains the window",
         end
         peer:close()
         return tostring(total)
-    ]], listener_handle_int(listener))
+    ]], handle.to_payload(listener))
 
     local client = afd.tcp()
     afd.bind(client, "127.0.0.1", 0)
@@ -846,14 +834,14 @@ t.test("POLL: multi-handle — one ready, one not, mask reflects both",
     ke.NtDelayExecution(false, ke.timeout(0.02))
 
     local result = afd.poll({
-        {hot,  afd.POLL_RECEIVE},
-        {cold, afd.POLL_RECEIVE},
+        [hot]  = afd.POLL_RECEIVE,
+        [cold] = afd.POLL_RECEIVE,
     }, 0)
 
-    t.ok(bit.band(result[1], afd.POLL_RECEIVE) ~= 0,
-         "hot socket should report RECEIVE, got 0x" .. bit.tohex(result[1]))
-    t.eq(result[2], 0,
-         "cold socket should report nothing, got 0x" .. bit.tohex(result[2]))
+    t.ok(bit.band(result[hot], afd.POLL_RECEIVE) ~= 0,
+         "hot socket should report RECEIVE, got 0x" .. bit.tohex(result[hot]))
+    t.eq(result[cold], 0,
+         "cold socket should report nothing, got 0x" .. bit.tohex(result[cold]))
 
     hot:close(); cold:close(); poker:close()
 end)

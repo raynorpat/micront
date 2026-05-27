@@ -349,6 +349,32 @@ local TDI_ADDRESS_LENGTH_IP     = 14   -- sizeof(TDI_ADDRESS_IP)
 local AfdOpenPacketName = "AfdOpenPacketXX"
 
 -- ------------------------------------------------------------------
+-- pointer_into — TDI/AFD "kernel walks pointers within the same user
+-- buffer" pattern. The connect and send-datagram IOCTLs hand the
+-- kernel a struct that contains pointers to inner offsets of itself,
+-- which the kernel resolves via user-mode pointer fixup; we compute
+-- those inner pointers here so the buffer is self-contained.
+-- (udp_recvfrom's "OutputBuffer at offset 4" trick is a different
+-- shape — see the AFD_RECV_DG_CTRL layout comment.)
+--
+-- Returns void *.  Wrap with a typed ffi.cast at the call site when
+-- the destination field is strongly typed (e.g. an inner pointer to
+-- TDI_CONNECTION_INFORMATION *).
+--
+-- LIFETIME: `base` must remain reachable on the Lua stack until the
+-- IRP completes — the kernel reads through the returned pointer at
+-- IRP-process time, not at IOCTL-issue time. As long as `base` is a
+-- local in the calling function and the IOCTL is issued from that
+-- same function (synchronously or via io_wait which itself blocks
+-- until completion), LuaJIT keeps it alive.
+-- ------------------------------------------------------------------
+
+local function pointer_into(base, struct_name, field)
+    return ffi.cast('void *',
+        ffi.cast('uint8_t *', base) + ffi.offsetof(struct_name, field))
+end
+
+-- ------------------------------------------------------------------
 -- IPv4 helpers
 -- ------------------------------------------------------------------
 
@@ -650,8 +676,7 @@ end
 -- into the same buffer (kernel does the user→system pointer fixup).
 -- ------------------------------------------------------------------
 local function connect(sock, host, port, timeout_secs)
-    local buf      = ffi.new('AFD_CONNECT_BUFFER')
-    local buf_base = ffi.cast('uint8_t *', buf)
+    local buf = ffi.new('AFD_CONNECT_BUFFER')
     -- RequestInfo holds the address pointer + length; the kernel
     -- translates these two pointers via the user-buffer-to-system-
     -- buffer offset trick (now bounds-checked via the patched
@@ -662,8 +687,8 @@ local function connect(sock, host, port, timeout_secs)
     buf.RequestInfo.OptionsLength       = 0
     buf.RequestInfo.Options             = nil
     buf.RequestInfo.RemoteAddressLength = ffi.sizeof('TA_IP_ADDRESS')
-    buf.RequestInfo.RemoteAddress       = ffi.cast('void *',
-        buf_base + ffi.offsetof('AFD_CONNECT_BUFFER', 'RequestAddr'))
+    buf.RequestInfo.RemoteAddress       =
+        pointer_into(buf, 'AFD_CONNECT_BUFFER', 'RequestAddr')
     fill_addr(buf.RequestAddr.Address, host, port)
     buf.RequestAddr.TAAddressCount = 1
     buf.RequestAddr.AddressLength  = TDI_ADDRESS_LENGTH_IP
@@ -684,9 +709,9 @@ local function connect(sock, host, port, timeout_secs)
     buf.ReturnInfo.RemoteAddress        = nil
 
     buf.RequestConnectionInformation = ffi.cast('TDI_CONNECTION_INFORMATION *',
-        buf_base + ffi.offsetof('AFD_CONNECT_BUFFER', 'RequestInfo'))
+        pointer_into(buf, 'AFD_CONNECT_BUFFER', 'RequestInfo'))
     buf.ReturnConnectionInformation  = ffi.cast('TDI_CONNECTION_INFORMATION *',
-        buf_base + ffi.offsetof('AFD_CONNECT_BUFFER', 'ReturnInfo'))
+        pointer_into(buf, 'AFD_CONNECT_BUFFER', 'ReturnInfo'))
     buf.Timeout                      = 0           -- infinite
     ioctl(sock, IOCTL_TDI_CONNECT,
           buf, ffi.sizeof('AFD_CONNECT_BUFFER'),
@@ -713,27 +738,41 @@ end
 --      returns (sequence, remote_address).
 --   3. IOCTL_AFD_ACCEPT: hand the listener the new endpoint's
 --      handle + the sequence; AFD attaches the pending connection.
+--
+-- If step 2 or 3 raises (timeout, cancel, kernel refusal), the
+-- step-1 peer endpoint is closed deterministically before the error
+-- propagates — otherwise it'd sit unowned in the caller's handle
+-- table until LuaJIT GC fired, which is the kind of non-deterministic
+-- handle leak the rest of this module is careful to avoid.
 -- ------------------------------------------------------------------
 local function accept(sock, timeout_secs)
     -- Step 1: fresh stream endpoint, bound to the same transport.
     local peer = socket('tcp')
 
-    -- Step 2: wait for a peer. Only this step is naturally blocking;
-    -- the timeout applies here. Steps 1 and 3 are state-machine pokes
-    -- that complete inline.
-    local resp = ffi.new('AFD_LISTEN_RESPONSE_INFO')
-    ioctl(sock, IOCTL_AFD_WAIT_FOR_LISTEN,
-          nil,  0,
-          resp, ffi.sizeof('AFD_LISTEN_RESPONSE_INFO'),
-          timeout_secs)
+    -- Steps 2-3 wrapped: only step 2 is naturally blocking (the
+    -- timeout applies there); step 3 is a state-machine poke that
+    -- completes inline.  Both can raise on kernel refusal.
+    local ok, err_obj = pcall(function()
+        local resp = ffi.new('AFD_LISTEN_RESPONSE_INFO')
+        ioctl(sock, IOCTL_AFD_WAIT_FOR_LISTEN,
+              nil,  0,
+              resp, ffi.sizeof('AFD_LISTEN_RESPONSE_INFO'),
+              timeout_secs)
 
-    -- Step 3: hand off the peer endpoint with the matching sequence.
-    local info = ffi.new('AFD_ACCEPT_INFO')
-    info.Sequence     = resp.Sequence
-    info.AcceptHandle = ffi.cast('void *', handle.raw(peer))
-    ioctl(sock, IOCTL_AFD_ACCEPT,
-          info, ffi.sizeof('AFD_ACCEPT_INFO'),
-          nil,  0)
+        local info = ffi.new('AFD_ACCEPT_INFO')
+        info.Sequence     = resp.Sequence
+        info.AcceptHandle = ffi.cast('void *', handle.raw(peer))
+        ioctl(sock, IOCTL_AFD_ACCEPT,
+              info, ffi.sizeof('AFD_ACCEPT_INFO'),
+              nil,  0)
+    end)
+    if not ok then
+        peer:close()
+        -- Re-raise verbatim; err_obj is the structured nt.dll.errors
+        -- table from io_wait, level=0 keeps Lua from prepending a
+        -- file:line prefix (and tables never get one anyway).
+        error(err_obj, 0)
+    end
     return peer
 end
 
@@ -789,8 +828,7 @@ end
 -- ------------------------------------------------------------------
 
 local function udp_sendto(sock, host, port, data, timeout_secs)
-    local buf      = ffi.new('AFD_SEND_DG_BUF')
-    local buf_base = ffi.cast('uint8_t *', buf)
+    local buf = ffi.new('AFD_SEND_DG_BUF')
 
     buf.Request.Handle              = nil
     buf.Request.RequestNotifyObject = nil
@@ -798,15 +836,15 @@ local function udp_sendto(sock, host, port, data, timeout_secs)
     buf.Request.TdiStatus           = 0
 
     buf.SendDatagramInformation = ffi.cast('TDI_CONNECTION_INFORMATION *',
-        buf_base + ffi.offsetof('AFD_SEND_DG_BUF', 'ConnInfo'))
+        pointer_into(buf, 'AFD_SEND_DG_BUF', 'ConnInfo'))
 
     buf.ConnInfo.UserDataLength      = 0
     buf.ConnInfo.UserData            = nil
     buf.ConnInfo.OptionsLength       = 0
     buf.ConnInfo.Options             = nil
     buf.ConnInfo.RemoteAddressLength = ffi.sizeof('TA_IP_ADDRESS')
-    buf.ConnInfo.RemoteAddress       = ffi.cast('void *',
-        buf_base + ffi.offsetof('AFD_SEND_DG_BUF', 'Addr'))
+    buf.ConnInfo.RemoteAddress       =
+        pointer_into(buf, 'AFD_SEND_DG_BUF', 'Addr')
 
     buf.Addr.TAAddressCount = 1
     buf.Addr.AddressLength  = TDI_ADDRESS_LENGTH_IP
@@ -897,7 +935,13 @@ end
 -- ------------------------------------------------------------------
 -- poll — IOCTL_AFD_POLL.
 --
---   afd.poll({ {sock1, ev_mask1}, {sock2, ev_mask2}, ... }, timeout_secs)
+--   afd.poll({ [sock1] = ev_mask1, [sock2] = ev_mask2, ... }, timeout_secs)
+--
+-- Input is a table keyed by socket NT_HANDLE → desired-events bitmask.
+-- Output mirrors the same shape: every input socket appears in the
+-- returned table; its value is the fired-events mask (0 if nothing
+-- fired on that socket).  Keying by the socket itself sidesteps the
+-- "which index was that again?" foot-gun the array shape had.
 --
 -- timeout_secs:
 --   0  → return immediately with whatever events are already pending
@@ -907,11 +951,6 @@ end
 --        the kernel-side timer expires with no events
 --   nil → infinite wait (AFD encodes this as Timeout.HighPart=0x7FFFFFFF
 --        and skips the timer-DPC setup entirely)
---
--- Returns: a table keyed by 1..N (matching input order) whose values
--- are the per-handle PollEvents bitmask the kernel set on completion
--- (0 if that handle had no events).  Caller filters with bit.band
--- against the AFD_POLL_* constants.
 -- ------------------------------------------------------------------
 
 local AFD_POLL_HEADER_SIZE = 16  -- Timeout(8) + NumberOfHandles(4) + Unique+pad(4)
@@ -981,12 +1020,12 @@ end
 -- ------------------------------------------------------------------
 -- query_handles — IOCTL_AFD_QUERY_HANDLES.
 --
--- Returns the underlying TDI address + connection handle integers
--- for an AFD endpoint.  AFD opens both during bind (address) and
--- connect/accept (connection); either is 0 if that step hasn't run.
--- The handles are returned as integers (intptr_t-cast) for cheap
--- comparison; callers that need real NT_HANDLE wrappers should
--- handle.borrow() the value themselves.
+-- Returns the underlying TDI address + connection NT_HANDLEs for an
+-- AFD endpoint.  AFD opens both during bind (address) and
+-- connect/accept (connection); either slot is `nil` if that step
+-- hasn't run.  The returned handles are BORROWED — AFD owns them,
+-- closing one out from under the endpoint would deeply confuse the
+-- kernel.  Use them for waits / queries only; let GC ignore them.
 -- ------------------------------------------------------------------
 
 local function query_handles(sock, flags)
@@ -1001,9 +1040,13 @@ local function query_handles(sock, flags)
           buf, 8,
           nil)
     local hptr = ffi.cast('void **', buf)
+    local function wrap(p)
+        if p == nil then return nil end
+        return handle.borrow(p)
+    end
     return {
-        address_handle    = tonumber(ffi.cast('intptr_t', hptr[0])),
-        connection_handle = tonumber(ffi.cast('intptr_t', hptr[1])),
+        address_handle    = wrap(hptr[0]),
+        connection_handle = wrap(hptr[1]),
     }
 end
 
@@ -1053,10 +1096,21 @@ local function shutdown(sock, how, timeout_secs)
 end
 
 local function poll(specs, timeout_secs)
-    local n = #specs
+    -- Flatten the table to a deterministic array so we can encode it
+    -- into the kernel buffer and later rebuild a key-by-socket result.
+    -- Lua iteration order over `specs` is unspecified but we don't
+    -- care: the kernel writes the populated entries' Handle field
+    -- back to us, which is how we re-associate input → output.
+    local socks = {}
+    local n = 0
+    for sock in pairs(specs) do
+        n = n + 1
+        socks[n] = sock
+    end
     if n == 0 then
         error("nt.net.afd.poll: specs must have >= 1 entry", 2)
     end
+
     local total = AFD_POLL_HEADER_SIZE + n * AFD_POLL_HANDLE_SIZE
     local buf = ffi.new('uint8_t[?]', total)
     local info = ffi.cast('AFD_POLL_INFO *', buf)
@@ -1084,9 +1138,8 @@ local function poll(specs, timeout_secs)
     local handles = ffi.cast('AFD_POLL_HANDLE_INFO *',
                              buf + AFD_POLL_HEADER_SIZE)
     for i = 1, n do
-        local s, evs = specs[i][1], specs[i][2]
-        handles[i-1].Handle     = ffi.cast('void *', handle.raw(s))
-        handles[i-1].PollEvents = evs
+        handles[i-1].Handle     = ffi.cast('void *', handle.raw(socks[i]))
+        handles[i-1].PollEvents = specs[socks[i]]
         handles[i-1].Status     = 0
     end
 
@@ -1096,29 +1149,30 @@ local function poll(specs, timeout_secs)
     -- indefinitely (nil) on the completion event so AfdTimeoutPoll
     -- gets to fire when the kernel-side timer expires; we don't
     -- want our own NtCancelIoFile racing the kernel timer.
-    ioctl(specs[1][1], IOCTL_AFD_POLL,
+    ioctl(socks[1], IOCTL_AFD_POLL,
           buf, total,
           buf, total,
           nil)
 
-    -- Decode results.  AFD writes the output in a COMPACTED format:
-    -- only handles whose events actually fired are in the output
-    -- array, and the IO manager only copies back the bytes the kernel
+    -- Decode.  AFD writes the output in a COMPACTED format: only
+    -- handles whose events actually fired are in the output array,
+    -- and the IO manager only copies back the bytes the kernel
     -- actually populated (POLL.C:642 — Information = pollHandleInfo -
     -- pollInfo).  So unused tail slots retain their input PollEvents
-    -- in the user buffer and CAN'T be read as output.  Build a
-    -- Handle-pointer keyed lookup over the populated prefix and
-    -- match it against the caller's input order.
+    -- in the user buffer and CAN'T be read as output.  Build a raw-
+    -- pointer keyed lookup over the populated prefix and project it
+    -- back onto the caller's socket cdata.
     local fired = tonumber(info.NumberOfHandles)
-    local map = {}
+    local fired_by_raw = {}
     for i = 0, fired - 1 do
         local key = tonumber(ffi.cast('intptr_t', handles[i].Handle))
-        map[key] = tonumber(handles[i].PollEvents)
+        fired_by_raw[key] = tonumber(handles[i].PollEvents)
     end
     local out = {}
     for i = 1, n do
-        local key = tonumber(ffi.cast('intptr_t', handle.raw(specs[i][1])))
-        out[i] = map[key] or 0
+        local sock = socks[i]
+        local raw  = tonumber(ffi.cast('intptr_t', handle.raw(sock)))
+        out[sock]  = fired_by_raw[raw] or 0
     end
     return out
 end
