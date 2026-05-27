@@ -209,6 +209,18 @@ typedef struct _AFD_POLL_HANDLE_INFO {
     long   Status;
 } AFD_POLL_HANDLE_INFO;
 
+/* AFD_PARTIAL_DISCONNECT_INFO — payload for IOCTL_AFD_PARTIAL_DISCONNECT.
+ * Same /Zp8 LARGE_INTEGER-alignment story as the others: Timeout's
+ * 8-byte alignment forces 3 bytes of pad after the BOOLEAN, putting
+ * the total size at 16. */
+typedef struct _AFD_PARTIAL_DISCONNECT_INFO {
+    unsigned long DisconnectMode;     /* offset 0 */
+    unsigned char WaitForCompletion;  /* offset 4 */
+    unsigned char Pad[3];             /* offset 5 */
+    long Timeout_Low;                 /* offset 8 */
+    long Timeout_High;                /* offset 12 */
+} AFD_PARTIAL_DISCONNECT_INFO;
+
 typedef struct _AFD_POLL_INFO {
     long  Timeout_Low;        /* offset 0 — LARGE_INTEGER.LowPart  */
     long  Timeout_High;       /* offset 4 — LARGE_INTEGER.HighPart */
@@ -261,8 +273,15 @@ local IOCTL_AFD_WAIT_FOR_LISTEN    = 0x12008
 local IOCTL_AFD_ACCEPT             = 0x1200C
 local IOCTL_AFD_GET_ADDRESS        = 0x1201A   -- METHOD_OUT_DIRECT (= 2 in low bits)
 local IOCTL_AFD_POLL               = 0x12010   -- _AFD_CONTROL_CODE(4,  METHOD_BUFFERED)
+local IOCTL_AFD_PARTIAL_DISCONNECT = 0x12014   -- _AFD_CONTROL_CODE(5,  METHOD_BUFFERED)
 local IOCTL_AFD_SET_INFORMATION    = 0x12024   -- _AFD_CONTROL_CODE(9,  METHOD_BUFFERED)
 local IOCTL_AFD_GET_INFORMATION    = 0x12064   -- _AFD_CONTROL_CODE(25, METHOD_BUFFERED)
+
+-- AFD partial-disconnect flags (NTOS/AFD/AFD.H).
+local AFD_PARTIAL_DISCONNECT_SEND    = 0x01
+local AFD_PARTIAL_DISCONNECT_RECEIVE = 0x02
+local AFD_ABORTIVE_DISCONNECT        = 0x04
+local AFD_UNCONNECT_DATAGRAM         = 0x08
 
 -- AFD_POLL_* event bits (NTOS/AFD/AFD.H).
 local AFD_POLL_RECEIVE           = 0x0001
@@ -887,6 +906,51 @@ end
 local AFD_POLL_HEADER_SIZE = 16  -- Timeout(8) + NumberOfHandles(4) + Unique+pad(4)
 local AFD_POLL_HANDLE_SIZE = 12  -- Handle(4) + PollEvents(4) + Status(4)
 
+-- ------------------------------------------------------------------
+-- shutdown — IOCTL_AFD_PARTIAL_DISCONNECT.
+--
+-- BSD shutdown(2) maps cleanly onto AFD's PartialDisconnect flag bits:
+--
+--   "send"     — half-close the send side; AFD sends FIN.  On TCP this
+--                routes through AfdBeginDisconnect (already exercised
+--                by normal close, but the path with no pending data
+--                hits the FAST branch).
+--   "receive"  — half-close the receive side.  On TCP with no pending
+--                unread data this just updates flags; with pending
+--                data it falls through to AfdBeginAbort.
+--   "both"     — SEND | RECEIVE; same fast paths as above.
+--   "abort"    — disorderly close (RST).  TCP path runs AfdBeginAbort
+--                + AfdRestartAbort.  UDP just sets the abortive flag.
+--
+-- The kernel never blocks on this IOCTL (WaitForCompletion is unused
+-- in AFD 3.5 — see DISCONN.C; the field is accepted but ignored).
+-- ------------------------------------------------------------------
+
+local SHUTDOWN_MODE = {
+    send    = AFD_PARTIAL_DISCONNECT_SEND,
+    receive = AFD_PARTIAL_DISCONNECT_RECEIVE,
+    both    = bit.bor(AFD_PARTIAL_DISCONNECT_SEND,
+                      AFD_PARTIAL_DISCONNECT_RECEIVE),
+    abort   = AFD_ABORTIVE_DISCONNECT,
+}
+
+local function shutdown(sock, how, timeout_secs)
+    local mode = SHUTDOWN_MODE[how]
+    if mode == nil then
+        error("nt.net.afd.shutdown: how must be 'send', 'receive', " ..
+              "'both', or 'abort', got " .. tostring(how), 2)
+    end
+    local info = ffi.new('AFD_PARTIAL_DISCONNECT_INFO')
+    info.DisconnectMode    = mode
+    info.WaitForCompletion = 0
+    info.Timeout_Low       = 0
+    info.Timeout_High      = 0
+    ioctl(sock, IOCTL_AFD_PARTIAL_DISCONNECT,
+          info, ffi.sizeof('AFD_PARTIAL_DISCONNECT_INFO'),
+          nil, 0,
+          timeout_secs)
+end
+
 local function poll(specs, timeout_secs)
     local n = #specs
     if n == 0 then
@@ -977,6 +1041,7 @@ return {
     get_info    = get_info,
     set_info    = set_info,
     poll        = poll,
+    shutdown    = shutdown,
     -- AFD_POLL_* event bits — pass as the second element of each
     -- poll spec and bit.band against poll's return values.
     POLL_RECEIVE            = AFD_POLL_RECEIVE,
