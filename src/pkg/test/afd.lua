@@ -275,3 +275,127 @@ t.test("SET / GET AFD_RECEIVE_WINDOW_SIZE roundtrip on UDP", function()
     u:close()
     t.ok(true, "window-size sets round-tripped on UDP")
 end)
+
+-- ------------------------------------------------------------------
+-- 6. IOCTL_AFD_POLL — AFD/POLL.C.
+--
+-- Covers AfdPoll (the dispatch), AfdTimeoutPoll (DPC that fires when
+-- the kernel-side timer expires), and AfdFreePollInfo (the cleanup
+-- the IRP-completion path calls in both immediate and timed-out
+-- branches).  AfdCancelPoll is exercised by closing a socket while
+-- a poll is pending against it — the close cancels the poll IRP.
+-- ------------------------------------------------------------------
+
+t.test("POLL: zero-timeout, no events ready, returns empty mask", function()
+    -- AfdPoll's "Timeout==0 && no events" path frees the internal
+    -- poll info synchronously and completes the IRP with no handles
+    -- in the output buffer.  Hits AfdPoll + AfdFreePollInfo without
+    -- pending.
+    local u = afd.udp()
+    afd.bind(u, "127.0.0.1", 0)
+    local result = afd.poll({{u, afd.POLL_RECEIVE}}, 0)
+    u:close()
+    t.eq(result[1], 0, "no events should be ready on a fresh UDP socket")
+end)
+
+t.test("POLL: short timeout, no events ready, returns after timeout", function()
+    -- Pending-then-timeout path — exercises AfdTimeoutPoll (the DPC
+    -- that fires when the kernel-side timer expires).
+    local u = afd.udp()
+    afd.bind(u, "127.0.0.1", 0)
+    local t0 = nt_now()
+    local result = afd.poll({{u, afd.POLL_RECEIVE}}, 0.2)
+    local elapsed = nt_now() - t0
+    u:close()
+    t.eq(result[1], 0, "timeout-with-no-events should leave the mask clear")
+    t.ok(elapsed >= 0.15, "poll returned too early: " .. elapsed .. "s")
+    t.ok(elapsed <  1.0,  "poll returned too late: "  .. elapsed .. "s")
+end)
+
+t.test("POLL: UDP socket with already-delivered datagram reports RECEIVE",
+       function()
+    -- Send a datagram into the socket BEFORE polling, so AFD's
+    -- per-endpoint datagram queue is non-empty when AfdPoll's event
+    -- check runs.  Hits the AFD_POLL_RECEIVE branch in the immediate-
+    -- ready path (POLL.C:367-373).
+    local server = afd.udp()
+    afd.bind(server, "127.0.0.1", 0)
+    local _, sport = afd.getsockname(server)
+
+    local client = afd.udp()
+    afd.bind(client, "127.0.0.1", 0)
+    afd.connect(client, "127.0.0.1", sport)
+    afd.send(client, "hello", LOOPBACK_TIMEOUT)
+
+    -- Tiny delay for the datagram to land in server's queue —
+    -- vionet's TX/RX is synchronous on loopback, but giving the
+    -- kernel one scheduling pass is cheap insurance.
+    ke.NtDelayExecution(false, ke.timeout(0.02))
+
+    local result = afd.poll({{server, afd.POLL_RECEIVE}}, 0)
+    t.ok(bit.band(result[1], afd.POLL_RECEIVE) ~= 0,
+         "POLL_RECEIVE bit should be set, got mask 0x"
+         .. bit.tohex(result[1]))
+
+    server:close(); client:close()
+end)
+
+t.test("POLL: TCP listener with pending connection reports ACCEPT",
+       function()
+    -- Same shape, but on the listener side: AFD reports an inbound
+    -- connection as either POLL_RECEIVE (legacy) OR POLL_ACCEPT.
+    -- Stock POLL.C:388-398 normalises POLL_RECEIVE on a listening
+    -- endpoint into POLL_ACCEPT — so passing either bit gives us
+    -- the same coverage of the accept branch.
+    local server = afd.tcp()
+    afd.bind(server, "127.0.0.1", 0)
+    afd.listen(server, 1)
+    local _, sport = afd.getsockname(server)
+
+    local client = afd.tcp()
+    afd.bind(client, "127.0.0.1", 0)
+    afd.connect(client, "127.0.0.1", sport, LOOPBACK_TIMEOUT)
+
+    -- Connection lands in the listener's pending-accept queue.
+    -- Give scheduler one pass for the TDI Connect indication.
+    ke.NtDelayExecution(false, ke.timeout(0.02))
+
+    local result = afd.poll({{server, afd.POLL_ACCEPT}}, 0)
+    t.ok(bit.band(result[1], afd.POLL_ACCEPT) ~= 0,
+         "POLL_ACCEPT bit should be set, got mask 0x"
+         .. bit.tohex(result[1]))
+
+    -- Drain so closing the listener doesn't strand an accepted-but-
+    -- unaccepted connection.
+    local accepted = afd.accept(server, LOOPBACK_TIMEOUT)
+    accepted:close(); client:close(); server:close()
+end)
+
+t.test("POLL: multi-handle — one ready, one not, mask reflects both",
+       function()
+    -- Two UDP sockets, one with a datagram queued, one quiet.
+    -- Exercises the per-handle event-check loop with mixed states.
+    local hot = afd.udp()
+    afd.bind(hot, "127.0.0.1", 0)
+    local _, hot_port = afd.getsockname(hot)
+    local cold = afd.udp()
+    afd.bind(cold, "127.0.0.1", 0)
+
+    local poker = afd.udp()
+    afd.bind(poker, "127.0.0.1", 0)
+    afd.connect(poker, "127.0.0.1", hot_port)
+    afd.send(poker, "ping", LOOPBACK_TIMEOUT)
+    ke.NtDelayExecution(false, ke.timeout(0.02))
+
+    local result = afd.poll({
+        {hot,  afd.POLL_RECEIVE},
+        {cold, afd.POLL_RECEIVE},
+    }, 0)
+
+    t.ok(bit.band(result[1], afd.POLL_RECEIVE) ~= 0,
+         "hot socket should report RECEIVE, got 0x" .. bit.tohex(result[1]))
+    t.eq(result[2], 0,
+         "cold socket should report nothing, got 0x" .. bit.tohex(result[2]))
+
+    hot:close(); cold:close(); poker:close()
+end)

@@ -197,6 +197,27 @@ typedef struct _AFD_INFORMATION {
     unsigned long Information_HighPart;  /* offset 12 — union high dword */
 } AFD_INFORMATION;
 
+/* AFD_POLL_INFO + AFD_POLL_HANDLE_INFO — payload for IOCTL_AFD_POLL.
+ * Same /Zp8 alignment story as AFD_INFORMATION: LARGE_INTEGER pulls
+ * its own 8-byte alignment, and the BOOLEAN+ULONG that follow pad
+ * out to put Handles[] on a 4-byte boundary at offset 16.  The
+ * Handles[] array is variable-length; we manage it as a raw byte
+ * buffer in the wrapper. */
+typedef struct _AFD_POLL_HANDLE_INFO {
+    void  *Handle;
+    unsigned long PollEvents;
+    long   Status;
+} AFD_POLL_HANDLE_INFO;
+
+typedef struct _AFD_POLL_INFO {
+    long  Timeout_Low;        /* offset 0 — LARGE_INTEGER.LowPart  */
+    long  Timeout_High;       /* offset 4 — LARGE_INTEGER.HighPart */
+    unsigned long NumberOfHandles; /* offset 8 */
+    unsigned char Unique;     /* offset 12 */
+    unsigned char Pad[3];     /* offset 13 — align Handles[] to 4  */
+    AFD_POLL_HANDLE_INFO Handles[1]; /* offset 16 */
+} AFD_POLL_INFO;
+
 typedef struct _AFD_CONNECT_BUFFER {
     /* TDI_REQUEST_CONNECT header. */
     TDI_REQUEST                Request;
@@ -239,8 +260,20 @@ local IOCTL_AFD_START_LISTEN       = 0x12004
 local IOCTL_AFD_WAIT_FOR_LISTEN    = 0x12008
 local IOCTL_AFD_ACCEPT             = 0x1200C
 local IOCTL_AFD_GET_ADDRESS        = 0x1201A   -- METHOD_OUT_DIRECT (= 2 in low bits)
+local IOCTL_AFD_POLL               = 0x12010   -- _AFD_CONTROL_CODE(4,  METHOD_BUFFERED)
 local IOCTL_AFD_SET_INFORMATION    = 0x12024   -- _AFD_CONTROL_CODE(9,  METHOD_BUFFERED)
 local IOCTL_AFD_GET_INFORMATION    = 0x12064   -- _AFD_CONTROL_CODE(25, METHOD_BUFFERED)
+
+-- AFD_POLL_* event bits (NTOS/AFD/AFD.H).
+local AFD_POLL_RECEIVE           = 0x0001
+local AFD_POLL_RECEIVE_EXPEDITED = 0x0002
+local AFD_POLL_SEND              = 0x0004
+local AFD_POLL_DISCONNECT        = 0x0008
+local AFD_POLL_ABORT             = 0x0010
+local AFD_POLL_LOCAL_CLOSE       = 0x0020
+local AFD_POLL_CONNECT           = 0x0040
+local AFD_POLL_ACCEPT            = 0x0080
+local AFD_POLL_CONNECT_FAIL      = 0x0100
 
 -- AFD_INFORMATION.InformationType values.  Boolean classes read/write
 -- the low byte of Ulong; range classes use the whole Ulong.
@@ -832,6 +865,100 @@ local function set_info(sock, info_class, value, timeout_secs)
 end
 
 -- ------------------------------------------------------------------
+-- poll — IOCTL_AFD_POLL.
+--
+--   afd.poll({ {sock1, ev_mask1}, {sock2, ev_mask2}, ... }, timeout_secs)
+--
+-- timeout_secs:
+--   0  → return immediately with whatever events are already pending
+--        (hits AfdPoll's no-events / zero-timeout immediate-complete
+--        path, which feeds AfdFreePollInfo)
+--   >0 → pend up to this many seconds; AfdTimeoutPoll fires when
+--        the kernel-side timer expires with no events
+--   nil → infinite wait (AFD encodes this as Timeout.HighPart=0x7FFFFFFF
+--        and skips the timer-DPC setup entirely)
+--
+-- Returns: a table keyed by 1..N (matching input order) whose values
+-- are the per-handle PollEvents bitmask the kernel set on completion
+-- (0 if that handle had no events).  Caller filters with bit.band
+-- against the AFD_POLL_* constants.
+-- ------------------------------------------------------------------
+
+local AFD_POLL_HEADER_SIZE = 16  -- Timeout(8) + NumberOfHandles(4) + Unique+pad(4)
+local AFD_POLL_HANDLE_SIZE = 12  -- Handle(4) + PollEvents(4) + Status(4)
+
+local function poll(specs, timeout_secs)
+    local n = #specs
+    if n == 0 then
+        error("nt.net.afd.poll: specs must have >= 1 entry", 2)
+    end
+    local total = AFD_POLL_HEADER_SIZE + n * AFD_POLL_HANDLE_SIZE
+    local buf = ffi.new('uint8_t[?]', total)
+    local info = ffi.cast('AFD_POLL_INFO *', buf)
+
+    -- Encode Timeout.  Relative-time NT convention: negative QuadPart
+    -- in 100ns ticks.  Infinity (no kernel timer) is encoded as
+    -- HighPart == 0x7FFFFFFF — see POLL.C:602.
+    if timeout_secs == nil then
+        info.Timeout_Low  = 0
+        info.Timeout_High = 0x7FFFFFFF
+    elseif timeout_secs == 0 then
+        info.Timeout_Low  = 0
+        info.Timeout_High = 0
+    else
+        -- For all practical waits (< ~213s) the tick count fits in
+        -- a signed 32-bit; LuaJIT narrows the Lua-number assignment
+        -- to int32, preserving the two's-complement bit pattern.
+        info.Timeout_Low  = -math.floor(timeout_secs * 1e7)
+        info.Timeout_High = -1
+    end
+
+    info.NumberOfHandles = n
+    info.Unique          = 0
+
+    local handles = ffi.cast('AFD_POLL_HANDLE_INFO *',
+                             buf + AFD_POLL_HEADER_SIZE)
+    for i = 1, n do
+        local s, evs = specs[i][1], specs[i][2]
+        handles[i-1].Handle     = ffi.cast('void *', handle.raw(s))
+        handles[i-1].PollEvents = evs
+        handles[i-1].Status     = 0
+    end
+
+    -- The IOCTL is dispatched via the first socket; the kernel
+    -- references each Handle by ObReferenceObjectByHandle internally,
+    -- so any AFD endpoint will route correctly.  io_wait waits
+    -- indefinitely (nil) on the completion event so AfdTimeoutPoll
+    -- gets to fire when the kernel-side timer expires; we don't
+    -- want our own NtCancelIoFile racing the kernel timer.
+    ioctl(specs[1][1], IOCTL_AFD_POLL,
+          buf, total,
+          buf, total,
+          nil)
+
+    -- Decode results.  AFD writes the output in a COMPACTED format:
+    -- only handles whose events actually fired are in the output
+    -- array, and the IO manager only copies back the bytes the kernel
+    -- actually populated (POLL.C:642 — Information = pollHandleInfo -
+    -- pollInfo).  So unused tail slots retain their input PollEvents
+    -- in the user buffer and CAN'T be read as output.  Build a
+    -- Handle-pointer keyed lookup over the populated prefix and
+    -- match it against the caller's input order.
+    local fired = tonumber(info.NumberOfHandles)
+    local map = {}
+    for i = 0, fired - 1 do
+        local key = tonumber(ffi.cast('intptr_t', handles[i].Handle))
+        map[key] = tonumber(handles[i].PollEvents)
+    end
+    local out = {}
+    for i = 1, n do
+        local key = tonumber(ffi.cast('intptr_t', handle.raw(specs[i][1])))
+        out[i] = map[key] or 0
+    end
+    return out
+end
+
+-- ------------------------------------------------------------------
 -- Public surface.
 -- ------------------------------------------------------------------
 return {
@@ -849,6 +976,18 @@ return {
     getsockname = getsockname,
     get_info    = get_info,
     set_info    = set_info,
+    poll        = poll,
+    -- AFD_POLL_* event bits — pass as the second element of each
+    -- poll spec and bit.band against poll's return values.
+    POLL_RECEIVE            = AFD_POLL_RECEIVE,
+    POLL_RECEIVE_EXPEDITED  = AFD_POLL_RECEIVE_EXPEDITED,
+    POLL_SEND               = AFD_POLL_SEND,
+    POLL_DISCONNECT         = AFD_POLL_DISCONNECT,
+    POLL_ABORT              = AFD_POLL_ABORT,
+    POLL_LOCAL_CLOSE        = AFD_POLL_LOCAL_CLOSE,
+    POLL_CONNECT            = AFD_POLL_CONNECT,
+    POLL_ACCEPT             = AFD_POLL_ACCEPT,
+    POLL_CONNECT_FAIL       = AFD_POLL_CONNECT_FAIL,
     -- AFD information classes — pass as info_class to get_info / set_info.
     INLINE_MODE         = AFD_INLINE_MODE,
     NONBLOCKING_MODE    = AFD_NONBLOCKING_MODE,
