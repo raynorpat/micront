@@ -309,29 +309,6 @@ Return Value:
     }
 
     //
-    // Determine whether the TDI provider supports data bufferring.
-    // If the provider doesn't, then we have to do it.
-    //
-
-    if ( (endpoint->TransportInfo->ProviderInfo.ServiceFlags &
-             TDI_SERVICE_INTERNAL_BUFFERING) != 0 ) {
-        endpoint->TdiBufferring = TRUE;
-    } else {
-        endpoint->TdiBufferring = FALSE;
-    }
-
-    //
-    // Determine whether the TDI provider is message or stream oriented.
-    //
-
-    if ( (endpoint->TransportInfo->ProviderInfo.ServiceFlags &
-             TDI_SERVICE_MESSAGE_MODE) != 0 ) {
-        endpoint->TdiMessageMode = TRUE;
-    } else {
-        endpoint->TdiMessageMode = FALSE;
-    }
-
-    //
     // Remember that the endpoint has been bound to a transport address.
     //
 
@@ -382,46 +359,17 @@ Return Value:
         }
 #endif
 
-        if ( endpoint->TdiBufferring ) {
-    
-            status = AfdSetEventHandler(
-                         endpoint->AddressHandle,
-                         TDI_EVENT_RECEIVE,
-                         AfdReceiveEventHandler,
-                         endpoint
-                         );
+        status = AfdSetEventHandler(
+                     endpoint->AddressHandle,
+                     TDI_EVENT_RECEIVE,
+                     AfdBReceiveEventHandler,
+                     endpoint
+                     );
 #if DBG
-            if ( !NT_SUCCESS(status) ) {
-                DbgPrint( "AFD: Setting TDI_EVENT_RECEIVE failed: %lx\n", status );
-            }
-#endif
-        
-            status = AfdSetEventHandler(
-                         endpoint->AddressHandle,
-                         TDI_EVENT_SEND_POSSIBLE,
-                         AfdSendPossibleEventHandler,
-                         endpoint
-                         );
-#if DBG
-            if ( !NT_SUCCESS(status) ) {
-                DbgPrint( "AFD: Setting TDI_EVENT_SEND_POSSIBLE failed: %lx\n", status );
-            }
-#endif
-
-        } else {
-
-            status = AfdSetEventHandler(
-                         endpoint->AddressHandle,
-                         TDI_EVENT_RECEIVE,
-                         AfdBReceiveEventHandler,
-                         endpoint
-                         );
-#if DBG
-            if ( !NT_SUCCESS(status) ) {
-                DbgPrint( "AFD: Setting TDI_EVENT_RECEIVE failed: %lx\n", status );
-            }
-#endif
+        if ( !NT_SUCCESS(status) ) {
+            DbgPrint( "AFD: Setting TDI_EVENT_RECEIVE failed: %lx\n", status );
         }
+#endif
     }
 
     KeDetachProcess( );

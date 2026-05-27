@@ -625,7 +625,7 @@ Return Value:
         // return the count of sends pended in AFD.
         //
 
-        if ( endpoint->TdiBufferring || endpoint->Type != AfdBlockTypeVcConnecting ) {
+        if ( endpoint->Type != AfdBlockTypeVcConnecting ) {
             afdInfo->Information.Ulong = 0;
         } else {
             afdInfo->Information.Ulong =

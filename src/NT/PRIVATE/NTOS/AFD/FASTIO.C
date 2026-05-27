@@ -326,15 +326,6 @@ AfdFastIoDeviceControl (
     ASSERT( endpoint->Type == AfdBlockTypeVcConnecting );
     ASSERT( endpoint->Common.VcConnecting.Connection != NULL );
 
-    //
-    // If the TDI provider for this endpoint supports bufferring,
-    // don't use fast IO.
-    //
-
-    if ( endpoint->TdiBufferring ) {
-        return FALSE;
-    }
-
     connection = endpoint->Common.VcConnecting.Connection;
     ASSERT( connection->Type == AfdBlockTypeConnection );
 

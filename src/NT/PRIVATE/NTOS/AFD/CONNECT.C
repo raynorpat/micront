@@ -193,7 +193,6 @@ Return Value:
     status = AfdCreateConnection(
                  &endpoint->TransportInfo->TransportDeviceName,
                  endpoint->AddressHandle,
-                 endpoint->TdiBufferring,
                  endpoint->OwningProcess,
                  &connection
                  );
@@ -211,7 +210,6 @@ Return Value:
     endpoint->Type = AfdBlockTypeVcConnecting;
     endpoint->Common.VcConnecting.Connection = connection;
 
-    ASSERT( endpoint->TdiBufferring == connection->TdiBufferring );
 
     //
     // Set up a referenced pointer from the connection to the endpoint.

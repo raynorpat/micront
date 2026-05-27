@@ -78,7 +78,6 @@ Return Value:
     status = AfdCreateConnection(
                  &Endpoint->TransportInfo->TransportDeviceName,
                  Endpoint->AddressHandle,
-                 Endpoint->TdiBufferring,
                  Endpoint->OwningProcess,
                  &connection
                  );
@@ -87,7 +86,6 @@ Return Value:
         return status;
     }
 
-    ASSERT( Endpoint->TdiBufferring == connection->TdiBufferring );
 
     //
     // Set up the handle in the listening connection structure and place
@@ -190,7 +188,6 @@ NTSTATUS
 AfdCreateConnection (
     IN PUNICODE_STRING TransportDeviceName,
     IN HANDLE AddressHandle,
-    IN BOOLEAN TdiBufferring,
     IN PEPROCESS ProcessToCharge,
     OUT PAFD_CONNECTION *Connection
     )
@@ -210,10 +207,6 @@ Arguments:
     AddressHandle - a handle to an address object for the specified
         transport.  If specified (non NULL), the connection object that
         is created is associated with the address object.
-
-    TdiBufferring - whether the TDI provider supports data bufferring.
-        Only passed so that it can be stored in the connection
-        structure.
 
     ProcessToCharge - the process which should be charged the quota
         for this connection.
@@ -288,28 +281,18 @@ Return Value:
     // the connection object.
     //
 
-    connection->TdiBufferring = TdiBufferring;
+    InitializeListHead( &connection->VcReceiveIrpListHead );
+    InitializeListHead( &connection->VcSendIrpListHead );
+    InitializeListHead( &connection->VcReceiveBufferListHead );
 
-    if ( !TdiBufferring ) {
+    connection->VcBufferredReceiveBytes = 0;
+    connection->VcBufferredReceiveCount = 0;
 
-        InitializeListHead( &connection->VcReceiveIrpListHead );
-        InitializeListHead( &connection->VcSendIrpListHead );
-        InitializeListHead( &connection->VcReceiveBufferListHead );
+    connection->VcReceiveBytesInTransport = 0;
+    connection->VcReceiveCountInTransport = 0;
 
-        connection->VcBufferredReceiveBytes = 0;
-        connection->VcBufferredReceiveCount = 0;
-
-        connection->VcReceiveBytesInTransport = 0;
-        connection->VcReceiveCountInTransport = 0;
-
-        connection->VcBufferredSendBytes = 0;
-        connection->VcBufferredSendCount = 0;
-
-    } else {
-
-        connection->VcNonBlockingSendPossible = TRUE;
-        connection->VcZeroByteReceiveIndicated = FALSE;
-    }
+    connection->VcBufferredSendBytes = 0;
+    connection->VcBufferredSendCount = 0;
 
     //
     // Set up the send and receive window with default maximums.
@@ -480,7 +463,7 @@ AfdFreeConnection (
         connection->Handle = NULL;
     }
 
-    if ( !connection->TdiBufferring && connection->VcDisconnectIrp != NULL ) {
+    if ( connection->VcDisconnectIrp != NULL ) {
         IoFreeIrp( connection->VcDisconnectIrp );
     }
 
@@ -503,7 +486,7 @@ AfdFreeConnection (
     // from the connection's lists and free them.
     //
 
-    if ( !connection->TdiBufferring ) {
+    {
 
         PAFD_BUFFER afdBuffer;
         PLIST_ENTRY listEntry;
@@ -949,8 +932,7 @@ Return Value:
         //    orderly release, then this condition is not necessary.
         //
 
-        if ( (Connection->TdiBufferring ||
-                 Connection->VcBufferredSendCount == 0)
+        if ( (Connection->VcBufferredSendCount == 0)
 
                  &&
 
@@ -1001,8 +983,7 @@ Return Value:
 
                 slot->Action = 0;
 
-                if ( !Connection->TdiBufferring &&
-                         Connection->VcBufferredSendCount != 0 ) {
+                if ( Connection->VcBufferredSendCount != 0 ) {
                     slot->Action |= 0xA0000000;
                 }
 

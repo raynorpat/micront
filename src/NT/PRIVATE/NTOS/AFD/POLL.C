@@ -415,16 +415,10 @@ AfdPoll (
 
                      ||
 
-                     ( endpoint->TdiBufferring &&
-                           connection->VcNonBlockingSendPossible )
-
-                     ||
-
-                     ( !endpoint->TdiBufferring &&
-                           connection->VcBufferredSendBytes <
-                               connection->MaxBufferredSendBytes &&
-                           connection->VcBufferredSendCount <
-                               connection->MaxBufferredSendCount )
+                     ( connection->VcBufferredSendBytes <
+                           connection->MaxBufferredSendBytes &&
+                       connection->VcBufferredSendCount <
+                           connection->MaxBufferredSendCount )
 
                      ||
 

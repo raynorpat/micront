@@ -95,17 +95,7 @@ typedef struct _AFD_CONNECTION {
     PTRANSPORT_ADDRESS RemoteAddress;
     ULONG RemoteAddressLength;
 
-    union {
-
-        struct {
-            LARGE_INTEGER ReceiveBytesIndicated;
-            LARGE_INTEGER ReceiveBytesTaken;
-            LARGE_INTEGER ReceiveBytesOutstanding;
-
-            BOOLEAN NonBlockingSendPossible;
-            BOOLEAN ZeroByteReceiveIndicated;
-        } Bufferring;
-
+    struct {
         struct {
             LIST_ENTRY ReceiveIrpListHead;
             LIST_ENTRY ReceiveBufferListHead;
@@ -121,7 +111,6 @@ typedef struct _AFD_CONNECTION {
 
             PIRP DisconnectIrp;
         } NonBufferring;
-
     } Common;
 
     struct _AFD_ENDPOINT *Endpoint;
@@ -134,7 +123,6 @@ typedef struct _AFD_CONNECTION {
     PAFD_CONNECT_DATA_BUFFERS ConnectDataBuffers;
     BOOLEAN DisconnectIndicated;
     BOOLEAN AbortIndicated;
-    BOOLEAN TdiBufferring;
     BOOLEAN ConnectedReferenceAdded;
     BOOLEAN SpecialCondition;
     BOOLEAN CleanupBegun;
@@ -149,9 +137,6 @@ typedef struct _AFD_CONNECTION {
 //
 // Some macros that make code more readable.
 //
-
-#define VcNonBlockingSendPossible Common.Bufferring.NonBlockingSendPossible
-#define VcZeroByteReceiveIndicated Common.Bufferring.ZeroByteReceiveIndicated
 
 #define VcReceiveIrpListHead Common.NonBufferring.ReceiveIrpListHead
 #define VcReceiveBufferListHead Common.NonBufferring.ReceiveBufferListHead
@@ -198,7 +183,6 @@ typedef struct _AFD_ENDPOINT {
     UCHAR State;
 
     BOOLEAN NonBlocking;
-    BOOLEAN TdiBufferring;
 
     LIST_ENTRY GlobalEndpointListEntry;
     PAFD_TRANSPORT_INFO TransportInfo;
@@ -274,7 +258,6 @@ typedef struct _AFD_ENDPOINT {
     BOOLEAN ConnectOutstanding;
     BOOLEAN SendDisconnected;
     BOOLEAN ReceiveDisconnected;
-    BOOLEAN TdiMessageMode;
 
 #if REFERENCE_DEBUG
     PAFD_REFERENCE_DEBUG ReferenceDebug;

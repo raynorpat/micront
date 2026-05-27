@@ -166,7 +166,6 @@ AfdAccept (
     //
 
     acceptEndpoint->Type = AfdBlockTypeVcConnecting;
-    acceptEndpoint->TdiBufferring = endpoint->TdiBufferring;
 
     //
     // Place the connection on the endpoint we'll accept it on.  It is

@@ -543,7 +543,6 @@ Return Value:
             endpoint->Type == AfdBlockTypeVcListening );
     ASSERT( !connection->DisconnectIndicated );
 
-    ASSERT( !endpoint->TdiBufferring );
     ASSERT( endpoint->EndpointType == AfdEndpointTypeStream ||
             endpoint->EndpointType == AfdEndpointTypeSequencedPacket ||
             endpoint->EndpointType == AfdEndpointTypeReliableMessage );
@@ -631,8 +630,7 @@ Return Value:
         if ( irpSp->Parameters.DeviceIoControl.OutputBufferLength >=
                  BytesAvailable &&
              irpSp->Parameters.DeviceIoControl.InputBufferLength == 0 &&
-             (ULONG)irpSp->Parameters.DeviceIoControl.Type3InputBuffer == 0 &&
-             !endpoint->TdiMessageMode ) {
+             (ULONG)irpSp->Parameters.DeviceIoControl.Type3InputBuffer == 0 ) {
     
             //
             // If all of the data was indicated to us here AND this is a 
@@ -898,7 +896,7 @@ Return Value:
 
         userIrp = FALSE;
 
-        if ( AfdLargeBufferSize >= BytesAvailable && !endpoint->TdiMessageMode ) {
+        if ( AfdLargeBufferSize >= BytesAvailable ) {
             requiredAfdBufferSize = AfdLargeBufferSize;
             receiveLength = AfdLargeBufferSize;
         } else {
@@ -1053,7 +1051,6 @@ Return Value:
     ASSERT( endpoint->Type == AfdBlockTypeVcConnecting ||
             endpoint->Type == AfdBlockTypeVcListening );
 
-    ASSERT( !endpoint->TdiBufferring );
     ASSERT( endpoint->EndpointType == AfdEndpointTypeStream ||
             endpoint->EndpointType == AfdEndpointTypeSequencedPacket ||
             endpoint->EndpointType == AfdEndpointTypeReliableMessage );

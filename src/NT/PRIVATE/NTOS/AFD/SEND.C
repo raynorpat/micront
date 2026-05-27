@@ -28,13 +28,6 @@ AfdCancelSend (
     );
 
 NTSTATUS
-AfdRestartSend (
-    IN PDEVICE_OBJECT DeviceObject,
-    IN PIRP Irp,
-    IN PVOID Context
-    );
-
-NTSTATUS
 AfdRestartSendConnDatagram (
     IN PDEVICE_OBJECT DeviceObject,
     IN PIRP Irp,
@@ -57,11 +50,9 @@ typedef struct _AFD_SEND_CONN_DATAGRAM_CONTEXT {
 #pragma alloc_text( PAGEAFD, AfdSend )
 #pragma alloc_text( PAGEAFD, AfdSendDatagram )
 #pragma alloc_text( PAGEAFD, AfdCancelSend )
-#pragma alloc_text( PAGEAFD, AfdRestartSend )
 #pragma alloc_text( PAGEAFD, AfdRestartBufferSend )
 #pragma alloc_text( PAGEAFD, AfdRestartSendConnDatagram )
 #pragma alloc_text( PAGEAFD, AfdRestartSendDatagram )
-#pragma alloc_text( PAGEAFD, AfdSendPossibleEventHandler )
 #endif
 
 
@@ -75,7 +66,6 @@ AfdSend (
     PAFD_ENDPOINT endpoint;
     ULONG sendLength;
     PAFD_CONNECTION connection;
-    BOOLEAN doSendBufferring;
     PAFD_BUFFER afdBuffer;
     ULONG sendFlags;
     BOOLEAN pendedIrp = FALSE;
@@ -131,29 +121,6 @@ AfdSend (
     //
 
     sendLength = IrpSp->Parameters.DeviceIoControl.OutputBufferLength;
-
-    //
-    // Buffer sends if the TDI provider does not buffer.
-    //
-
-    if ( endpoint->TdiBufferring ) {
-
-        doSendBufferring = FALSE;
-
-        //
-        // If this is a nonblocking endpoint, set the TDI nonblocking 
-        // send flag so that the request will fail if the send cannot be 
-        // performed immediately.  
-        //
-
-        if ( endpoint->NonBlocking ) {
-            sendFlags |= TDI_SEND_NON_BLOCKING;
-        }
-
-    } else {
-
-        doSendBufferring = TRUE;
-    }
 
     //
     // If this is a datagram endpoint, format up a send datagram request
@@ -233,14 +200,11 @@ AfdSend (
     // If we need to buffer the send, do so.
     //
 
-    if ( doSendBufferring && connection->MaxBufferredSendCount != 0 ) {
+    if ( connection->MaxBufferredSendCount != 0 ) {
 
         KIRQL cancelIrql;
         KIRQL oldIrql;
         ULONG bytesCopied;
-
-        ASSERT( !endpoint->TdiBufferring );
-        ASSERT( !connection->TdiBufferring );
 
         //
         // First make sure that we don't have too many bytes of send 
@@ -474,35 +438,6 @@ AfdSend (
 
         goto complete;
 
-    } else {
-
-        //
-        // Build the TDI send request.
-        //
-    
-        connection = AFD_CONNECTION_FROM_ENDPOINT( endpoint );
-        ASSERT( connection != NULL );
-    
-        TdiBuildSend(
-            Irp,
-            connection->FileObject->DeviceObject,
-            connection->FileObject,
-            AfdRestartSend,
-            endpoint,
-            Irp->MdlAddress,
-            sendFlags,
-            sendLength
-            );
-    
-        //
-        // Call the transport to actually perform the send.
-        //
-    
-        return AfdIoCallDriver(
-                   endpoint,
-                   connection->FileObject->DeviceObject,
-                   Irp
-                   );
     }
 
 complete:
@@ -515,81 +450,6 @@ complete:
 
 } // AfdSend
 
-
-NTSTATUS
-AfdRestartSend (
-    IN PDEVICE_OBJECT DeviceObject,
-    IN PIRP Irp,
-    IN PVOID Context
-    )
-{
-    PIO_STACK_LOCATION irpSp;
-    PAFD_ENDPOINT endpoint = Context;
-    PAFD_CONNECTION connection;
-
-    ASSERT( endpoint != NULL );
-    ASSERT( endpoint->Type == AfdBlockTypeVcConnecting );
-    ASSERT( endpoint->TdiBufferring );
-
-    connection = endpoint->Common.VcConnecting.Connection;
-    ASSERT( connection != NULL );
-    ASSERT( connection->Type == AfdBlockTypeConnection );
-
-    IF_DEBUG(SEND) {
-        KdPrint(( "AfdRestartSend: send completed for IRP %lx, endpoint %lx, "
-                  "status = %X\n",
-                      Irp, Context, Irp->IoStatus.Status ));
-    }
-
-    //
-    // If the request failed indicating that the send would have blocked,
-    // and the client issues a nonblocking send, remember that nonblocking
-    // sends won't work until we get a send possible indication.  This
-    // is required for write polls to work correctly.
-    //
-    // If the status code is STATUS_REQUEST_NOT_ACCEPTED, then the
-    // transport does not want us to update our internal variable that
-    // remembers that nonblocking sends are possible.  The transport
-    // will tell us when sends are or are not possible.
-    //
-    // !!! should we also say that nonblocking sends are not possible if
-    //     a send is completed with fewer bytes than were requested?
-
-    if ( Irp->IoStatus.Status == STATUS_DEVICE_NOT_READY ) {
-        connection->VcNonBlockingSendPossible = FALSE;
-    }
-
-    //
-    // If this is a send IRP on a nonblocking endpoint and fewer bytes 
-    // were actually sent than were requested to be sent, return a 
-    // distinguished error code.  
-    //
-
-    irpSp = IoGetCurrentIrpStackLocation( Irp );
-
-    if ( irpSp->MajorFunction != IRP_MJ_WRITE ) {
-
-        if ( !endpoint->NonBlocking && NT_SUCCESS(Irp->IoStatus.Status) &&
-                 Irp->IoStatus.Information <
-                     irpSp->Parameters.DeviceIoControl.OutputBufferLength ) {
-            Irp->IoStatus.Status = STATUS_SERIAL_MORE_WRITES;
-        }
-    }
-
-    AfdCompleteOutstandingIrp( endpoint, Irp );
-
-    //
-    // If pending has be returned for this irp then mark the current 
-    // stack as pending.  
-    //
-
-    if ( Irp->PendingReturned ) {
-        IoMarkIrpPending(Irp);
-    }
-
-    return STATUS_SUCCESS;
-
-} // AfdRestartSend
 
 
 NTSTATUS
@@ -615,7 +475,6 @@ AfdRestartBufferSend (
 
     ASSERT( endpoint != NULL );
     ASSERT( endpoint->Type == AfdBlockTypeVcConnecting );
-    ASSERT( !endpoint->TdiBufferring );
 
     connection = endpoint->Common.VcConnecting.Connection;
     ASSERT( connection != NULL );
@@ -709,7 +568,7 @@ AfdRestartBufferSend (
 
         if ( !connection->SpecialCondition ) {
 
-            ASSERT( connection->TdiBufferring || connection->VcDisconnectIrp == NULL );
+            ASSERT( connection->VcDisconnectIrp == NULL );
             ASSERT( connection->ConnectedReferenceAdded );
             KeReleaseSpinLock( &endpoint->SpinLock, oldIrql );
     
@@ -1124,55 +983,6 @@ AfdRestartSendDatagram (
 
 } // AfdRestartSendDatagram
 
-
-NTSTATUS
-AfdSendPossibleEventHandler (
-    IN PVOID TdiEventContext,
-    IN PVOID ConnectionContext,
-    IN ULONG BytesAvailable
-    )
-{
-    PAFD_CONNECTION connection;
-    PAFD_ENDPOINT endpoint;
-
-    UNREFERENCED_PARAMETER( TdiEventContext );
-    UNREFERENCED_PARAMETER( BytesAvailable );
-
-    connection = (PAFD_CONNECTION)ConnectionContext;
-    endpoint = connection->Endpoint;
-
-    ASSERT( connection->Type == AfdBlockTypeConnection );
-    ASSERT( IS_AFD_ENDPOINT_TYPE( endpoint ) );
-    ASSERT( endpoint->TdiBufferring );
-    ASSERT( connection->TdiBufferring );
-
-    IF_DEBUG(SEND) {
-        KdPrint(( "AfdSendPossibleEventHandler: send possible on endpoint %lx "
-                    " conn %lx bytes=%ld\n", endpoint, connection, BytesAvailable ));
-    }
-
-    //
-    // Remember that it is now possible to do a send on this connection.
-    //
-
-    if ( BytesAvailable != 0 ) {
-
-        connection->VcNonBlockingSendPossible = TRUE;
-
-        //
-        // Complete any outstanding poll IRPs waiting for a send poll.
-        //
-    
-        AfdIndicatePollEvent( endpoint, AFD_POLL_SEND, STATUS_SUCCESS );
-    
-    } else {
-
-        connection->VcNonBlockingSendPossible = FALSE;
-    }
-
-    return STATUS_SUCCESS;
-
-} // AfdSendPossibleEventHandler
 
 
 VOID

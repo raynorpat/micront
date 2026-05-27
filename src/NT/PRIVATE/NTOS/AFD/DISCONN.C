@@ -299,7 +299,7 @@ AfdDisconnectEventHandler (
     // If this is a nonbufferring transport, complete any pended receives.
     //
 
-    if ( !connection->TdiBufferring ) {
+    {
 
         AfdCompleteIrpList(
             &connection->VcReceiveIrpListHead,
@@ -472,14 +472,7 @@ AfdBeginAbort (
     // that no more AFD_POLL_RECEIVE events get completed.
     //
 
-    if ( endpoint->TdiBufferring ) {
-
-        Connection->Common.Bufferring.ReceiveBytesTaken =
-            Connection->Common.Bufferring.ReceiveBytesIndicated;
-
-        KeReleaseSpinLock( &AfdSpinLock, oldIrql );
-    
-    } else if ( endpoint->Type != AfdBlockTypeVcListening ) {
+    if ( endpoint->Type != AfdBlockTypeVcListening ) {
 
         KeReleaseSpinLock( &AfdSpinLock, oldIrql );
 
@@ -574,7 +567,6 @@ AfdRestartAbort (
     connection = Context;
     ASSERT( connection != NULL );
     ASSERT( connection->Type == AfdBlockTypeConnection );
-    //ASSERT( connection->TdiBufferring || connection->VcBufferredSendCount == 0 );
 
     endpoint = connection->Endpoint;
 
@@ -598,7 +590,7 @@ AfdRestartAbort (
             );
     }
 
-    if ( !connection->TdiBufferring ) {
+    {
 
         //
         // Complete all of the connection's pended sends and receives.
@@ -839,7 +831,7 @@ AfdBeginDisconnect (
     // sends have completed.
     //
 
-    if ( !Endpoint->TdiBufferring && connection->VcBufferredSendCount != 0 ) {
+    if ( connection->VcBufferredSendCount != 0 ) {
 
         ASSERT( connection->VcDisconnectIrp == NULL );
 
@@ -879,7 +871,6 @@ AfdRestartDisconnect (
     connection = endpoint->Common.VcConnecting.Connection;
     ASSERT( connection != NULL );
     ASSERT( connection->Type == AfdBlockTypeConnection );
-    //ASSERT( connection->TdiBufferring || connection->VcBufferredSendCount == 0 );
 
     IF_DEBUG(CONNECT) {
         KdPrint(( "AfdRestartDisconnect: disconnect completed, status = %X, "

@@ -266,18 +266,6 @@ AfdReceiveDatagram (
     );
 
 NTSTATUS
-AfdReceiveEventHandler (
-    IN PVOID TdiEventContext,
-    IN CONNECTION_CONTEXT ConnectionContext,
-    IN ULONG ReceiveFlags,
-    IN ULONG BytesIndicated,
-    IN ULONG BytesAvailable,
-    OUT ULONG *BytesTaken,
-    IN PVOID Tsdu,
-    OUT PIRP *IoRequestPacket
-    );
-
-NTSTATUS
 AfdBReceiveEventHandler (
     IN PVOID TdiEventContext,
     IN CONNECTION_CONTEXT ConnectionContext,
@@ -328,13 +316,6 @@ NTSTATUS
 AfdSendDatagram (
     IN PIRP Irp,
     IN PIO_STACK_LOCATION IrpSp
-    );
-
-NTSTATUS
-AfdSendPossibleEventHandler (
-    IN PVOID TdiEventContext,
-    IN PVOID ConnectionContext,
-    IN ULONG BytesAvailable
     );
 
 NTSTATUS
@@ -405,7 +386,6 @@ NTSTATUS
 AfdCreateConnection (
     IN PUNICODE_STRING TransportDeviceName,
     IN HANDLE AddressHandle OPTIONAL,
-    IN BOOLEAN TdiBufferring,
     IN PEPROCESS ProcessToCharge,
     OUT PAFD_CONNECTION *Connection
     );
@@ -539,21 +519,8 @@ AfdReturnBuffer (
     );
 
 
-#define IS_DATA_ON_CONNECTION_B(conn)                                         \
-            (RtlLargeIntegerGreaterThan(                                      \
-                 (conn)->Common.Bufferring.ReceiveBytesIndicated,             \
-                 RtlLargeIntegerAdd(                                          \
-                     (conn)->Common.Bufferring.ReceiveBytesTaken,             \
-                     (conn)->Common.Bufferring.ReceiveBytesOutstanding )) ||  \
-             (conn)->VcZeroByteReceiveIndicated)
-
-#define IS_DATA_ON_CONNECTION_NB(conn)                                        \
-            ( (conn)->Common.NonBufferring.BufferredReceiveCount != 0 )
-
 #define IS_DATA_ON_CONNECTION(conn)                                           \
-            ( (conn)->Endpoint->TdiBufferring ?                               \
-                IS_DATA_ON_CONNECTION_B(conn) :                               \
-                IS_DATA_ON_CONNECTION_NB(conn) )
+            ( (conn)->Common.NonBufferring.BufferredReceiveCount != 0 )
 
 #define ARE_DATAGRAMS_ON_ENDPOINT(endp)                              \
             ( (endp)->BufferredDatagramCount != 0 )

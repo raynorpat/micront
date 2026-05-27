@@ -171,9 +171,8 @@ Return Value:
 
              ||
 
-             ( !endpoint->TdiBufferring &&
-                  (!IsListEmpty( &connection->VcReceiveIrpListHead ) ||
-                   !IsListEmpty( &connection->VcSendIrpListHead )) )
+             ( !IsListEmpty( &connection->VcReceiveIrpListHead ) ||
+               !IsListEmpty( &connection->VcSendIrpListHead ) )
 
              ) {
 
@@ -282,7 +281,7 @@ Return Value:
 
     if ( endpoint->Type == AfdBlockTypeVcConnecting ) {
 
-        if ( !endpoint->TdiBufferring ) {
+        {
 
             AfdCompleteIrpList(
                 &connection->VcReceiveIrpListHead,

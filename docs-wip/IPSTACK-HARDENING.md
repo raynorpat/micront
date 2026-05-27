@@ -1204,3 +1204,38 @@ Tracked separately from per-finding TBDs because they cut across findings.
   check in `TCPCONN.C`, and the ws2_32 `OobInline` socket
   field plus its `ACCEPT.C` inheritance. Final net diff:
   ~1685 lines deleted across 31 source files.
+
+- 2026-05-27 — **Decision: strip AFD buffering-transport-only paths.**
+  Sixth wholesale-feature-removal in the series. With TCP/IP as the
+  sole in-tree TDI transport — and it does not advertise
+  `TDI_SERVICE_INTERNAL_BUFFERING` — every `endpoint->TdiBufferring`
+  / `connection->TdiBufferring` branch in AFD is statically dead.
+  Deleted: `AfdReceiveEventHandler` and `AfdRestartReceive` (the
+  buffering-transport receive-indication and receive-IRP completion),
+  `AfdRestartSend` (the buffering-transport send-IRP completion),
+  `AfdSendPossibleEventHandler` (the `TDI_EVENT_SEND_POSSIBLE` handler,
+  only registered on the buffering side). `AfdSend` collapsed — the
+  IRP-passthrough else branch (which forwarded the user IRP straight
+  to TDI with `AfdRestartSend` completion) deleted; the `doSendBufferring`
+  local retired; the AFD-side buffering path is now unconditional.
+  `AfdReceive` collapsed to a ~30-line dispatcher (datagram →
+  `AfdReceiveDatagram`, VC → `AfdBReceive`). `AfdQueryReceiveInformation`
+  loses its buffering-side branch. `CLOSE.C`, `DISCONN.C`, `POLL.C`,
+  `MISC.C`, `FASTIO.C`, `BLKCONN.C` all flatten their `TdiBufferring`
+  conditionals. `AFD_ENDPOINT` and `AFD_CONNECTION` lose their
+  `TdiBufferring` BOOLEAN; `AFD_ENDPOINT` also loses `TdiMessageMode`
+  (TCP-stream-only deployment). The `Common` union in `AFD_CONNECTION`
+  collapses from `union { Bufferring; NonBufferring }` to a struct
+  wrapping just `NonBufferring`, preserving the `Common.NonBufferring.*`
+  / `Vc*` accessor surface so the existing macros keep working.
+  `VcNonBlockingSendPossible` and `VcZeroByteReceiveIndicated` macros
+  retired (dead after the handler functions). `AfdCreateConnection`
+  loses its `TdiBufferring` parameter; `AfdAddFreeConnection` /
+  `AfdConnect` callers updated. `IS_DATA_ON_CONNECTION_B` macro
+  retired; `IS_DATA_ON_CONNECTION` simplified to the direct
+  `BufferredReceiveCount != 0` check. Finally, the
+  `TDI_SERVICE_INTERNAL_BUFFERING` constant itself removed from
+  `PRIVATE/INC/TDI.H` — we own the TDI surface and have no consumer.
+  Net diff: ~866 lines deleted across 14 AFD files + 1 TDI header.
+  Selftest passes; coverage rises in `NTOS/AFD` (dead-code denominator
+  shrinks again).
