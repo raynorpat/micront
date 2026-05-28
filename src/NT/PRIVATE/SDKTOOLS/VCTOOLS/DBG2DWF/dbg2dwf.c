@@ -1947,8 +1947,16 @@ static void emit_one_user_type(Buf *info, Strtab *dstr, unsigned long idx)
         if (attr & 0x1) {
             buf_uleb(info, 15);  /* const_type */
             if (attr & 0x2) {
-                /* nest volatile under const */
-                unsigned long volatile_off = info->len + 5;
+                /* Nest volatile under const.  The const_type DIE is the
+                 * 1-byte abbrev code we just wrote plus the 4-byte
+                 * DW_AT_type ref we're about to write -- so the nested
+                 * volatile DIE starts at (current info->len after the
+                 * abbrev write) + 4 (the ref bytes we're about to add).
+                 * Earlier (wrong) value of +5 double-counted the abbrev
+                 * byte -- pointed one past the volatile DIE start and
+                 * produced "Cannot find DIE at <off> referenced from
+                 * DIE at <off-6>" from gdb's dwarf reader on the dwf. */
+                unsigned long volatile_off = info->len + 4;
                 buf_u32(info, volatile_off);
                 buf_uleb(info, 16);  /* volatile_type */
                 buf_u32(info, off_underlying);
