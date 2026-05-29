@@ -1615,5 +1615,13 @@ SYSSTUBS_ENTRY5  182, WriteVirtualMemory, 5
 SYSSTUBS_ENTRY6  182, WriteVirtualMemory, 5 
 SYSSTUBS_ENTRY7  182, WriteVirtualMemory, 5 
 SYSSTUBS_ENTRY8  182, WriteVirtualMemory, 5 
+SYSSTUBS_ENTRY1  183, GenerateSecureRandom, 2 
+SYSSTUBS_ENTRY2  183, GenerateSecureRandom, 2 
+SYSSTUBS_ENTRY3  183, GenerateSecureRandom, 2 
+SYSSTUBS_ENTRY4  183, GenerateSecureRandom, 2 
+SYSSTUBS_ENTRY5  183, GenerateSecureRandom, 2 
+SYSSTUBS_ENTRY6  183, GenerateSecureRandom, 2 
+SYSSTUBS_ENTRY7  183, GenerateSecureRandom, 2 
+SYSSTUBS_ENTRY8  183, GenerateSecureRandom, 2 
 
 STUBS_END

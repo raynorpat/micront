@@ -57,3 +57,51 @@ RngInitSystem (
 
     return TRUE;
 }
+
+//
+// NtGenerateSecureRandom -- the syscall behind RtlGenRandom / SystemFunction036
+// / BCryptGenRandom.  Fills the caller's buffer with CSPRNG output.
+//
+// Squeezing writes into a kernel stack buffer because RngGenerateBytes briefly
+// raises to DISPATCH_LEVEL under the pool lock -- its output must land in
+// non-paged memory.  The copy out to the (possibly paged, possibly bogus) user
+// buffer happens at PASSIVE_LEVEL with no lock held, inside SEH, so a bad
+// pointer fails the call instead of bugchecking.
+//
+NTSTATUS
+NtGenerateSecureRandom (
+    OUT PVOID Buffer,
+    IN ULONG Length
+    )
+{
+    UCHAR  chunk[256];
+    PUCHAR dst = (PUCHAR)Buffer;
+    ULONG  remaining = Length;
+    ULONG  n;
+
+    if (Length == 0) {
+        return STATUS_SUCCESS;
+    }
+
+    try {
+        if (KeGetPreviousMode() != KernelMode) {
+            ProbeForWrite(Buffer, Length, sizeof(UCHAR));
+        }
+
+        while (remaining > 0) {
+            n = (remaining < sizeof(chunk)) ? remaining : sizeof(chunk);
+            RngGenerateBytes(chunk, n);
+            RtlCopyMemory(dst, chunk, n);
+            dst += n;
+            remaining -= n;
+        }
+
+    } except (EXCEPTION_EXECUTE_HANDLER) {
+        RtlZeroMemory(chunk, sizeof(chunk));
+        return GetExceptionCode();
+    }
+
+    /* Don't leave CSPRNG output sitting on the kernel stack. */
+    RtlZeroMemory(chunk, sizeof(chunk));
+    return STATUS_SUCCESS;
+}

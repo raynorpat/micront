@@ -61,4 +61,14 @@ RngGenerateBytes (
     IN ULONG Length
     );
 
+//
+// System service (NtGenerateSecureRandom / ZwGenerateSecureRandom): fill the
+// caller's buffer with Length cryptographically-strong random bytes.
+//
+NTSTATUS
+NtGenerateSecureRandom (
+    OUT PVOID Buffer,
+    IN ULONG Length
+    );
+
 #endif // _RNG_H_
