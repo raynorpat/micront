@@ -55,6 +55,7 @@ Return Value:
     PAFD_ENDPOINT endpoint;
     PAFD_CONNECTION connection;
     KIRQL oldIrql;
+    KIRQL cancelIrql;
     PLIST_ENTRY listEntry;
     LARGE_INTEGER processExitTime;
 
@@ -87,6 +88,23 @@ Return Value:
     // Complete any outstanding wait for listen IRPs on the endpoint.
     //
 
+    //
+    // Hold BOTH the cancel spin lock and the AFD spin lock across the
+    // unlink + cancel-routine reset.  Removing the IRP from the listening
+    // list and clearing its cancel routine must be atomic with respect to
+    // IoCancelIrp -- the same invariant AfdWaitForListen documents when it
+    // inserts the IRP and that AfdRestartAccept upholds when it completes
+    // one.  If we dropped the AFD lock and reset the cancel routine
+    // separately (as this used to), a concurrent NtCancelIoFile /
+    // IoCancelThreadIo could read the still-set cancel routine on an IRP
+    // we'd already pulled off the list, invoke AfdCancelWaitForListen,
+    // which then can't find the IRP and returns without completing it --
+    // leaking it onto the issuing thread's IrpList with cancel-rtn=NULL
+    // until the PspExitThread -> IoCancelThreadIo reaper disassociates it.
+    // Lock order is cancel-then-AFD, matching every other AFD path.
+    //
+
+    IoAcquireCancelSpinLock( &cancelIrql );
     KeAcquireSpinLock( &AfdSpinLock, &oldIrql );
 
     if ( endpoint->Type == AfdBlockTypeVcListening ) {
@@ -103,11 +121,19 @@ Return Value:
                                    );
 
             //
-            // Release the AFD spin lock so that we can complete the
-            // wait for listen IRP.
+            // Reset the cancel routine while still holding both locks, so
+            // the IRP is never sitting off-list with a live cancel routine.
+            //
+
+            IoSetCancelRoutine( waitForListenIrp, NULL );
+
+            //
+            // Release both locks so that we can complete the wait for
+            // listen IRP.
             //
 
             KeReleaseSpinLock( &AfdSpinLock, oldIrql );
+            IoReleaseCancelSpinLock( cancelIrql );
 
             //
             // Cancel the IRP.
@@ -116,24 +142,29 @@ Return Value:
             waitForListenIrp->IoStatus.Status = STATUS_CANCELLED;
             waitForListenIrp->IoStatus.Information = 0;
 
-            //
-            // Reset the cancel routine in the IRP.
-            //
-
-            IoAcquireCancelSpinLock( &oldIrql );
-            IoSetCancelRoutine( waitForListenIrp, NULL );
-            IoReleaseCancelSpinLock( oldIrql );
-
             IoCompleteRequest( waitForListenIrp, AfdPriorityBoost );
 
             //
-            // Reacquire the AFD spin lock for the next pass through the
-            // loop.
+            // Reacquire both locks for the next pass through the loop.
             //
 
+            IoAcquireCancelSpinLock( &cancelIrql );
             KeAcquireSpinLock( &AfdSpinLock, &oldIrql );
         }
     }
+
+    //
+    // Release both locks in LIFO order (AfdSpinLock inner, cancel outer)
+    // so the IRQL save/restore unwinds correctly.  We no longer touch
+    // cancel routines past this point, so the cancel lock isn't needed
+    // below -- but the connected-socket logic still expects AfdSpinLock
+    // held (it releases it on every path), so re-acquire it alone.
+    //
+
+    KeReleaseSpinLock( &AfdSpinLock, oldIrql );
+    IoReleaseCancelSpinLock( cancelIrql );
+
+    KeAcquireSpinLock( &AfdSpinLock, &oldIrql );
 
     //
     // If this is a connected non-datagram socket and the send side has
