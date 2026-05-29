@@ -345,6 +345,14 @@ VOID HalStartEntropyThread(VOID);
  * one of the entropy sources. */
 extern LARGE_INTEGER HalpBootSystemTime;
 
+/* kvmclock paravirtual wall-clock seed backend (kvmclock.c).  HalpKvmClockInit
+ * probes for KVM and arms the PV-clock MSRs; on success HalpKvmClockAvailable
+ * is set and HalpEpochReadKvm becomes a valid epoch source that time.c's
+ * HalpDetectClockSource selects ahead of the CMOS RTC. */
+extern BOOLEAN HalpKvmClockAvailable;
+BOOLEAN HalpKvmClockInit(VOID);
+BOOLEAN HalpEpochReadKvm(OUT PLARGE_INTEGER SystemTime);
+
 PVOID
 HalpMapPhysicalMemoryWriteThrough(
     IN PVOID	PhysicalAddress,

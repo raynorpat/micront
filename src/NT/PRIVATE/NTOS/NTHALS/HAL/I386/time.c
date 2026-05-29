@@ -350,8 +350,8 @@ HalpLogHypervisorSignature(VOID)
 typedef enum _HALP_CLOCK_SOURCE {
     HalClockNone = 0,
     HalClockEfi,
+    HalClockKvm,        /* kvmclock PV seed (kvmclock.c) — ahead of CMOS */
     HalClockCmos
-    /* HalClockKvm -- reserved for the kvmclock backend */
 } HALP_CLOCK_SOURCE;
 
 typedef BOOLEAN (*PHALP_EPOCH_READ)(OUT PLARGE_INTEGER SystemTime);
@@ -396,6 +396,10 @@ HalpDetectClockSource(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         HalpEpochRead   = HalpEpochReadEfi;
         HalpClockSource = HalClockEfi;
         HalpSerialPrint("HAL: clock source = UEFI runtime\r\n");
+    } else if (HalpKvmClockAvailable) {
+        HalpEpochRead   = HalpEpochReadKvm;
+        HalpClockSource = HalClockKvm;
+        HalpSerialPrint("HAL: clock source = kvmclock\r\n");
     } else if (HalpCmosPresent()) {
         HalpEpochRead   = HalpEpochReadCmos;
         HalpClockSource = HalClockCmos;
@@ -440,6 +444,7 @@ HalpInitTscClock(
      * holds UTC (qemu -rtc base=utc, our documented contract); the EFI path
      * uses RT->GetTime(). */
     HalpBootSystemTime.QuadPart = 0;
+    HalpKvmClockInit();             /* may register kvmclock ahead of CMOS */
     HalpDetectClockSource(LoaderBlock);
     if (HalpEpochRead != NULL && HalpEpochRead(&HalpBootSystemTime)) {
         HalpPrintWallClock("HAL: wall-clock seed: ", HalpBootSystemTime);
