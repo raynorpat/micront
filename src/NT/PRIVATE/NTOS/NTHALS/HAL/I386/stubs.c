@@ -219,6 +219,53 @@ HalpEfiTimeToSystemTime(
 }
 
 /*
+ * Format an NT system time (100-ns since 1601) as
+ * "<label>YYYY-MM-DD HH:MM:SS UTC" on the serial banner so the seed we
+ * latched is visible at boot regardless of which source produced it.
+ * No printf in the HAL — hand-roll the zero-padded fields.
+ */
+static VOID
+HalpPrintWallClock(
+    IN PCHAR         Label,
+    IN LARGE_INTEGER SystemTime
+    )
+{
+    static const CHAR d[] = "0123456789";
+    TIME_FIELDS tf;
+    CHAR        buf[96];
+    ULONG       i = 0;
+    PCHAR       s;
+
+    RtlTimeToTimeFields(&SystemTime, &tf);
+
+    for (s = Label; *s; s++) {
+        buf[i++] = *s;
+    }
+    buf[i++] = d[(tf.Year   / 1000) % 10];
+    buf[i++] = d[(tf.Year   /  100) % 10];
+    buf[i++] = d[(tf.Year   /   10) % 10];
+    buf[i++] = d[ tf.Year           % 10];
+    buf[i++] = '-';
+    buf[i++] = d[(tf.Month  /   10) % 10];
+    buf[i++] = d[ tf.Month          % 10];
+    buf[i++] = '-';
+    buf[i++] = d[(tf.Day    /   10) % 10];
+    buf[i++] = d[ tf.Day            % 10];
+    buf[i++] = ' ';
+    buf[i++] = d[(tf.Hour   /   10) % 10];
+    buf[i++] = d[ tf.Hour           % 10];
+    buf[i++] = ':';
+    buf[i++] = d[(tf.Minute /   10) % 10];
+    buf[i++] = d[ tf.Minute         % 10];
+    buf[i++] = ':';
+    buf[i++] = d[(tf.Second /   10) % 10];
+    buf[i++] = d[ tf.Second         % 10];
+    buf[i++] = ' '; buf[i++] = 'U'; buf[i++] = 'T'; buf[i++] = 'C';
+    buf[i++] = '\r'; buf[i++] = '\n'; buf[i] = 0;
+    HalpSerialPrint(buf);
+}
+
+/*
  * Log the hypervisor identity to the serial banner.  Bare metal logs
  * "bare metal".  When CPUID 01h:ECX bit 31 (HypervisorPresent) is
  * set, we read the 12-byte ASCII vendor signature from CPUID
@@ -319,12 +366,31 @@ HalpInitTscClock(
     if (LoaderBlock->Spare1 != 0) {
         PHAL_EFI_TIME efi = (PHAL_EFI_TIME)LoaderBlock->Spare1;
         if (HalpEfiTimeToSystemTime(efi, &HalpBootSystemTime)) {
-            HalpSerialPrint("HAL: UEFI wall-clock seed: ok\r\n");
+            HalpPrintWallClock("HAL: wall-clock seed (UEFI): ", HalpBootSystemTime);
         } else {
             HalpSerialPrint("HAL: UEFI wall-clock seed: invalid\r\n");
         }
     } else {
-        HalpSerialPrint("HAL: no UEFI wall-clock seed\r\n");
+        /* No UEFI runtime services on this boot (multiboot / -kernel /
+         * BIOS path).  Fall back to the CMOS MC146818 RTC: qemu seeds it
+         * from the host clock (base=utc) and emulates it under both TCG
+         * and KVM on pc/q35 — on microvm it needs -machine ...,rtc=on. */
+        TIME_FIELDS   tf;
+        LARGE_INTEGER seed;
+
+        HalpSerialPrint("HAL: no UEFI wall-clock seed — reading CMOS RTC\r\n");
+        HalpReadCmosTime(&tf);
+
+        /* CMOS holds UTC (qemu -rtc base=utc, our documented contract).
+         * RtlTimeFieldsToTime rejects out-of-range fields, which is how
+         * we detect an absent/floating RTC: reads come back 0xFF and
+         * decode to nonsense months/years. */
+        if (RtlTimeFieldsToTime(&tf, &seed)) {
+            HalpBootSystemTime = seed;
+            HalpPrintWallClock("HAL: wall-clock seed (CMOS RTC): ", HalpBootSystemTime);
+        } else {
+            HalpSerialPrint("HAL: CMOS RTC unreadable — wall clock starts at 1601\r\n");
+        }
     }
 }
 
@@ -397,6 +463,98 @@ HalSetProfileInterval(
 }
 
 /* ===== RTC ===== */
+
+static UCHAR
+HalpBcdToBin(UCHAR v)
+{
+    return (UCHAR)((v & 0x0F) + ((v >> 4) * 10));
+}
+
+static UCHAR
+HalpReadCmosReg(UCHAR reg)
+{
+    HalpWritePort(CMOS_INDEX, reg);
+    return HalpReadPort(CMOS_DATA);
+}
+
+/*
+ * Read the MC146818 CMOS RTC into TIME_FIELDS.  Used as the non-EFI
+ * wall-clock seed (see HalpInitTscClock); on a UEFI boot we never get
+ * here because RT->GetTime() already seeded HalpBootSystemTime.
+ *
+ * Honours Status Register B for BCD-vs-binary and 12-vs-24-hour rather
+ * than assuming qemu's defaults, so the same path works on bare metal.
+ * Caller validates the result via RtlTimeFieldsToTime — if the RTC is
+ * absent (microvm without rtc=on) the data port floats to 0xFF and the
+ * decoded fields fail that range check.
+ */
+VOID
+HalpReadCmosTime(
+    PTIME_FIELDS TimeFields
+    )
+{
+    UCHAR   sec, min, hour, day, mon, yr, cent, regB;
+    ULONG   guard;
+    BOOLEAN bcd, hour12, pm;
+
+    /* Wait out any update-in-progress so we don't latch a half-rolled
+     * value.  Bounded spin: a missing RTC can leave UIP stuck set. */
+    for (guard = 0; guard < 1000000; guard++) {
+        if (!(HalpReadCmosReg(CMOS_STATUS_A) & CMOS_A_UIP)) {
+            break;
+        }
+    }
+
+    regB   = HalpReadCmosReg(CMOS_STATUS_B);
+    bcd    = (regB & CMOS_B_BINARY) ? FALSE : TRUE;
+    hour12 = (regB & CMOS_B_24HOUR) ? FALSE : TRUE;
+
+    sec  = HalpReadCmosReg(CMOS_RTC_SECONDS);
+    min  = HalpReadCmosReg(CMOS_RTC_MINUTES);
+    hour = HalpReadCmosReg(CMOS_RTC_HOURS);
+    day  = HalpReadCmosReg(CMOS_RTC_DAY);
+    mon  = HalpReadCmosReg(CMOS_RTC_MONTH);
+    yr   = HalpReadCmosReg(CMOS_RTC_YEAR);
+    cent = HalpReadCmosReg(CMOS_RTC_CENTURY);
+
+    /* In 12-hour mode the PM flag rides bit 7 of the hour register and
+     * must be stripped before BCD decode. */
+    pm    = (hour12 && (hour & 0x80)) ? TRUE : FALSE;
+    hour &= 0x7F;
+
+    if (bcd) {
+        sec  = HalpBcdToBin(sec);
+        min  = HalpBcdToBin(min);
+        hour = HalpBcdToBin(hour);
+        day  = HalpBcdToBin(day);
+        mon  = HalpBcdToBin(mon);
+        yr   = HalpBcdToBin(yr);
+        cent = HalpBcdToBin(cent);
+    }
+
+    if (hour12) {
+        hour %= 12;          /* 12 -> 0 ... */
+        if (pm) {
+            hour += 12;      /* ... 1pm -> 13, 12pm stays 12 */
+        }
+    }
+
+    TimeFields->Second       = (CSHORT)sec;
+    TimeFields->Minute       = (CSHORT)min;
+    TimeFields->Hour         = (CSHORT)hour;
+    TimeFields->Day          = (CSHORT)day;
+    TimeFields->Month        = (CSHORT)mon;
+    /* Century register is valid on qemu; if blank/garbage (absent RTC,
+     * or firmware that never set it) assume 20xx since we ship well
+     * after 2000. */
+    if (cent >= 19 && cent <= 21) {
+        TimeFields->Year = (CSHORT)((ULONG)cent * 100 + yr);
+    } else {
+        TimeFields->Year = (CSHORT)(2000 + yr);
+    }
+    TimeFields->Milliseconds = 0;
+    TimeFields->Weekday      = 0;
+}
 
 /*
  * Live wall-clock query.  Returns boot system time plus the wall

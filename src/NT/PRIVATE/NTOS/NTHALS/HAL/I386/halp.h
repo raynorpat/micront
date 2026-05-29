@@ -455,6 +455,22 @@ static VOID _inline HalpWritePort(USHORT port, UCHAR val) {
 #define PIT_CMD     0x43
 #define PIT_FREQ    1193182
 
+/* MC146818 CMOS RTC (non-EFI wall-clock seed) */
+#define CMOS_INDEX          0x70    /* register-select (bit 7 = NMI mask) */
+#define CMOS_DATA           0x71
+#define CMOS_RTC_SECONDS    0x00
+#define CMOS_RTC_MINUTES    0x02
+#define CMOS_RTC_HOURS      0x04
+#define CMOS_RTC_DAY        0x07
+#define CMOS_RTC_MONTH      0x08
+#define CMOS_RTC_YEAR       0x09    /* two-digit year */
+#define CMOS_RTC_CENTURY    0x32    /* FADT century register (qemu) */
+#define CMOS_STATUS_A       0x0A
+#define CMOS_STATUS_B       0x0B
+#define CMOS_A_UIP          0x80    /* update-in-progress */
+#define CMOS_B_24HOUR       0x02    /* set = 24h, clear = 12h */
+#define CMOS_B_BINARY       0x04    /* set = binary, clear = BCD */
+
 /* Serial ports */
 #define COM1_PORT   0x3F8
 #define COM2_PORT   0x2F8
