@@ -32,6 +32,9 @@ def main() -> int:
     ap.add_argument("--channel", choices=(*lv.CHANNELS, "auto"), default="auto")
     ap.add_argument("--date", type=_parse_date, metavar="YYYYMMDD",
                     help="override build date (default: today UTC)")
+    ap.add_argument("--hour", type=int, metavar="HH",
+                    help="override UTC hour-of-day 0-23 "
+                         "(default: now, or 0 when --date is given)")
     ap.add_argument("--sha", help="override 7-char git short sha")
     ap.add_argument("--show", action="store_true",
                     help="print current on-disk stamp and exit")
@@ -45,16 +48,25 @@ def main() -> int:
         except RuntimeError as e:
             print(f"unstamped: {e}", file=sys.stderr)
             return 1
-        print(f"NT {s.version_str}  {s.current_build_number}  "
+        print(f"NT {s.version_str}  {s.current_build_number} {s.hour:02d}h UTC  "
               f"channel={s.channel}  sha={s.sha}  "
               f"tuple={s.version_tuple}  beta={s.beta_str!r}")
         return 0
 
     auto = lv.detect_from_git()
+    if args.hour is not None:
+        hour = args.hour
+    elif args.date is not None:
+        # Manual date reproduction: pin a deterministic hour rather than
+        # borrowing the current wall clock for a build that isn't "now".
+        hour = 0
+    else:
+        hour = auto.hour
     stamp = lv.BuildStamp(
         date=args.date or auto.date,
         sha=args.sha or auto.sha,
         channel=auto.channel if args.channel == "auto" else args.channel,
+        hour=hour,
     )
 
     if args.check:

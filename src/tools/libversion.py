@@ -4,15 +4,20 @@ Single source of truth for version numbers across the build. Both
 stamp-version.py (writes NTVERP.H) and mkhive.py (consumes it when
 populating the SOFTWARE hive) import this module.
 
-NT 3.65 ships as a continuous release: at most one build per day, so
-the release identity is (date, git sha). The resource VS_FIXEDFILEINFO
-tuple is four USHORTs, so the date is split as YYMM / DD — both slots
-stay under 65535 and the tuple sorts chronologically.
+NT 3.65 ships as a continuous release. The release identity is
+(date, hour, git sha). The resource VS_FIXEDFILEINFO tuple is four
+USHORTs, so the build slot carries YYMM and the QFE slot packs
+DD*100 + HH (UTC hour-of-day). Both slots stay under 65535 and the
+tuple sorts chronologically through 2099.
+
+The hour gives per-build coarse timing: when components are stamped at
+build time off the wall clock, you can eyeball which .sys/.dll/.exe
+were built in which hour and do quick mental deltas between them.
 
 Layout of NTVERP.H after stamping:
 
-    VER_PRODUCTBUILD        <YYMM>
-    VER_PRODUCTBUILD_QFE    <DD>
+    VER_PRODUCTBUILD        <YYMM>          (e.g. 2605 = 2026-05)
+    VER_PRODUCTBUILD_QFE    <DD*100 + HH>   (e.g. 2914 = 29th, 14:00 UTC)
     VER_PRODUCTVERSION      3,65,VER_PRODUCTBUILD,VER_PRODUCTBUILD_QFE
     VER_PRODUCTVERSION_STR  "3.65"
     VER_PRODUCTBETA_STR     "" | "<sha>" | "rc-<sha>" | "dev-<sha>"
@@ -49,20 +54,25 @@ class BuildStamp:
     date: _dt.date
     sha: str
     channel: str
+    hour: int = 0  # UTC hour-of-day, 0-23; packed into the QFE slot
 
     def __post_init__(self) -> None:
         if self.channel not in CHANNELS:
             raise ValueError(f"channel must be one of {CHANNELS}, got {self.channel!r}")
         if not re.fullmatch(r"[0-9a-f]{7,40}", self.sha):
             raise ValueError(f"sha must be 7-40 lowercase hex chars, got {self.sha!r}")
+        if not 0 <= self.hour <= 23:
+            raise ValueError(f"hour must be 0-23, got {self.hour!r}")
 
     @property
     def yymm(self) -> int:
         return (self.date.year % 100) * 100 + self.date.month
 
     @property
-    def dd(self) -> int:
-        return self.date.day
+    def qfe(self) -> int:
+        # DD*100 + HH: day is the high decimal pair, hour the low pair,
+        # so 2914 reads as "29th, 14:00". Max 31*100+23 = 3123 << 65535.
+        return self.date.day * 100 + self.hour
 
     @property
     def version_str(self) -> str:
@@ -70,7 +80,7 @@ class BuildStamp:
 
     @property
     def version_tuple(self) -> tuple[int, int, int, int]:
-        return (PRODUCT_MAJOR, PRODUCT_MINOR, self.yymm, self.dd)
+        return (PRODUCT_MAJOR, PRODUCT_MINOR, self.yymm, self.qfe)
 
     @property
     def version_tuple_str(self) -> str:
@@ -95,8 +105,12 @@ class BuildStamp:
 
 
 def detect_from_git(root: Optional[Path] = None,
-                    today: Optional[_dt.date] = None) -> BuildStamp:
+                    now: Optional[_dt.datetime] = None) -> BuildStamp:
     """Build a stamp from the current git HEAD.
+
+    The date and hour come from the wall clock (UTC now), not the commit
+    timestamp: the stamp records when *this build* ran, so components
+    built at different times of day carry different hours.
 
     Channel resolution:
       - HEAD tagged `v3.65.YYYYMMDD`  -> release
@@ -104,7 +118,7 @@ def detect_from_git(root: Optional[Path] = None,
       - anything else                  -> dev
     """
     root = root or _repo_root()
-    today = today or _dt.datetime.utcnow().date()
+    now = now or _dt.datetime.utcnow()
 
     # Two flavors: required (e.g. rev-parse HEAD — always available in a
     # checkout) surfaces stderr on failure so CI errors are debuggable
@@ -141,7 +155,7 @@ def detect_from_git(root: Optional[Path] = None,
     elif tag.startswith("rc-"):
         channel = "rc"
 
-    return BuildStamp(date=today, sha=sha, channel=channel)
+    return BuildStamp(date=now.date(), sha=sha, channel=channel, hour=now.hour)
 
 
 _DEFINE_RE = re.compile(
@@ -162,14 +176,15 @@ def parse_ntverp(path: Optional[Path] = None) -> BuildStamp:
 
     try:
         yymm = int(defines["VER_PRODUCTBUILD"])
-        dd = int(defines["VER_PRODUCTBUILD_QFE"])
+        qfe = int(defines["VER_PRODUCTBUILD_QFE"])
         beta = defines["VER_PRODUCTBETA_STR"].strip('"')
     except KeyError as e:
         raise RuntimeError(f"{path} missing {e.args[0]} — has it been stamped?")
 
     year = 2000 + yymm // 100
     month = yymm % 100
-    date = _dt.date(year, month, dd)
+    day, hour = divmod(qfe, 100)
+    date = _dt.date(year, month, day)
 
     if beta.startswith("rc-"):
         channel, sha = "rc", beta[3:]
@@ -178,7 +193,7 @@ def parse_ntverp(path: Optional[Path] = None) -> BuildStamp:
     else:
         channel, sha = "release", beta
 
-    return BuildStamp(date=date, sha=sha, channel=channel)
+    return BuildStamp(date=date, sha=sha, channel=channel, hour=hour)
 
 
 # Lines in NTVERP.H driven by the stamp. Each entry: (macro name, formatter).
@@ -194,7 +209,7 @@ _STAMPED_DEFINES: list[tuple[str, str]] = [
     ("VER_PRODUCTMAJORVERSION", str(PRODUCT_MAJOR)),
     ("VER_PRODUCTMINORVERSION", str(PRODUCT_MINOR)),
     ("VER_PRODUCTBUILD",        "{s.yymm}"),
-    ("VER_PRODUCTBUILD_QFE",    "{s.dd}"),
+    ("VER_PRODUCTBUILD_QFE",    "{s.qfe}"),
     ("VER_PRODUCTVERSION_STR",  '"{s.version_str}"'),
     ("VER_PRODUCTVERSION",      "{s.version_tuple_str}"),
     ("VER_PRODUCTBETA_STR",     '"{s.beta_str}"'),
