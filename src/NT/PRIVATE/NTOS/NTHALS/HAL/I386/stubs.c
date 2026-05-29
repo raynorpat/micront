@@ -167,7 +167,7 @@ typedef struct _HAL_EFI_TIME {
 
 #define HAL_EFI_UNSPECIFIED_TIMEZONE  ((SHORT)0x07FF)
 
-static LARGE_INTEGER HalpBootSystemTime;     /* 100-ns since 1601 */
+LARGE_INTEGER HalpBootSystemTime;            /* 100-ns since 1601; read by random.c */
 static ULONGLONG     HalpBootTsc;            /* TSC at HAL init */
 ULONGLONG            HalpLastTickTsc;        /* updated by clock ISR */
 
@@ -335,6 +335,78 @@ HalpLogHypervisorSignature(VOID)
  * the boot-time TSC + last-tick anchor, and converts the UEFI
  * wall-clock seed into HalpBootSystemTime.
  */
+/* ---------------- Wall-clock / epoch source detection ----------------
+ *
+ * Detected once, at clock init.  HalpEpochRead points at the chosen backend
+ * (NULL == no source, clock starts at 1601).  The point of detecting up front
+ * is the CMOS RTC: an absent / floating RTC reads STATUS_A as 0xFF (UIP bit
+ * stuck set), which is exactly what drives HalpReadCmosTime's UIP guard to its
+ * million-iteration limit -- and under KVM every one of those reads is a
+ * port-I/O VM-exit, so it stalls boot for seconds.  By probing presence once
+ * here we only ever call into the CMOS reader when an RTC is genuinely there
+ * (in which case the guard exits promptly).  kvmclock will register ahead of
+ * CMOS later, so microvm-on-KVM won't even touch the RTC.
+ */
+typedef enum _HALP_CLOCK_SOURCE {
+    HalClockNone = 0,
+    HalClockEfi,
+    HalClockCmos
+    /* HalClockKvm -- reserved for the kvmclock backend */
+} HALP_CLOCK_SOURCE;
+
+typedef BOOLEAN (*PHALP_EPOCH_READ)(OUT PLARGE_INTEGER SystemTime);
+
+static HALP_CLOCK_SOURCE HalpClockSource = HalClockNone;
+static PHALP_EPOCH_READ  HalpEpochRead   = NULL;
+static PHAL_EFI_TIME     HalpEfiTimePtr  = NULL;
+
+static UCHAR HalpReadCmosReg(UCHAR reg);    /* defined below */
+
+/* Cheap one-time probe: is an MC146818 RTC actually present?  A floating /
+ * absent RTC reads 0xFF on STATUS_A (UIP permanently set). */
+static BOOLEAN
+HalpCmosPresent(VOID)
+{
+    return (BOOLEAN)(HalpReadCmosReg(CMOS_STATUS_A) != 0xFF);
+}
+
+static BOOLEAN
+HalpEpochReadEfi(OUT PLARGE_INTEGER SystemTime)
+{
+    return (BOOLEAN)(HalpEfiTimePtr != NULL &&
+                     HalpEfiTimeToSystemTime(HalpEfiTimePtr, SystemTime));
+}
+
+static BOOLEAN
+HalpEpochReadCmos(OUT PLARGE_INTEGER SystemTime)
+{
+    TIME_FIELDS tf;
+    HalpReadCmosTime(&tf);          /* RTC present -> UIP guard exits promptly */
+    return RtlTimeFieldsToTime(&tf, SystemTime);
+}
+
+/* Pick the epoch backend once, in priority order: the UEFI runtime seed first
+ * (host-synced, most trustworthy), then -- in future -- kvmclock, then the
+ * CMOS RTC if one is present. */
+static VOID
+HalpDetectClockSource(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    if (LoaderBlock->Spare1 != 0) {
+        HalpEfiTimePtr  = (PHAL_EFI_TIME)LoaderBlock->Spare1;
+        HalpEpochRead   = HalpEpochReadEfi;
+        HalpClockSource = HalClockEfi;
+        HalpSerialPrint("HAL: clock source = UEFI runtime\r\n");
+    } else if (HalpCmosPresent()) {
+        HalpEpochRead   = HalpEpochReadCmos;
+        HalpClockSource = HalClockCmos;
+        HalpSerialPrint("HAL: clock source = CMOS RTC\r\n");
+    } else {
+        HalpEpochRead   = NULL;
+        HalpClockSource = HalClockNone;
+        HalpSerialPrint("HAL: clock source = none (no UEFI seed, no RTC)\r\n");
+    }
+}
+
 VOID
 HalpInitTscClock(
     IN PLOADER_PARAMETER_BLOCK LoaderBlock
@@ -362,35 +434,17 @@ HalpInitTscClock(
     HalpBootTsc     = HalpReadTsc();
     HalpLastTickTsc = HalpBootTsc;
 
+    /* Choose the wall-clock backend once (see HalpDetectClockSource), then
+     * read the boot seed through it.  Detection has already ruled out an
+     * absent RTC, so we never enter HalpReadCmosTime's UIP spin here.  CMOS
+     * holds UTC (qemu -rtc base=utc, our documented contract); the EFI path
+     * uses RT->GetTime(). */
     HalpBootSystemTime.QuadPart = 0;
-    if (LoaderBlock->Spare1 != 0) {
-        PHAL_EFI_TIME efi = (PHAL_EFI_TIME)LoaderBlock->Spare1;
-        if (HalpEfiTimeToSystemTime(efi, &HalpBootSystemTime)) {
-            HalpPrintWallClock("HAL: wall-clock seed (UEFI): ", HalpBootSystemTime);
-        } else {
-            HalpSerialPrint("HAL: UEFI wall-clock seed: invalid\r\n");
-        }
+    HalpDetectClockSource(LoaderBlock);
+    if (HalpEpochRead != NULL && HalpEpochRead(&HalpBootSystemTime)) {
+        HalpPrintWallClock("HAL: wall-clock seed: ", HalpBootSystemTime);
     } else {
-        /* No UEFI runtime services on this boot (multiboot / -kernel /
-         * BIOS path).  Fall back to the CMOS MC146818 RTC: qemu seeds it
-         * from the host clock (base=utc) and emulates it under both TCG
-         * and KVM on pc/q35 — on microvm it needs -machine ...,rtc=on. */
-        TIME_FIELDS   tf;
-        LARGE_INTEGER seed;
-
-        HalpSerialPrint("HAL: no UEFI wall-clock seed — reading CMOS RTC\r\n");
-        HalpReadCmosTime(&tf);
-
-        /* CMOS holds UTC (qemu -rtc base=utc, our documented contract).
-         * RtlTimeFieldsToTime rejects out-of-range fields, which is how
-         * we detect an absent/floating RTC: reads come back 0xFF and
-         * decode to nonsense months/years. */
-        if (RtlTimeFieldsToTime(&tf, &seed)) {
-            HalpBootSystemTime = seed;
-            HalpPrintWallClock("HAL: wall-clock seed (CMOS RTC): ", HalpBootSystemTime);
-        } else {
-            HalpSerialPrint("HAL: CMOS RTC unreadable — wall clock starts at 1601\r\n");
-        }
+        HalpSerialPrint("HAL: no usable wall-clock — starts at 1601\r\n");
     }
 }
 

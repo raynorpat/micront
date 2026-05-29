@@ -62,6 +62,7 @@ Revision History:
 #include "cache.h"
 #include "hal.h"
 #include "cm.h"
+#include "rng.h"
 
 #define _NTDDK_
 

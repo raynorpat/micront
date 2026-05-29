@@ -22,6 +22,7 @@ $(BASEDIR)\public\sdk\lib\$(TARGET_DIRECTORY)\ntoskrnl.lib $(BASEDIR)\public\sdk
         $(TARGETPATH)\$(TARGET_DIRECTORY)\ob.lib     \
         $(TARGETPATH)\$(TARGET_DIRECTORY)\ps.lib     \
         $(TARGETPATH)\$(TARGET_DIRECTORY)\raw.lib    \
+        $(TARGETPATH)\$(TARGET_DIRECTORY)\rng.lib    \
         $(TARGETPATH)\$(TARGET_DIRECTORY)\ntosrtl.lib\
         $(TARGETPATH)\$(TARGET_DIRECTORY)\se.lib
     link -lib -nologo @<<
@@ -43,6 +44,7 @@ $(TARGETPATH)\$(TARGET_DIRECTORY)\mm.lib
 $(TARGETPATH)\$(TARGET_DIRECTORY)\ob.lib
 $(TARGETPATH)\$(TARGET_DIRECTORY)\ps.lib
 $(TARGETPATH)\$(TARGET_DIRECTORY)\raw.lib
+$(TARGETPATH)\$(TARGET_DIRECTORY)\rng.lib
 $(TARGETPATH)\$(TARGET_DIRECTORY)\ntosrtl.lib
 $(TARGETPATH)\$(TARGET_DIRECTORY)\se.lib
 $(BASEDIR)\public\sdk\lib\$(TARGET_DIRECTORY)\libcntpr.lib

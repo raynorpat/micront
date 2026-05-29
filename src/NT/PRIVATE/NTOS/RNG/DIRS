@@ -1,0 +1,13 @@
+!IF 0
+
+Module Name:
+
+    dirs.
+
+Abstract:
+
+    Subdirectories of the RNG subsystem (the in-kernel CSPRNG).
+
+!ENDIF
+
+DIRS=up

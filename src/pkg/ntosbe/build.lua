@@ -393,6 +393,7 @@ function M.main(opts)
     nmake_target("kd",     NTOS .. "/KD/UP",     "KD - Kernel Debugger")
     nmake_target("fsrtl",  NTOS .. "/FSRTL/UP",  "FSRTL - File System RTL")
     nmake_target("raw",    NTOS .. "/RAW/UP",    "RAW - Raw File System")
+    nmake_target("rng",    NTOS .. "/RNG/UP",    "RNG - Random Number Generator (CSPRNG)")
 
     -- ----- File-system / I/O drivers -----
     nmake_target("atdisk",  NTOS .. "/DD/HARDDISK", "ATDISK - IDE disk driver")
@@ -1374,7 +1375,7 @@ function M.main(opts)
     local NTOSKRNL_TARGETS = {
         "geni386",
         "ke", "rtl", "ex", "ob", "se", "ps", "mm", "cache", "config",
-        "lpc", "dbgk", "io", "kd", "fsrtl", "raw",
+        "lpc", "dbgk", "io", "kd", "fsrtl", "raw", "rng",
         "init",
         "hal",
     }

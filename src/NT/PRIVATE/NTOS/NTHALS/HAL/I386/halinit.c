@@ -107,6 +107,9 @@ HalInitSystem(
             mov cr0, eax
         }
 
+        /* First boot-time entropy sample. */
+        HalpAbsorbBootEntropy();
+
         HalpSerialPrint("HAL: Phase 0 complete (PICs programmed, all masked)\r\n");
 
         return TRUE;
@@ -169,6 +172,11 @@ HalInitSystem(
             HalpInitTscClock(LoaderBlock);
         }
 
+        /* Second sample: the TSC has now been calibrated and the CMOS clock
+         * read, so this reaches a different point in time than the Phase-0
+         * sample above. */
+        HalpAbsorbBootEntropy();
+
         /* Bring up the LAPIC + IOAPIC.  Sets HalpApicPresent unless CPUID
          * reports no local APIC (then we stay on the 8259). */
         HalpInitApic();
@@ -205,6 +213,9 @@ HalInitSystem(
             extern VOID KeSetTimeIncrement(ULONG Max, ULONG Min);
             KeSetTimeIncrement(100000, 100000);
         }
+
+        /* Third sample, after the clock is live. */
+        HalpAbsorbBootEntropy();
 
         HalpSerialPrint("HAL: Phase 1 complete (clock enabled)\r\n");
 

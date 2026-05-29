@@ -1,0 +1,32 @@
+!IF 0
+
+Module Name:
+
+    sources.
+
+Abstract:
+
+    Build instructions for the RNG subsystem (the in-kernel CSPRNG):
+    the Xoodoo permutation, the Xoodyak Cyclist pool, the power-on
+    self-test, and boot-time initialization.
+
+!ENDIF
+
+MAJORCOMP=ntos
+MINORCOMP=rng
+
+TARGETNAME=rng
+TARGETPATH=..\..\obj
+TARGETTYPE=LIBRARY
+
+INCLUDES=..;..\..\inc
+NTPROFILEINPUT=yes
+
+C_DEFINES=$(C_DEFINES) -D_NTSYSTEM_
+
+SOURCES=..\xoodoo.c   \
+        ..\rngpool.c  \
+        ..\rngkat.c   \
+        ..\rngsys.c
+
+NTTEST=

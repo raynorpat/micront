@@ -429,6 +429,8 @@ EXPORTS
     PsReturnPoolQuota
     PsTerminateSystemThread
     PsThreadType CONSTANT
+    RngAddEntropy
+    RngGenerateBytes
     RtlAllocateHeap
     RtlAddAccessAllowedAce
     RtlAnsiStringToUnicodeSize=RtlxAnsiStringToUnicodeSize

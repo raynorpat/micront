@@ -332,6 +332,15 @@ VOID HalpCpuid(IN ULONG Leaf, IN ULONG Subleaf,
                OUT PULONG OutEax, OUT PULONG OutEbx,
                OUT PULONG OutEcx, OUT PULONG OutEdx);
 
+/* Entropy gatherer (random.c): sample TSC/PIT/epoch/RDRAND and feed the RNG
+ * subsystem's pool.  RngAddEntropy is exported by ntoskrnl. */
+VOID HalpAbsorbBootEntropy(VOID);
+VOID RngAddEntropy(IN PVOID Buffer, IN ULONG Length);
+
+/* Boot wall-clock seed (stubs.c); 0 until HalpInitTscClock runs.  Absorbed as
+ * one of the entropy sources. */
+extern LARGE_INTEGER HalpBootSystemTime;
+
 PVOID
 HalpMapPhysicalMemoryWriteThrough(
     IN PVOID	PhysicalAddress,

@@ -403,6 +403,15 @@ Return Value:
         RtlResetRtlTranslations(&InitTableInfo);
 
         //
+        // Initialize the RNG subsystem (the in-kernel CSPRNG) before the HAL,
+        // so the HAL's boot-time entropy gathering has a live pool to feed.
+        // RngInitSystem runs the Xoodoo/Cyclist power-on self-test and
+        // bugchecks on failure rather than returning.
+        //
+
+        RngInitSystem(InitializationPhase, LoaderBlock);
+
+        //
         // Initialize the Hardware Architecture Layer (HAL).
         //
 
