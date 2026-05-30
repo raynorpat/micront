@@ -334,6 +334,147 @@ Return Value:
 
 BOOL
 APIENTRY
+GetFileAttributesExA(
+    LPCSTR lpFileName,
+    GET_FILEEX_INFO_LEVELS fInfoLevelId,
+    LPVOID lpFileInformation
+    )
+
+/*++
+
+Routine Description:
+
+    ANSI thunk to GetFileAttributesExW
+
+--*/
+
+{
+    PUNICODE_STRING Unicode;
+    ANSI_STRING AnsiString;
+    NTSTATUS Status;
+
+    Unicode = &NtCurrentTeb()->StaticUnicodeString;
+    RtlInitAnsiString(&AnsiString,lpFileName);
+    Status = Basep8BitStringToUnicodeString(Unicode,&AnsiString,FALSE);
+    if ( !NT_SUCCESS(Status) ) {
+        if ( Status == STATUS_BUFFER_OVERFLOW ) {
+            SetLastError(ERROR_FILENAME_EXCED_RANGE);
+            }
+        else {
+            BaseSetLastNTError(Status);
+            }
+        return FALSE;
+        }
+    return ( GetFileAttributesExW((LPCWSTR)Unicode->Buffer,fInfoLevelId,lpFileInformation) );
+}
+
+BOOL
+APIENTRY
+GetFileAttributesExW(
+    LPCWSTR lpFileName,
+    GET_FILEEX_INFO_LEVELS fInfoLevelId,
+    LPVOID lpFileInformation
+    )
+
+/*++
+
+Routine Description:
+
+    The main attributes of a file -- attributes, timestamps, and size -- can be
+    obtained using GetFileAttributesEx.  Unlike GetFileAttributes it also
+    returns the file size and times, via NtQueryFullAttributesFile.
+
+Arguments:
+
+    lpFileName - Supplies the name of the file whose attributes are to be
+        returned.
+
+    fInfoLevelId - Supplies the info level.  Only GetFileExInfoStandard is
+        defined; it returns a WIN32_FILE_ATTRIBUTE_DATA.
+
+    lpFileInformation - Supplies the buffer that receives the information.
+
+Return Value:
+
+    TRUE - The operation was successful.
+
+    FALSE - The operation failed.  Extended error status is available using
+        GetLastError.
+
+--*/
+
+{
+    NTSTATUS Status;
+    OBJECT_ATTRIBUTES Obja;
+    UNICODE_STRING FileName;
+    FILE_NETWORK_OPEN_INFORMATION NetworkInfo;
+    LPWIN32_FILE_ATTRIBUTE_DATA AttributeData;
+    BOOLEAN TranslationStatus;
+    RTL_RELATIVE_NAME RelativeName;
+    PVOID FreeBuffer;
+
+    //
+    // Only the standard information level is defined.
+    //
+
+    if ( fInfoLevelId >= GetFileExMaxInfoLevel || fInfoLevelId < GetFileExInfoStandard ) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+        }
+
+    TranslationStatus = RtlDosPathNameToNtPathName_U(
+                            lpFileName,
+                            &FileName,
+                            NULL,
+                            &RelativeName
+                            );
+
+    if ( !TranslationStatus ) {
+        SetLastError(ERROR_PATH_NOT_FOUND);
+        return FALSE;
+        }
+
+    FreeBuffer = FileName.Buffer;
+
+    if ( RelativeName.RelativeName.Length ) {
+        FileName = *(PUNICODE_STRING)&RelativeName.RelativeName;
+        }
+    else {
+        RelativeName.ContainingDirectory = NULL;
+        }
+
+    InitializeObjectAttributes(
+        &Obja,
+        &FileName,
+        OBJ_CASE_INSENSITIVE,
+        RelativeName.ContainingDirectory,
+        NULL
+        );
+
+    //
+    // Query the file's full attributes using the path-based NT service.
+    //
+
+    Status = NtQueryFullAttributesFile( &Obja, &NetworkInfo );
+    RtlFreeHeap(RtlProcessHeap(), 0, FreeBuffer);
+    if ( NT_SUCCESS(Status) ) {
+        AttributeData = (LPWIN32_FILE_ATTRIBUTE_DATA)lpFileInformation;
+        AttributeData->dwFileAttributes = NetworkInfo.FileAttributes;
+        AttributeData->ftCreationTime   = *(PFILETIME)&NetworkInfo.CreationTime;
+        AttributeData->ftLastAccessTime = *(PFILETIME)&NetworkInfo.LastAccessTime;
+        AttributeData->ftLastWriteTime  = *(PFILETIME)&NetworkInfo.LastWriteTime;
+        AttributeData->nFileSizeHigh    = NetworkInfo.EndOfFile.HighPart;
+        AttributeData->nFileSizeLow     = (DWORD)NetworkInfo.EndOfFile.LowPart;
+        return TRUE;
+        }
+    else {
+        BaseSetLastNTError(Status);
+        return FALSE;
+        }
+}
+
+BOOL
+APIENTRY
 DeleteFileA(
     LPCSTR lpFileName
     )

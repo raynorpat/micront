@@ -1623,5 +1623,13 @@ SYSSTUBS_ENTRY5  183, GenerateSecureRandom, 2
 SYSSTUBS_ENTRY6  183, GenerateSecureRandom, 2 
 SYSSTUBS_ENTRY7  183, GenerateSecureRandom, 2 
 SYSSTUBS_ENTRY8  183, GenerateSecureRandom, 2 
+SYSSTUBS_ENTRY1  184, QueryFullAttributesFile, 2 
+SYSSTUBS_ENTRY2  184, QueryFullAttributesFile, 2 
+SYSSTUBS_ENTRY3  184, QueryFullAttributesFile, 2 
+SYSSTUBS_ENTRY4  184, QueryFullAttributesFile, 2 
+SYSSTUBS_ENTRY5  184, QueryFullAttributesFile, 2 
+SYSSTUBS_ENTRY6  184, QueryFullAttributesFile, 2 
+SYSSTUBS_ENTRY7  184, QueryFullAttributesFile, 2 
+SYSSTUBS_ENTRY8  184, QueryFullAttributesFile, 2 
 
 STUBS_END

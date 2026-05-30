@@ -178,6 +178,15 @@ typedef struct _OPEN_PACKET {
     PFILE_BASIC_INFORMATION BasicInformation;
 
     //
+    // The following is used when performing a fast full-attributes query
+    // (NtQueryFullAttributesFile).  The parse routine synthesizes it from the
+    // basic + standard information, since the file systems do not implement
+    // the FileNetworkOpenInformation query class.
+    //
+
+    PFILE_NETWORK_OPEN_INFORMATION NetworkInformation;
+
+    //
     // The type of file to create.
     //
 

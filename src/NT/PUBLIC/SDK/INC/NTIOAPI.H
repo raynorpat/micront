@@ -656,6 +656,16 @@ typedef struct _FILE_STANDARD_INFORMATION {                 // ntddk nthal
     BOOLEAN Directory;                                      // ntddk nthal
 } FILE_STANDARD_INFORMATION, *PFILE_STANDARD_INFORMATION;   // ntddk nthal
                                                             // ntddk nthal
+typedef struct _FILE_NETWORK_OPEN_INFORMATION {             // ntddk nthal
+    LARGE_INTEGER CreationTime;                             // ntddk nthal
+    LARGE_INTEGER LastAccessTime;                           // ntddk nthal
+    LARGE_INTEGER LastWriteTime;                            // ntddk nthal
+    LARGE_INTEGER ChangeTime;                               // ntddk nthal
+    LARGE_INTEGER AllocationSize;                           // ntddk nthal
+    LARGE_INTEGER EndOfFile;                                // ntddk nthal
+    ULONG FileAttributes;                                   // ntddk nthal
+} FILE_NETWORK_OPEN_INFORMATION, *PFILE_NETWORK_OPEN_INFORMATION; // ntddk nthal
+
 typedef struct _FILE_INTERNAL_INFORMATION {
     LARGE_INTEGER IndexNumber;
 } FILE_INTERNAL_INFORMATION, *PFILE_INTERNAL_INFORMATION;
@@ -1071,6 +1081,14 @@ NTAPI
 NtQueryAttributesFile(
     IN POBJECT_ATTRIBUTES ObjectAttributes,
     OUT PFILE_BASIC_INFORMATION FileInformation
+    );
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+NtQueryFullAttributesFile(
+    IN POBJECT_ATTRIBUTES ObjectAttributes,
+    OUT PFILE_NETWORK_OPEN_INFORMATION FileInformation
     );
 
 NTSYSAPI

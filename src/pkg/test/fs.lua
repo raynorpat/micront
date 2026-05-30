@@ -74,6 +74,55 @@ t.test("NtQueryInformationFile(Basic) on kernel32 reports attributes", function(
     h:close()
 end)
 
+-- NtQueryFullAttributesFile — the path-based full stat that backs
+-- GetFileAttributesEx.  The kernel synthesizes its result in the parse path
+-- (FileBasic + FileStandard), so these tests cross-check the synthesized
+-- FILE_NETWORK_OPEN_INFORMATION against the trusted handle-based queries on
+-- the same file -- no hardcoded oracle, works on whatever FS is mounted.
+local KERNEL32 = "\\SystemRoot\\SYSTEM32\\KERNEL32.DLL"
+
+t.test("NtQueryFullAttributesFile size matches FileStandardInformation", function()
+    local full = fs.query_full_attributes(KERNEL32)
+    -- Independent path to the size: open + FileStandardInformation.
+    local h   = open_ro(KERNEL32)
+    local std = fs.query_standard(h)
+    h:close()
+    t.ok(full.EndOfFile.QuadPart == std.EndOfFile.QuadPart,
+         string.format("EndOfFile full=%s std=%s",
+                       tostring(full.EndOfFile.QuadPart),
+                       tostring(std.EndOfFile.QuadPart)))
+    t.ok(full.AllocationSize.QuadPart == std.AllocationSize.QuadPart,
+         "AllocationSize agrees with FileStandardInformation")
+    t.ok(full.EndOfFile.QuadPart > 100000, "kernel32.dll larger than 100KB")
+end)
+
+t.test("NtQueryFullAttributesFile times/attrs match NtQueryAttributesFile", function()
+    local full  = fs.query_full_attributes(KERNEL32)
+    local basic = fs.query_attributes(KERNEL32)
+    t.eq(tonumber(ffi.cast('uint32_t', full.FileAttributes)),
+         tonumber(ffi.cast('uint32_t', basic.FileAttributes)),
+         "FileAttributes agree")
+    t.ok(full.CreationTime.QuadPart  == basic.CreationTime.QuadPart,
+         "CreationTime agrees")
+    t.ok(full.LastWriteTime.QuadPart == basic.LastWriteTime.QuadPart,
+         "LastWriteTime agrees")
+    t.eq(tonumber(ffi.cast('uint32_t', full.FileAttributes)) % 0x20, 0,
+         "directory bit clear on a regular file")
+end)
+
+t.test("NtQueryFullAttributesFile sets DIRECTORY on a directory", function()
+    local full = fs.query_full_attributes("\\SystemRoot\\")
+    t.ok(bit.band(ffi.cast('uint32_t', full.FileAttributes),
+                  fs.FILE_ATTRIBUTE_DIRECTORY) ~= 0,
+         "directory bit set on \\SystemRoot\\")
+end)
+
+t.test("NtQueryFullAttributesFile on a missing path raises", function()
+    t.raises(function()
+        fs.query_full_attributes("\\SystemRoot\\NoSuchFile.xyz")
+    end)
+end)
+
 t.test("NtReadFile reads MZ magic from kernel32", function()
     local h = open_ro("\\SystemRoot\\SYSTEM32\\KERNEL32.DLL")
     local buf = ffi.new('char[2]')

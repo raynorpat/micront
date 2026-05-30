@@ -229,6 +229,8 @@ EXPORTS
     GetCompressedFileSizeA
     GetCompressedFileSizeW
     GetFileAttributesA
+    GetFileAttributesExA
+    GetFileAttributesExW
     GetFileAttributesW
     GetFileInformationByHandle
     GetFileSize

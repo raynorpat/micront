@@ -182,3 +182,4 @@ WriteFile,9
 WriteRequestData,6
 WriteVirtualMemory,5
 GenerateSecureRandom,2
+QueryFullAttributesFile,2

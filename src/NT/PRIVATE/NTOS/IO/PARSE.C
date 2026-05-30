@@ -1188,8 +1188,15 @@ Return Value:
                     PFAST_IO_DISPATCH fastIoDispatch;
                     BOOLEAN queryResult = FALSE;
 
+                    //
+                    // The basic-info fast path satisfies a basic-attributes
+                    // query only; a full (network open) query also needs the
+                    // file size, which FastIoQueryBasicInfo does not return, so
+                    // it is forced down the real-file-object path below.
+                    //
                     fastIoDispatch = deviceObject->DriverObject->FastIoDispatch;
-                    if (fastIoDispatch && fastIoDispatch->FastIoQueryBasicInfo) {
+                    if (op->BasicInformation &&
+                        fastIoDispatch && fastIoDispatch->FastIoQueryBasicInfo) {
                         queryResult = fastIoDispatch->FastIoQueryBasicInfo( fileObject,
                                                                             TRUE,
                                                                             op->BasicInformation,
@@ -1220,9 +1227,38 @@ Return Value:
                                                                  basicInfo,
                                                                  &returnedLength );
                                 if (NT_SUCCESS( status )) {
-                                    RtlCopyMemory( op->BasicInformation,
-                                                   basicInfo,
-                                                   returnedLength );
+                                    if (op->NetworkInformation) {
+
+                                        //
+                                        // NtQueryFullAttributesFile: synthesize
+                                        // FILE_NETWORK_OPEN_INFORMATION from the
+                                        // basic attributes plus the standard
+                                        // information (for the file size).  The
+                                        // file systems do not implement the
+                                        // FileNetworkOpenInformation query class.
+                                        //
+
+                                        FILE_STANDARD_INFORMATION standardInfo;
+
+                                        status = IoQueryFileInformation( fileObject,
+                                                                         FileStandardInformation,
+                                                                         sizeof( FILE_STANDARD_INFORMATION ),
+                                                                         &standardInfo,
+                                                                         &returnedLength );
+                                        if (NT_SUCCESS( status )) {
+                                            op->NetworkInformation->CreationTime   = basicInfo->CreationTime;
+                                            op->NetworkInformation->LastAccessTime = basicInfo->LastAccessTime;
+                                            op->NetworkInformation->LastWriteTime  = basicInfo->LastWriteTime;
+                                            op->NetworkInformation->ChangeTime     = basicInfo->ChangeTime;
+                                            op->NetworkInformation->AllocationSize = standardInfo.AllocationSize;
+                                            op->NetworkInformation->EndOfFile      = standardInfo.EndOfFile;
+                                            op->NetworkInformation->FileAttributes = basicInfo->FileAttributes;
+                                        }
+                                    } else {
+                                        RtlCopyMemory( op->BasicInformation,
+                                                       basicInfo,
+                                                       returnedLength );
+                                    }
                                 }
                                 ExFreePool( basicInfo );
                             }

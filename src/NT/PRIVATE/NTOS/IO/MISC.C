@@ -761,3 +761,120 @@ Return Value:
         return openPacket.FinalStatus;
     }
 }
+
+
+NTSTATUS
+NtQueryFullAttributesFile(
+    IN POBJECT_ATTRIBUTES ObjectAttributes,
+    OUT PFILE_NETWORK_OPEN_INFORMATION FileInformation
+    )
+
+/*++
+
+Routine Description:
+
+    This service queries the full ("network open") attributes for a specified
+    file: the timestamps and attributes returned by NtQueryAttributesFile, plus
+    the allocation size and end-of-file.  GetFileAttributesEx / stat needs the
+    size, which the basic query does not provide.
+
+Arguments:
+
+    ObjectAttributes - Supplies the attributes to be used for file object (name,
+        SECURITY_DESCRIPTOR, etc.)
+
+    FileInformation - Supplies an output buffer to receive the returned file
+        attributes information.
+
+Return Value:
+
+    The status returned is the final completion status of the operation.
+
+--*/
+
+{
+    KPROCESSOR_MODE requestorMode;
+    NTSTATUS status;
+    OPEN_PACKET openPacket;
+    HANDLE handle;
+
+    //
+    // Get the previous mode;  i.e., the mode of the caller.
+    //
+
+    requestorMode = KeGetPreviousMode();
+
+    if (requestorMode != KernelMode) {
+
+        try {
+
+            //
+            // The caller's mode is not kernel, so probe the output buffer.
+            //
+
+            ProbeForWrite( FileInformation,
+                           sizeof( FILE_NETWORK_OPEN_INFORMATION ),
+                           sizeof( ULONG ));
+
+        } except(EXCEPTION_EXECUTE_HANDLER) {
+
+            //
+            // An exception was incurred while probing the caller's parameters.
+            // Simply return an appropriate error status code.
+            //
+
+            return GetExceptionCode();
+        }
+    }
+
+    //
+    // Build a parse open packet that tells the parse method to open the file,
+    // query the file's full attributes, and then close it.  Setting the
+    // NetworkInformation field (rather than BasicInformation) selects the full
+    // query; the parse routine synthesizes the result from the basic + standard
+    // information, since the file systems do not implement the
+    // FileNetworkOpenInformation query class.
+    //
+
+    RtlZeroMemory( &openPacket, sizeof( OPEN_PACKET ) );
+
+    openPacket.Type = IO_TYPE_OPEN_PACKET;
+    openPacket.Size = sizeof( OPEN_PACKET );
+    openPacket.CreateOptions = (((UCHAR) FILE_OPEN) << 24);
+    openPacket.ShareAccess = (USHORT) FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    openPacket.NetworkInformation = FileInformation;
+    openPacket.QueryOnly = TRUE;
+
+    //
+    // Update the open count for this process.
+    //
+
+    IopUpdateOtherOperationCount();
+
+    //
+    // Open the object by its name.  Because of the special QueryOnly flag set
+    // in the open packet, the parse routine will open the file, and then
+    // realize that it is only performing a query.  It will therefore perform
+    // the query, and immediately close the file.
+    //
+
+    status = ObOpenObjectByName( ObjectAttributes,
+                                 (POBJECT_TYPE) NULL,
+                                 requestorMode,
+                                 NULL,
+                                 FILE_READ_ATTRIBUTES,
+                                 &openPacket,
+                                 &handle );
+
+    //
+    // The operation is successful if the parse check field of the open packet
+    // indicates that the parse routine was actually invoked, and the final
+    // status field of the packet is set to success.
+    //
+
+    if (openPacket.ParseCheck != OPEN_PACKET_PATTERN) {
+        return status;
+    } else {
+        return openPacket.FinalStatus;
+    }
+}

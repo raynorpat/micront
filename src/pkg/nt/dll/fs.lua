@@ -50,6 +50,16 @@ typedef struct _FILE_STANDARD_INFORMATION {
     unsigned char Directory;
 } FILE_STANDARD_INFORMATION;
 
+typedef struct _FILE_NETWORK_OPEN_INFORMATION {
+    LARGE_INTEGER CreationTime;
+    LARGE_INTEGER LastAccessTime;
+    LARGE_INTEGER LastWriteTime;
+    LARGE_INTEGER ChangeTime;
+    LARGE_INTEGER AllocationSize;
+    LARGE_INTEGER EndOfFile;
+    ULONG         FileAttributes;
+} FILE_NETWORK_OPEN_INFORMATION;
+
 typedef struct _FILE_DIRECTORY_INFORMATION {
     ULONG         NextEntryOffset;
     ULONG         FileIndex;
@@ -253,13 +263,20 @@ NTSTATUS __stdcall NtDeviceIoControlFile(HANDLE FileHandle,
                                          void *OutputBuffer,
                                          ULONG OutputBufferLength);
 
-/* Cheap stat — populates FILE_BASIC_INFORMATION without opening a
- * handle.  NT 3.5 has the syscall (NTOS/IO/MISC.C:657); NT 4.0 added
- * NtQueryFullAttributesFile which also returns size in one call.  We
- * only have NtQueryAttributesFile here; size still needs an open. */
+/* Path-based "cheap stat" — the kernel opens, queries, and closes in one
+ * syscall, no handle required.
+ *   NtQueryAttributesFile      -> FILE_BASIC_INFORMATION         (times + attrs)
+ *   NtQueryFullAttributesFile  -> FILE_NETWORK_OPEN_INFORMATION  (also size)
+ * Both live in NTOS/IO/MISC.C.  NtQueryFullAttributesFile is the post-3.5
+ * addition forward-ported to back GetFileAttributesEx; the kernel synthesizes
+ * its size from FileStandardInformation in the parse path. */
 NTSTATUS __stdcall NtQueryAttributesFile(
     OBJECT_ATTRIBUTES      *ObjectAttributes,
     FILE_BASIC_INFORMATION *FileInformation);
+
+NTSTATUS __stdcall NtQueryFullAttributesFile(
+    OBJECT_ATTRIBUTES             *ObjectAttributes,
+    FILE_NETWORK_OPEN_INFORMATION *FileInformation);
 ]]
 
 -- STATUS_END_OF_FILE has severity ERROR, so the uniform is_error
@@ -487,6 +504,26 @@ end
 
 M.query_basic    = make_file_query('FILE_BASIC_INFORMATION',    FileBasicInformation)
 M.query_standard = make_file_query('FILE_STANDARD_INFORMATION', FileStandardInformation)
+
+-- Path-based queries (no handle): the kernel opens, queries, and closes in
+-- one syscall.  query_attributes returns basic info (times + attrs);
+-- query_full_attributes also returns the file size (EndOfFile /
+-- AllocationSize) -- the field GetFileAttributesEx / stat needs.
+function M.query_attributes(path)
+    local p    = oa.path(path)
+    local info = ffi.new('FILE_BASIC_INFORMATION')
+    local st   = ntdll.NtQueryAttributesFile(p.oa, info)
+    if err.is_error(st) then err.raise('NtQueryAttributesFile', st) end
+    return info
+end
+
+function M.query_full_attributes(path)
+    local p    = oa.path(path)
+    local info = ffi.new('FILE_NETWORK_OPEN_INFORMATION')
+    local st   = ntdll.NtQueryFullAttributesFile(p.oa, info)
+    if err.is_error(st) then err.raise('NtQueryFullAttributesFile', st) end
+    return info
+end
 
 -- Generic NtSetInformationFile bridge. info is a cdata of any size; the
 -- caller supplies the matching FILE_*_INFORMATION class.
