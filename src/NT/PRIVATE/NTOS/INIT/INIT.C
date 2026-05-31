@@ -905,8 +905,7 @@ QueryInitConfig(
                                    OBJ_CASE_INSENSITIVE | OBJ_INHERIT,
                                    NULL, NULL);
         status = ZwCreateFile(&h,
-                              /* DesiredAccess: GENERIC_READ|GENERIC_WRITE|SYNCHRONIZE */
-                              0xC0100000,
+                              GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE,
                               &stdioObja, &iosb,
                               NULL,                  /* AllocationSize */
                               0x80,                  /* FileAttributes = NORMAL */
@@ -916,13 +915,25 @@ QueryInitConfig(
                               NULL, 0);              /* EaBuffer */
         if (NT_SUCCESS(status)) {
             INIT_SERIAL_TIMEOUTS t;
-            /* Raw mode: read returns as soon as any byte arrives. The
-             * per-call-first-byte block is what an interactive REPL
-             * wants — fread(1) blocks for a keystroke, fread(N) returns
-             * on the first byte with whatever's buffered. */
-            t.ReadIntervalTimeout         = (ULONG)-1;   /* MAXULONG */
-            t.ReadTotalTimeoutMultiplier  = (ULONG)-1;
-            t.ReadTotalTimeoutConstant    = 0;
+            /* Raw mode tuned for an interactive REPL: block for the first
+             * keystroke, then return immediately with whatever's buffered.
+             *
+             * Interval=MAXULONG + Multiplier=MAXULONG selects the SERIAL
+             * driver's "crunch down to one" mode (serial/read.c): the read
+             * goes under ISR control and completes on the FIRST received
+             * byte (NumberNeededForRead is forced to 1).
+             *
+             * ReadTotalTimeoutConstant is the OVERALL ceiling for that wait.
+             * It must be large but NOT zero: with 0 the total timer's due
+             * time computes to 0, fires instantly, and the read completes
+             * with zero bytes -- which the CRT reads as EOF, so an inherited
+             * stdin sees end-of-file on the very first read and any REPL
+             * exits immediately.  It also must not be MAXULONG: the
+             * SET_TIMEOUTS IOCTL rejects all three read fields = MAXULONG.
+             * MAXULONG-1 (~49 days) is effectively "wait forever for a key". */
+            t.ReadIntervalTimeout         = (ULONG)-1;   /* MAXULONG     */
+            t.ReadTotalTimeoutMultiplier  = (ULONG)-1;   /* MAXULONG     */
+            t.ReadTotalTimeoutConstant    = (ULONG)-2;   /* MAXULONG - 1 */
             t.WriteTotalTimeoutMultiplier = 0;
             t.WriteTotalTimeoutConstant   = 0;
             /* Best-effort: ignore failure (device may not be a serial

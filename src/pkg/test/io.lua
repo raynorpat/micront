@@ -273,13 +273,67 @@ t.test("setvbuf returns the file (no-op stub)", function()
     os.remove(SCRATCH)
 end)
 
-t.test("io.popen / tmpfile / read / write raise with clear message", function()
+t.test("io.popen / tmpfile raise with clear message", function()
     t.raises(io.popen,   "popen")
     t.raises(io.tmpfile, "tmpfile")
-    t.raises(io.read,    "read")
-    t.raises(io.write,   "write")
 end)
 
-t.test("io.lines without filename raises (no default stdin)", function()
-    t.raises(function() io.lines() end, "stdin")
+-- ------------------------------------------------------------------
+-- Standard streams (io.stdin / io.stdout / io.stderr) + default I/O
+-- ------------------------------------------------------------------
+--
+-- These wrap the inherited PEB Standard{Input,Output,Error} handles — on
+-- micront the serial console.  We never read from the live console here
+-- (that would block the suite waiting for a keystroke); instead we drive
+-- io.read / io.write through io.input / io.output redirected at a scratch
+-- file, which exercises the exact same code path without needing input.
+
+t.test("io.stdin/stdout/stderr are inherited file objects", function()
+    t.eq(io.type(io.stdin),  "file", "stdin wired from PEB StandardInput")
+    t.eq(io.type(io.stdout), "file", "stdout wired from PEB StandardOutput")
+    t.eq(io.type(io.stderr), "file", "stderr wired from PEB StandardError")
+end)
+
+t.test("io.input()/io.output() default to stdin/stdout", function()
+    t.eq(io.input(),  io.stdin)
+    t.eq(io.output(), io.stdout)
+end)
+
+t.test("io.input(filename) redirects io.read, then restores", function()
+    reset_scratch()
+    local w = io.open(SCRATCH, "wb")
+    w:write("line1\nline2\n")
+    w:close()
+
+    local prev = io.input()
+    local f = io.input(SCRATCH)                -- open + install as default input
+    t.eq(io.type(f), "file")
+    t.eq(io.read("*l"), "line1", "io.read pulls from the redirected input")
+    t.eq(io.read("*l"), "line2")
+    f:close()
+    io.input(prev)                             -- restore the console as stdin
+    t.eq(io.input(), prev)
+    os.remove(SCRATCH)
+end)
+
+t.test("io.output(filename) redirects io.write, then restores", function()
+    reset_scratch()
+    local prev = io.output()
+    local f = io.output(SCRATCH)
+    local ret = io.write("hello ", 123, "\n")
+    t.eq(ret, f, "io.write returns the default output file for chaining")
+    f:close()
+    io.output(prev)                            -- restore the console as stdout
+    t.eq(io.output(), prev)
+
+    local r = io.open(SCRATCH, "rb")
+    t.eq(r:read("*a"), "hello 123\n")
+    r:close()
+    os.remove(SCRATCH)
+end)
+
+t.test("io.lines() with no filename returns an iterator over stdin", function()
+    -- Just confirm we get an iterator (the old code raised here). Don't
+    -- pull from it — that would block on the console.
+    t.eq(type(io.lines()), "function")
 end)

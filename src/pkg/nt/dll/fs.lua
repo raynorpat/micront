@@ -277,6 +277,17 @@ NTSTATUS __stdcall NtQueryAttributesFile(
 NTSTATUS __stdcall NtQueryFullAttributesFile(
     OBJECT_ATTRIBUTES             *ObjectAttributes,
     FILE_NETWORK_OPEN_INFORMATION *FileInformation);
+
+/* SERIAL_TIMEOUTS (NTDDSER.H) — operand for IOCTL_SERIAL_{GET,SET}_TIMEOUTS.
+ * All fields are milliseconds; the SERIAL driver (DD/SERIAL/READ.C) reads
+ * them to decide how long a read waits.  See M.serial_set_timeouts. */
+typedef struct _SERIAL_TIMEOUTS {
+    ULONG ReadIntervalTimeout;
+    ULONG ReadTotalTimeoutMultiplier;
+    ULONG ReadTotalTimeoutConstant;
+    ULONG WriteTotalTimeoutMultiplier;
+    ULONG WriteTotalTimeoutConstant;
+} SERIAL_TIMEOUTS;
 ]]
 
 -- STATUS_END_OF_FILE has severity ERROR, so the uniform is_error
@@ -343,6 +354,12 @@ M.FILE_ATTRIBUTE_DIRECTORY     = 0x00000010
 -- (severity ERROR) is special-cased through NtReadFile rather than
 -- raised, so callers that want to detect EOF need this constant.
 M.STATUS_END_OF_FILE           = 0xC0000011
+-- Named-pipe read boundaries: PIPE_EMPTY means "no data available right now"
+-- on a nowait (FILE_PIPE_COMPLETE_OPERATION) handle — NOT end of stream;
+-- BROKEN / CLOSING mean the writer end is gone (treat as EOF).
+M.STATUS_PIPE_EMPTY            = 0xC00000D9
+M.STATUS_PIPE_BROKEN          = 0xC000014B
+M.STATUS_PIPE_CLOSING         = 0xC0000128
 M.STATUS_NO_MORE_FILES         = 0x80000006
 -- A filtered NtQueryDirectoryFile whose pattern matched nothing at all
 -- returns this on the first call (vs NO_MORE_FILES once some entries
@@ -467,6 +484,37 @@ function M.NtDeviceIoControlFile(h, ioctl,
                                            out_buf, out_len or 0)
     if err.is_error(st) then err.raise('NtDeviceIoControlFile', st) end
     return iosb.Information
+end
+
+-- IOCTL_SERIAL_{GET,SET}_TIMEOUTS, CTL_CODE(FILE_DEVICE_SERIAL_PORT=0x1b,
+-- function, METHOD_BUFFERED, FILE_ANY_ACCESS).  Mirrors the literal INIT.C
+-- uses to put the boot console into "crunch down to one" raw mode.
+M.IOCTL_SERIAL_GET_TIMEOUTS = 0x001B0020
+M.IOCTL_SERIAL_SET_TIMEOUTS = 0x001B001C
+
+-- serial_get_timeouts(h) -> SERIAL_TIMEOUTS cdata (a snapshot the caller can
+-- mutate and feed back to serial_set_timeouts to restore prior state).
+function M.serial_get_timeouts(h)
+    local t = ffi.new('SERIAL_TIMEOUTS')
+    M.NtDeviceIoControlFile(h, M.IOCTL_SERIAL_GET_TIMEOUTS,
+        nil, 0, t, ffi.sizeof('SERIAL_TIMEOUTS'))
+    return t
+end
+
+-- serial_set_timeouts(h, t) where t is a SERIAL_TIMEOUTS cdata (or a table
+-- with the same field names).  Raises on a non-serial device.
+function M.serial_set_timeouts(h, t)
+    if type(t) == 'table' then
+        local c = ffi.new('SERIAL_TIMEOUTS')
+        c.ReadIntervalTimeout         = t.ReadIntervalTimeout         or 0
+        c.ReadTotalTimeoutMultiplier  = t.ReadTotalTimeoutMultiplier  or 0
+        c.ReadTotalTimeoutConstant    = t.ReadTotalTimeoutConstant    or 0
+        c.WriteTotalTimeoutMultiplier = t.WriteTotalTimeoutMultiplier or 0
+        c.WriteTotalTimeoutConstant   = t.WriteTotalTimeoutConstant   or 0
+        t = c
+    end
+    M.NtDeviceIoControlFile(h, M.IOCTL_SERIAL_SET_TIMEOUTS,
+        t, ffi.sizeof('SERIAL_TIMEOUTS'), nil, 0)
 end
 
 -- FILE_INFORMATION_CLASS subset used below. Values from

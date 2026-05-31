@@ -15,10 +15,14 @@
 --   io.popen, io.tmpfile            raise "not supported" — pipe needs
 --                                   process creation, tmpfile needs an
 --                                   NT-namespace tmp dir convention.
---   io.read, io.write,              raise — io.stdin/stdout/stderr need
---   io.input, io.output             PEB walk for the inherited handles.
---                                   Use file methods on real files,
---                                   or print() for console output.
+--   io.stdin/stdout/stderr          File objects over the inherited
+--                                   PEB Standard{Input,Output,Error}
+--                                   handles (on micront, the serial
+--                                   console). Borrowed — never NtClosed.
+--   io.read, io.write,              operate on the default input/output
+--   io.input, io.output             streams (io.stdin / io.stdout). Pass
+--                                   a filename to io.input/io.output to
+--                                   redirect; pass a file to set it.
 --
 -- File methods:
 --   f:read(...)        formats: "*a"/"a", "*l"/"l", n (bytes).
@@ -36,6 +40,7 @@ local ffi    = require('ffi')
 local bit    = require('bit')
 local fs     = require('nt.dll.fs')
 local oa_mod = require('nt.dll.oa')
+local ps     = require('nt.dll.ps')   -- parent_stdio(): inherited PEB handles
 
 -- All NT-side constants come from nt.dll.fs — anything magic here
 -- would be a duplicate that silently desyncs if the canonical value
@@ -46,6 +51,11 @@ local FILE_SHARE_ALL = fs.FILE_SHARE_READ + fs.FILE_SHARE_WRITE
                      + fs.FILE_SHARE_DELETE
 
 local M = {}
+
+-- Default input/output streams for io.read / io.write / io.lines / io.close.
+-- Set to io.stdin / io.stdout once the inherited handles are wrapped below;
+-- forward-declared here so the module functions close over them.
+local default_input, default_output
 
 -- ------------------------------------------------------------------
 -- File class
@@ -339,8 +349,13 @@ end
 
 function M.lines(path, ...)
     if path == nil then
-        error("io.lines without filename: no default input stream "
-              .. "(io.stdin not implemented in v1)", 2)
+        -- No filename: iterate lines of the default input stream (io.stdin).
+        -- Unlike the filename form, we never close it — it's the console.
+        if not default_input then
+            error("io.lines: no default input stream "
+                  .. "(no inherited StandardInput handle)", 2)
+        end
+        return default_input:lines(...)
     end
     local fmts = {...}
     if #fmts == 0 then fmts = {"*l"} end
@@ -373,9 +388,10 @@ function M.type(obj)
 end
 
 function M.close(file)
+    -- No argument: close the default output stream (stock Lua behaviour).
+    file = file or default_output
     if file == nil then
-        error("io.close without argument: no default output stream "
-              .. "(io.stdout not implemented in v1)", 2)
+        error("io.close: no default output stream", 2)
     end
     return file:close()
 end
@@ -388,16 +404,90 @@ end
 
 M.popen   = not_supported("popen")
 M.tmpfile = not_supported("tmpfile")
-M.read    = not_supported("read")
-M.write   = not_supported("write")
-M.input   = not_supported("input")
-M.output  = not_supported("output")
 
--- io.stdin / io.stdout / io.stderr — left undefined in v1. Wiring them
--- requires reading the inherited handles from
--- PEB->ProcessParameters->Standard{Input,Output,Error} via
--- NtQueryInformationProcess, which is its own follow-up alongside
--- process creation. For now: print() for output, file methods on real
--- files for everything else.
+-- ------------------------------------------------------------------
+-- Standard streams: io.stdin / io.stdout / io.stderr
+-- ------------------------------------------------------------------
+--
+-- These wrap the handles the process inherited in
+-- PEB->ProcessParameters->Standard{Input,Output,Error}.  On micront all
+-- three are normally the same \Device\Serial0 console handle that init
+-- opened (INIT.C) and every child inherits.  ps.parent_stdio() walks the
+-- current PEB (via NtQueryInformationProcess) and returns them as
+-- BORROWED NT_HANDLEs: their :close() and __gc are no-ops, so wrapping
+-- them in File objects can never NtClose the shared console out from
+-- under the rest of the system.
+--
+-- A File over a borrowed standard handle is otherwise identical to an
+-- io.open file; the read path (_fill → NtReadFile in 4K chunks, blocking)
+-- is exactly what the serial driver's first-byte-return read mode feeds.
+
+local function std_stream(h, can_read, can_write)
+    return setmetatable({
+        _h         = h,
+        _buf       = "",
+        _eof       = false,
+        _closed    = false,
+        _can_read  = can_read,
+        _can_write = can_write,
+    }, File)
+end
+
+-- Wrap construction in pcall: a process with no inherited stdio (NULL
+-- ProcessParameters fields) just gets nil streams, and io.read/io.write
+-- then raise a clear error instead of faulting at module-load time.
+do
+    local ok, hin, hout, herr = pcall(ps.parent_stdio)
+    if ok and hin ~= nil then
+        M.stdin  = std_stream(hin,  true,  false)
+        M.stdout = std_stream(hout, false, true)
+        M.stderr = std_stream(herr, false, true)
+    end
+end
+
+default_input  = M.stdin
+default_output = M.stdout
+
+-- io.input([file|filename]) / io.output([file|filename]) — get or set the
+-- default stream.  No argument returns the current default; a filename
+-- opens it (read for input, write for output) and installs it; a file
+-- object installs it directly.  Mirrors stock Lua.
+function M.input(file)
+    if file == nil then return default_input end
+    if type(file) == "string" then
+        local f, e = M.open(file, "r")
+        if not f then error(e, 2) end
+        file = f
+    end
+    default_input = file
+    return default_input
+end
+
+function M.output(file)
+    if file == nil then return default_output end
+    if type(file) == "string" then
+        local f, e = M.open(file, "w")
+        if not f then error(e, 2) end
+        file = f
+    end
+    default_output = file
+    return default_output
+end
+
+function M.read(...)
+    if not default_input then
+        error("io.read: no default input stream "
+              .. "(no inherited StandardInput handle)", 2)
+    end
+    return default_input:read(...)
+end
+
+function M.write(...)
+    if not default_output then
+        error("io.write: no default output stream "
+              .. "(no inherited StandardOutput handle)", 2)
+    end
+    return default_output:write(...)
+end
 
 return M
