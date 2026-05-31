@@ -297,6 +297,7 @@ Return Value:
 
 {
     NTSTATUS status;
+    ULONG bytesToCopy;
 
     PAGED_CODE();
     DebugTrace(0, Dbg, "QueryFsAttributeInfo...\n", 0);
@@ -313,14 +314,16 @@ Return Value:
 
         status = STATUS_SUCCESS;
 
-        *BytesWritten += Vcb->FileSystemName.Length;
+        bytesToCopy = Vcb->FileSystemName.Length;
 
     } else {
 
         status = STATUS_BUFFER_OVERFLOW;
 
-        *BytesWritten += Length;
+        bytesToCopy = Length;
     }
+
+    *BytesWritten += bytesToCopy;
 
     //
     // Fill in the attribute information.
@@ -330,14 +333,18 @@ Return Value:
     Buffer->MaximumComponentNameLength = MAXIMUM_FILENAME_LENGTH;
 
     //
-    // And copy over the file name and its length.
+    // And copy over the file name and its length.  Copy only the name
+    // bytes (bytesToCopy) -- not *BytesWritten, which also counts the
+    // fixed header -- and report the name length.  Using *BytesWritten
+    // for either would over-read the source name and, with a buffer sized
+    // to exactly the header plus name, write past the output buffer.
     //
 
     RtlMoveMemory( &Buffer->FileSystemName[0],
                    &Vcb->FileSystemName.Buffer[0],
-                   *BytesWritten );
+                   bytesToCopy );
 
-    Buffer->FileSystemNameLength = *BytesWritten;
+    Buffer->FileSystemNameLength = bytesToCopy;
 
     return status;
 }
