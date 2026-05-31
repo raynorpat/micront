@@ -6752,12 +6752,62 @@ typedef LPOSVERSIONINFOA LPOSVERSIONINFO;
 #endif // UNICODE
 
 //
+// OSVERSIONINFOEX — the extended form (NT 4.0 SP6+).  Post-dates the rest of
+// this NT 3.5 header; defined here so GetVersionEx can accept it and modern
+// callers (Python 2.7's sys.getwindowsversion, etc.) work.
+//
+
+typedef struct _OSVERSIONINFOEXA {
+    DWORD dwOSVersionInfoSize;
+    DWORD dwMajorVersion;
+    DWORD dwMinorVersion;
+    DWORD dwBuildNumber;
+    DWORD dwPlatformId;
+    CHAR   szCSDVersion[ 128 ];       // Maintenance string for PSS usage
+    WORD   wServicePackMajor;         // Service Pack major version number
+    WORD   wServicePackMinor;         // Service Pack minor version number
+    WORD   wSuiteMask;                // Product suite mask
+    BYTE   wProductType;              // Product type (VER_NT_*)
+    BYTE   wReserved;
+} OSVERSIONINFOEXA, *POSVERSIONINFOEXA, *LPOSVERSIONINFOEXA;
+typedef struct _OSVERSIONINFOEXW {
+    DWORD dwOSVersionInfoSize;
+    DWORD dwMajorVersion;
+    DWORD dwMinorVersion;
+    DWORD dwBuildNumber;
+    DWORD dwPlatformId;
+    WCHAR  szCSDVersion[ 128 ];       // Maintenance string for PSS usage
+    WORD   wServicePackMajor;         // Service Pack major version number
+    WORD   wServicePackMinor;         // Service Pack minor version number
+    WORD   wSuiteMask;                // Product suite mask
+    BYTE   wProductType;              // Product type (VER_NT_*)
+    BYTE   wReserved;
+} OSVERSIONINFOEXW, *POSVERSIONINFOEXW, *LPOSVERSIONINFOEXW;
+#ifdef UNICODE
+typedef OSVERSIONINFOEXW OSVERSIONINFOEX;
+typedef POSVERSIONINFOEXW POSVERSIONINFOEX;
+typedef LPOSVERSIONINFOEXW LPOSVERSIONINFOEX;
+#else
+typedef OSVERSIONINFOEXA OSVERSIONINFOEX;
+typedef POSVERSIONINFOEXA POSVERSIONINFOEX;
+typedef LPOSVERSIONINFOEXA LPOSVERSIONINFOEX;
+#endif // UNICODE
+
+//
 // dwPlatformId defines:
 //
 
 #define VER_PLATFORM_WIN32s             0
 #define VER_PLATFORM_WIN32_WINDOWS      1
 #define VER_PLATFORM_WIN32_NT           2
+
+//
+// wProductType defines (OSVERSIONINFOEX):
+//
+
+#define VER_NT_WORKSTATION              0x0000001
+#define VER_NT_DOMAIN_CONTROLLER        0x0000002
+#define VER_NT_SERVER                   0x0000003
 
 
 WINBASEAPI

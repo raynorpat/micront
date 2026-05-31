@@ -914,6 +914,14 @@ Return Value:
            );
 }
 
+//
+// GetVersionEx accepts both the base OSVERSIONINFO and the extended
+// OSVERSIONINFOEX (NT 4.0 SP6+, defined in winbase.h).  Stock NT 3.5 rejected
+// any size but the base struct, failing modern callers (e.g. Python 2.7's
+// sys.getwindowsversion) with ERROR_INSUFFICIENT_BUFFER.  For the extended
+// form we report a workstation with no service pack.
+//
+
 WINBASEAPI
 BOOL
 WINAPI
@@ -921,42 +929,52 @@ GetVersionExA(
     LPOSVERSIONINFOA lpVersionInformation
     )
 {
-    OSVERSIONINFOW VersionInformationU;
+    OSVERSIONINFOEXW VersionInformationU;
     ANSI_STRING AnsiString;
     UNICODE_STRING UnicodeString;
     NTSTATUS Status;
+    ULONG size = lpVersionInformation->dwOSVersionInfoSize;
+    BOOL  ex   = (size == sizeof( OSVERSIONINFOEXA ));
 
-    if (lpVersionInformation->dwOSVersionInfoSize != sizeof( *lpVersionInformation )) {
+    if (size != sizeof( OSVERSIONINFOA ) && !ex) {
         SetLastError( ERROR_INSUFFICIENT_BUFFER );
         return FALSE;
         }
 
-    VersionInformationU.dwOSVersionInfoSize = sizeof( VersionInformationU );
-    if (GetVersionExW( &VersionInformationU )) {
-        lpVersionInformation->dwMajorVersion = VersionInformationU.dwMajorVersion;
-        lpVersionInformation->dwMinorVersion = VersionInformationU.dwMinorVersion;
-        lpVersionInformation->dwBuildNumber  = VersionInformationU.dwBuildNumber;
-        lpVersionInformation->dwPlatformId   = VersionInformationU.dwPlatformId;
-
-        AnsiString.Buffer = lpVersionInformation->szCSDVersion;
-        AnsiString.Length = 0;
-        AnsiString.MaximumLength = sizeof( lpVersionInformation->szCSDVersion );
-
-        RtlInitUnicodeString( &UnicodeString, VersionInformationU.szCSDVersion );
-        Status = RtlUnicodeStringToAnsiString( &AnsiString,
-                                               &UnicodeString,
-                                               FALSE
-                                             );
-        if (NT_SUCCESS( Status )) {
-            return TRUE;
-            }
-        else {
-            return FALSE;
-            }
-        }
-    else {
+    VersionInformationU.dwOSVersionInfoSize =
+        ex ? sizeof( OSVERSIONINFOEXW ) : sizeof( OSVERSIONINFOW );
+    if (!GetVersionExW( (LPOSVERSIONINFOW)&VersionInformationU )) {
         return FALSE;
         }
+
+    lpVersionInformation->dwMajorVersion = VersionInformationU.dwMajorVersion;
+    lpVersionInformation->dwMinorVersion = VersionInformationU.dwMinorVersion;
+    lpVersionInformation->dwBuildNumber  = VersionInformationU.dwBuildNumber;
+    lpVersionInformation->dwPlatformId   = VersionInformationU.dwPlatformId;
+
+    AnsiString.Buffer = lpVersionInformation->szCSDVersion;
+    AnsiString.Length = 0;
+    AnsiString.MaximumLength = sizeof( lpVersionInformation->szCSDVersion );
+
+    RtlInitUnicodeString( &UnicodeString, VersionInformationU.szCSDVersion );
+    Status = RtlUnicodeStringToAnsiString( &AnsiString,
+                                           &UnicodeString,
+                                           FALSE
+                                         );
+    if (!NT_SUCCESS( Status )) {
+        return FALSE;
+        }
+
+    if (ex) {
+        LPOSVERSIONINFOEXA exa = (LPOSVERSIONINFOEXA)lpVersionInformation;
+        exa->wServicePackMajor = VersionInformationU.wServicePackMajor;
+        exa->wServicePackMinor = VersionInformationU.wServicePackMinor;
+        exa->wSuiteMask        = VersionInformationU.wSuiteMask;
+        exa->wProductType      = VersionInformationU.wProductType;
+        exa->wReserved         = VersionInformationU.wReserved;
+        }
+
+    return TRUE;
 }
 
 WINBASEAPI
@@ -966,7 +984,10 @@ GetVersionExW(
     LPOSVERSIONINFOW lpVersionInformation
     )
 {
-    if (lpVersionInformation->dwOSVersionInfoSize != sizeof( *lpVersionInformation )) {
+    ULONG size = lpVersionInformation->dwOSVersionInfoSize;
+
+    if (size != sizeof( OSVERSIONINFOW ) &&
+        size != sizeof( OSVERSIONINFOEXW )) {
         SetLastError( ERROR_INSUFFICIENT_BUFFER );
         return FALSE;
         }
@@ -976,6 +997,16 @@ GetVersionExW(
     lpVersionInformation->dwBuildNumber  = BaseBuildNumber;
     lpVersionInformation->dwPlatformId   = VER_PLATFORM_WIN32_NT;
     wcscpy( lpVersionInformation->szCSDVersion, BaseCSDVersion );
+
+    if (size == sizeof( OSVERSIONINFOEXW )) {
+        LPOSVERSIONINFOEXW ex = (LPOSVERSIONINFOEXW)lpVersionInformation;
+        ex->wServicePackMajor = 0;
+        ex->wServicePackMinor = 0;
+        ex->wSuiteMask        = 0;
+        ex->wProductType      = VER_NT_WORKSTATION;
+        ex->wReserved         = 0;
+        }
+
     return TRUE;
 }
 
