@@ -21,7 +21,8 @@ local bit   = require('bit')
 local ffi   = require('ffi')
 local t     = require('test')
 local ntdll = require('nt.dll')
-local fs    = require('nt.dll.fs')      -- registers the NtCreateNamedPipeFile cdef
+local fs    = require('nt.dll.fs')
+local npfs  = require('nt.dll.npfs')    -- registers the NtCreateNamedPipeFile cdef
 local oa    = require('nt.dll.oa')
 local ke    = require('nt.dll.ke')
 local err   = require('nt.dll.errors')
@@ -99,8 +100,8 @@ t.test("a valid named pipe creates and closes cleanly", function()
     -- The valid-path baseline goes through the idiomatic wrapper; the
     -- adversarial cases below drop to raw ntdll. (Same split as
     -- test/fuzz/se.lua — idiomatic setup, raw fuzzed syscall.)
-    local h = fs.create_named_pipe{ name = pipe_name() }
-    t.ok(h ~= nil, "fs.create_named_pipe returned a handle")
+    local h = npfs.create_named_pipe{ name = pipe_name() }
+    t.ok(h ~= nil, "npfs.create_named_pipe returned a handle")
     h:close()
 end)
 

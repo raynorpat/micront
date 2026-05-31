@@ -21,7 +21,8 @@ local bit   = require('bit')
 local ffi   = require('ffi')
 local t     = require('test')
 local ntdll = require('nt.dll')
-local fs    = require('nt.dll.fs')      -- registers the NtCreateMailslotFile cdef
+local fs    = require('nt.dll.fs')
+local msfs  = require('nt.dll.msfs')    -- registers the NtCreateMailslotFile cdef
 local oa    = require('nt.dll.oa')
 local ke    = require('nt.dll.ke')
 local err   = require('nt.dll.errors')
@@ -83,8 +84,8 @@ end
 -- ------------------------------------------------------------------
 
 t.test("a valid mailslot creates and closes cleanly", function()
-    local h = fs.create_mailslot{ name = ms_name() }
-    t.ok(h ~= nil, "fs.create_mailslot returned a handle")
+    local h = msfs.create_mailslot{ name = ms_name() }
+    t.ok(h ~= nil, "msfs.create_mailslot returned a handle")
     h:close()
 end)
 

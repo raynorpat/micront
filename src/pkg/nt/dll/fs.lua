@@ -177,24 +177,9 @@ NTSTATUS __stdcall NtCreateFile(HANDLE *FileHandle,
                                 void *EaBuffer,
                                 ULONG EaLength);
 
-/* Server end of a named pipe. Like NtCreateFile but carries the pipe-
- * specific create parameters (type / read mode / completion mode,
- * instance count, in/out quotas, default timeout). The client end
- * opens an existing pipe with plain NtCreateFile / NtOpenFile. */
-NTSTATUS __stdcall NtCreateNamedPipeFile(HANDLE *FileHandle,
-                                         ULONG DesiredAccess,
-                                         OBJECT_ATTRIBUTES *ObjectAttributes,
-                                         IO_STATUS_BLOCK *IoStatusBlock,
-                                         ULONG ShareAccess,
-                                         ULONG CreateDisposition,
-                                         ULONG CreateOptions,
-                                         ULONG NamedPipeType,
-                                         ULONG ReadMode,
-                                         ULONG CompletionMode,
-                                         ULONG MaximumInstances,
-                                         ULONG InboundQuota,
-                                         ULONG OutboundQuota,
-                                         LARGE_INTEGER *DefaultTimeout);
+/* NtCreateNamedPipeFile / NtCreateMailslotFile and their pipe/mailslot
+ * structs live in nt.dll.npfs / nt.dll.msfs — the IPC-filesystem clients
+ * that ride on this module's generic Io syscalls. */
 
 NTSTATUS __stdcall NtQueryInformationFile(HANDLE FileHandle,
                                           IO_STATUS_BLOCK *IoStatusBlock,
@@ -304,82 +289,6 @@ NTSTATUS __stdcall NtFsControlFile(HANDLE FileHandle,
                                    void *OutputBuffer,
                                    ULONG OutputBufferLength);
 
-/* Server end of a mailslot. The write (client) end opens the
- * \Device\Mailslot\<name> path with plain NtCreateFile / NtOpenFile.
- * ReadTimeout: 0 = return immediately, -1 = wait forever, else a
- * relative (negative) 100-ns timeout. See M.create_mailslot. */
-NTSTATUS __stdcall NtCreateMailslotFile(HANDLE *FileHandle,
-                                        ULONG DesiredAccess,
-                                        OBJECT_ATTRIBUTES *ObjectAttributes,
-                                        IO_STATUS_BLOCK *IoStatusBlock,
-                                        ULONG CreateOptions,
-                                        ULONG MailslotQuota,
-                                        ULONG MaximumMessageSize,
-                                        LARGE_INTEGER *ReadTimeout);
-
-/* Named-pipe info structs (NTIOAPI.H). All ULONG / LARGE_INTEGER, so
- * naturally aligned — pack-independent (no NT-3.5 pack(2) hazard). */
-typedef struct _FILE_PIPE_INFORMATION {
-    ULONG ReadMode;
-    ULONG CompletionMode;
-} FILE_PIPE_INFORMATION;
-
-typedef struct _FILE_PIPE_LOCAL_INFORMATION {
-    ULONG NamedPipeType;
-    ULONG NamedPipeConfiguration;
-    ULONG MaximumInstances;
-    ULONG CurrentInstances;
-    ULONG InboundQuota;
-    ULONG ReadDataAvailable;
-    ULONG OutboundQuota;
-    ULONG WriteQuotaAvailable;
-    ULONG NamedPipeState;
-    ULONG NamedPipeEnd;
-} FILE_PIPE_LOCAL_INFORMATION;
-
-/* FSCTL_PIPE_PEEK output: fixed header then Data[] bytes. Sized
- * header + datalen by the caller; a trailing VLA so one ffi.new owns
- * the whole allocation. */
-typedef struct _FILE_PIPE_PEEK_BUFFER {
-    ULONG NamedPipeState;
-    ULONG ReadDataAvailable;
-    ULONG NumberOfMessages;
-    ULONG MessageLength;
-    char  Data[?];
-} FILE_PIPE_PEEK_BUFFER;
-
-/* FSCTL_PIPE_WAIT input. Issued against the \Device\NamedPipe root
- * handle (not a pipe instance); Name is the bare pipe name WITHOUT a
- * leading backslash. VLA Name[] fused into the one allocation. */
-typedef struct _FILE_PIPE_WAIT_FOR_BUFFER {
-    LARGE_INTEGER Timeout;
-    ULONG         NameLength;       /* bytes, not wchars */
-    unsigned char TimeoutSpecified;
-    wchar_t       Name[?];
-} FILE_PIPE_WAIT_FOR_BUFFER;
-
-/* Mailslot info structs (NTIOAPI.H). */
-typedef struct _FILE_MAILSLOT_QUERY_INFORMATION {
-    ULONG         MaximumMessageSize;
-    ULONG         MailslotQuota;
-    ULONG         NextMessageSize;
-    ULONG         MessagesAvailable;
-    LARGE_INTEGER ReadTimeout;
-} FILE_MAILSLOT_QUERY_INFORMATION;
-
-typedef struct _FILE_MAILSLOT_SET_INFORMATION {
-    LARGE_INTEGER *ReadTimeout;
-} FILE_MAILSLOT_SET_INFORMATION;
-
-/* FSCTL_MAILSLOT_PEEK header (METHOD_NEITHER): this struct goes in the
- * *input* buffer (the driver writes counts back into it); the message
- * data lands in the separate *output* buffer. No trailing data. */
-typedef struct _FILE_MAILSLOT_PEEK_BUFFER {
-    ULONG ReadDataAvailable;
-    ULONG NumberOfMessages;
-    ULONG MessageLength;
-} FILE_MAILSLOT_PEEK_BUFFER;
-
 /* Volume-information query (NtQueryVolumeInformationFile) and flush.
  * The pipe/mailslot FSes answer FileFsAttributeInformation (FS name +
  * attributes); npfs also answers FileFsDeviceInformation. */
@@ -470,12 +379,8 @@ M.FILE_ATTRIBUTE_DIRECTORY     = 0x00000010
 -- (severity ERROR) is special-cased through NtReadFile rather than
 -- raised, so callers that want to detect EOF need this constant.
 M.STATUS_END_OF_FILE           = 0xC0000011
--- Named-pipe read boundaries: PIPE_EMPTY means "no data available right now"
--- on a nowait (FILE_PIPE_COMPLETE_OPERATION) handle — NOT end of stream;
--- BROKEN / CLOSING mean the writer end is gone (treat as EOF).
-M.STATUS_PIPE_EMPTY            = 0xC00000D9
-M.STATUS_PIPE_BROKEN          = 0xC000014B
-M.STATUS_PIPE_CLOSING         = 0xC0000128
+-- (Named-pipe read-boundary codes — PIPE_EMPTY / BROKEN / CLOSING — live
+-- in nt.dll.npfs alongside the rest of the pipe surface.)
 M.STATUS_NO_MORE_FILES         = 0x80000006
 -- A filtered NtQueryDirectoryFile whose pattern matched nothing at all
 -- returns this on the first call (vs NO_MORE_FILES once some entries
@@ -503,47 +408,6 @@ function M.NtOpenFile(access, oa, share, options)
     return handle.wrap(h[0]), iosb.Information
 end
 
--- ------------------------------------------------------------------
--- Named pipes — server endpoint creation.
---
--- The client end of an existing pipe opens with NtCreateFile /
--- NtOpenFile on its \Device\NamedPipe\... path; only the server end
--- needs the dedicated syscall and its pipe-specific parameters.
--- ------------------------------------------------------------------
-
--- Pipe type / mode constants (NTIOAPI.H) — named so callers don't pass
--- bare 0/1.
-M.FILE_PIPE_BYTE_STREAM_TYPE    = 0x00000000
-M.FILE_PIPE_MESSAGE_TYPE        = 0x00000001
-M.FILE_PIPE_BYTE_STREAM_MODE    = 0x00000000
-M.FILE_PIPE_MESSAGE_MODE        = 0x00000001
-M.FILE_PIPE_QUEUE_OPERATION     = 0x00000000   -- completion: blocking
-M.FILE_PIPE_COMPLETE_OPERATION  = 0x00000001   -- completion: return immediately
-M.FILE_PIPE_UNLIMITED_INSTANCES = 0xFFFFFFFF
-
--- NamedPipeConfiguration (data direction the pipe carries).
-M.FILE_PIPE_INBOUND             = 0x00000000   -- client -> server only
-M.FILE_PIPE_OUTBOUND            = 0x00000001   -- server -> client only
-M.FILE_PIPE_FULL_DUPLEX         = 0x00000002   -- both
-
--- NamedPipeState (FILE_PIPE_LOCAL_INFORMATION.NamedPipeState).
-M.FILE_PIPE_DISCONNECTED_STATE  = 0x00000001
-M.FILE_PIPE_LISTENING_STATE     = 0x00000002
-M.FILE_PIPE_CONNECTED_STATE     = 0x00000003
-M.FILE_PIPE_CLOSING_STATE       = 0x00000004
-
--- NamedPipeEnd — note the unintuitive ordering (client is 0).
-M.FILE_PIPE_CLIENT_END          = 0x00000000
-M.FILE_PIPE_SERVER_END          = 0x00000001
-
--- FILE_INFORMATION_CLASS values for the pipe/mailslot classes
--- (NTIOAPI.H enum, 1-based). Used with NtQuery/SetInformationFile.
-M.FilePipeInformation           = 23
-M.FilePipeLocalInformation      = 24
-M.FilePipeRemoteInformation     = 25
-M.FileMailslotQueryInformation  = 26
-M.FileMailslotSetInformation    = 27
-
 -- FS_INFORMATION_CLASS values (NTIOAPI.H, 1-based) for
 -- NtQueryVolumeInformationFile.  The pipe/mailslot FSes answer
 -- FileFsAttributeInformation; npfs also answers FileFsDeviceInformation.
@@ -552,15 +416,9 @@ M.FileFsSizeInformation         = 3
 M.FileFsDeviceInformation       = 4
 M.FileFsAttributeInformation    = 5
 
--- Mailslot read class (NtCreateMailslotFile semantics, NTIOAPI.H).
-M.MAILSLOT_NO_MESSAGE           = 0xFFFFFFFF   -- NextMessageSize when empty
-
--- Pipe / mailslot status codes seen on the round-trip paths. (PIPE_EMPTY
--- / BROKEN / CLOSING are declared above with the read-boundary codes.)
-M.STATUS_PIPE_DISCONNECTED      = 0xC00000B0
-M.STATUS_PIPE_NOT_AVAILABLE     = 0xC00000AC
-M.STATUS_PIPE_BUSY              = 0xC00000AE
-M.STATUS_INVALID_READ_MODE      = 0xC00000B4
+-- Generic NTSTATUS codes surfaced on the file / FS round-trip paths.
+-- (Pipe-specific codes — PIPE_DISCONNECTED / BUSY / INVALID_READ_MODE,
+-- etc. — live in nt.dll.npfs.)
 M.STATUS_OBJECT_NAME_NOT_FOUND  = 0xC0000034
 M.STATUS_IO_TIMEOUT             = 0xC00000B5
 M.STATUS_BUFFER_OVERFLOW        = 0x80000005
@@ -569,102 +427,13 @@ M.STATUS_BUFFER_TOO_SMALL       = 0xC0000023
 -- CTL_CODE(DeviceType, Function, Method, Access) — NT's IOCTL/FSCTL
 -- packing (DEVIOCTL.H). Named pieces OR'd together rather than a baked
 -- hex literal, so each control code reads as its (device, fn, method,
--- access) tuple.
-local FILE_DEVICE_NAMED_PIPE = 0x00000011
-local FILE_DEVICE_MAILSLOT   = 0x0000000C
-local METHOD_BUFFERED        = 0
-local METHOD_NEITHER         = 3
-local FILE_ANY_ACCESS        = 0
-local function ctl_code(device, fn, method, access)
+-- access) tuple. Exported for nt.dll.npfs / nt.dll.msfs, which build
+-- their pipe / mailslot FSCTL codes from it.
+function M.ctl_code(device, fn, method, access)
     return bit.bor(bit.lshift(device, 16),
                    bit.lshift(access, 14),
                    bit.lshift(fn, 2),
                    method)
-end
-
--- Named-pipe FSCTLs (NTIOAPI.H) — all routed via NtFsControlFile.
-M.FSCTL_PIPE_DISCONNECT  = ctl_code(FILE_DEVICE_NAMED_PIPE, 1, METHOD_BUFFERED, FILE_ANY_ACCESS)
-M.FSCTL_PIPE_LISTEN      = ctl_code(FILE_DEVICE_NAMED_PIPE, 2, METHOD_BUFFERED, FILE_ANY_ACCESS)
-M.FSCTL_PIPE_PEEK        = ctl_code(FILE_DEVICE_NAMED_PIPE, 3, METHOD_BUFFERED, M.FILE_READ_DATA)
-M.FSCTL_PIPE_TRANSCEIVE  = ctl_code(FILE_DEVICE_NAMED_PIPE, 5, METHOD_NEITHER,
-                                    bit.bor(M.FILE_READ_DATA, M.FILE_WRITE_DATA))
-M.FSCTL_PIPE_WAIT        = ctl_code(FILE_DEVICE_NAMED_PIPE, 6, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
--- Mailslot FSCTL (NTIOAPI.H).
-M.FSCTL_MAILSLOT_PEEK    = ctl_code(FILE_DEVICE_MAILSLOT, 0, METHOD_NEITHER, M.FILE_READ_DATA)
-
--- 100-ns ticks in one second — NT's LARGE_INTEGER timeout unit.
-local NT_TICKS_PER_SEC = 10000000
-
--- create_named_pipe(opts) -> (handle, disposition).  Creates (or opens
--- another instance of) the server end of a named pipe.  opts:
---   name             NT path, e.g. "\\Device\\NamedPipe\\foo"  (required)
---   access           DesiredAccess         (default GENERIC_READ|WRITE)
---   share            ShareAccess           (default SHARE_READ|WRITE)
---   disposition      CreateDisposition     (default FILE_OPEN_IF)
---   options          CreateOptions         (default 0)
---   pipe_type        FILE_PIPE_*_TYPE      (default byte stream)
---   read_mode        FILE_PIPE_*_MODE      (default byte stream)
---   completion_mode  FILE_PIPE_*_OPERATION (default queue / blocking)
---   max_instances    simultaneous instances (default 1)
---   inbound_quota    pool bytes for inbound writes  (default 4096)
---   outbound_quota   pool bytes for outbound writes (default 4096)
---   timeout          default instance-wait timeout, seconds (default 5)
--- Raises on failure, like the other fs creators.  `disposition` is the
--- IoStatusBlock Information word (FILE_CREATED / FILE_OPENED).
-function M.create_named_pipe(opts)
-    opts = opts or {}
-    if not opts.name then
-        error("fs.create_named_pipe: opts.name is required", 2)
-    end
-    local noa  = oa.path(opts.name)
-    local h    = ffi.new('HANDLE[1]')
-    local iosb = ffi.new('IO_STATUS_BLOCK')
-
-    -- Relative (negative) timeout, in 100-ns ticks.
-    local timeout = ffi.new('LARGE_INTEGER')
-    timeout.QuadPart = -((opts.timeout or 5) * NT_TICKS_PER_SEC)
-
-    local st = ntdll.NtCreateNamedPipeFile(
-        h,
-        opts.access      or bit.bor(M.FILE_GENERIC_READ, M.FILE_GENERIC_WRITE),
-        noa.oa,
-        iosb,
-        opts.share       or bit.bor(M.FILE_SHARE_READ, M.FILE_SHARE_WRITE),
-        opts.disposition or M.FILE_OPEN_IF,
-        opts.options     or 0,
-        opts.pipe_type       or M.FILE_PIPE_BYTE_STREAM_TYPE,
-        opts.read_mode       or M.FILE_PIPE_BYTE_STREAM_MODE,
-        opts.completion_mode or M.FILE_PIPE_QUEUE_OPERATION,
-        opts.max_instances   or 1,
-        opts.inbound_quota   or 4096,
-        opts.outbound_quota  or 4096,
-        timeout)
-    if err.is_error(st) then err.raise('NtCreateNamedPipeFile', st) end
-    return handle.wrap(h[0]), iosb.Information
-end
-
--- open_pipe(name, opts) -> (handle, disposition).  Opens the CLIENT end
--- of an existing named pipe.  The open auto-connects to a listening
--- server instance (npfs CREATE.C) — no explicit listen/connect dance —
--- so the returned handle is immediately ready for read/write.  opts:
---   access       DesiredAccess  (default GENERIC_READ|WRITE, full duplex)
---   share        ShareAccess    (default SHARE_READ|WRITE)
---   disposition  CreateDisposition (default FILE_OPEN — the pipe exists)
---   options      CreateOptions  (default FILE_SYNCHRONOUS_IO_NONALERT, so
---                                reads block-until-data instead of pending)
--- Raises (NtCreateFile) on failure: STATUS_PIPE_NOT_AVAILABLE means no
--- server instance was listening; OBJECT_NAME_NOT_FOUND means no server
--- end exists at all.
-function M.open_pipe(name, opts)
-    opts = opts or {}
-    local noa = oa.path(name)
-    return M.NtCreateFile(
-        opts.access      or bit.bor(M.FILE_GENERIC_READ, M.FILE_GENERIC_WRITE),
-        noa.oa, nil, M.FILE_ATTRIBUTE_NORMAL,
-        opts.share       or bit.bor(M.FILE_SHARE_READ, M.FILE_SHARE_WRITE),
-        opts.disposition or M.FILE_OPEN,
-        opts.options     or M.FILE_SYNCHRONOUS_IO_NONALERT)
 end
 
 -- Filesystem-control bridge (IRP_MJ_FILE_SYSTEM_CONTROL).  Same shape as
@@ -679,243 +448,6 @@ function M.NtFsControlFile(h, code, in_buf, in_len, out_buf, out_len)
                                      out_buf, out_len or 0)
     if err.is_error(st) then err.raise('NtFsControlFile', st) end
     return iosb.Information, err.normalize(st)
-end
-
--- pipe_local_info(h) -> FILE_PIPE_LOCAL_INFORMATION cdata.  Reports the
--- connected end's NamedPipeState (M.FILE_PIPE_*_STATE), CurrentInstances,
--- ReadDataAvailable, NamedPipeEnd (M.FILE_PIPE_{CLIENT,SERVER}_END), etc.
-function M.pipe_local_info(h)
-    local info = ffi.new('FILE_PIPE_LOCAL_INFORMATION')
-    local iosb = ffi.new('IO_STATUS_BLOCK')
-    local st = ntdll.NtQueryInformationFile(handle.raw(h), iosb, info,
-        ffi.sizeof('FILE_PIPE_LOCAL_INFORMATION'), M.FilePipeLocalInformation)
-    if err.is_error(st) then err.raise('NtQueryInformationFile', st) end
-    return info
-end
-
--- set_pipe_mode(h, opts) — change ReadMode / CompletionMode on one end
--- via FILE_PIPE_INFORMATION.  opts.read_mode / opts.completion_mode
--- default to byte-stream / queue.  Message read mode on a byte-stream
--- pipe -> STATUS_INVALID_PARAMETER; switching to COMPLETE_OPERATION while
--- the queue is non-empty -> STATUS_PIPE_BUSY.
-function M.set_pipe_mode(h, opts)
-    opts = opts or {}
-    local info = ffi.new('FILE_PIPE_INFORMATION')
-    info.ReadMode       = opts.read_mode       or M.FILE_PIPE_BYTE_STREAM_MODE
-    info.CompletionMode = opts.completion_mode or M.FILE_PIPE_QUEUE_OPERATION
-    M.NtSetInformationFile(h, info, ffi.sizeof('FILE_PIPE_INFORMATION'),
-                           M.FilePipeInformation)
-end
-
--- pipe_peek(h, max_data) -> table.  FSCTL_PIPE_PEEK looks at queued data
--- WITHOUT consuming it.  max_data (default 256) bounds the data bytes
--- copied back.  Returns { state, available, messages, message_length,
--- data } where `data` is up to max_data bytes (a Lua string) and
--- `available` is the full ReadDataAvailable count (may exceed #data — the
--- kernel then returns STATUS_BUFFER_OVERFLOW, a warning, not an error).
-function M.pipe_peek(h, max_data)
-    max_data = max_data or 256
-    local buf    = ffi.new('FILE_PIPE_PEEK_BUFFER', max_data)
-    local header = ffi.offsetof('FILE_PIPE_PEEK_BUFFER', 'Data')
-    local info   = M.NtFsControlFile(h, M.FSCTL_PIPE_PEEK, nil, 0,
-                                     buf, header + max_data)
-    local ndata  = info > header and (info - header) or 0
-    return {
-        state          = buf.NamedPipeState,
-        available      = buf.ReadDataAvailable,
-        messages       = buf.NumberOfMessages,
-        message_length = buf.MessageLength,
-        data           = ndata > 0 and ffi.string(buf.Data, ndata) or "",
-    }
-end
-
--- pipe_transceive(h, input, out_len) -> response string.  FSCTL_PIPE_
--- TRANSCEIVE writes `input` to the pipe and reads the peer's reply in
--- one op.  REQUIRES a full-duplex, message-mode pipe with an empty read
--- queue on this end (else STATUS_PIPE_BUSY / STATUS_INVALID_READ_MODE).
--- It always pends until the peer writes a reply, so the peer must run on
--- a separate thread.  out_len bounds the reply (default 256).
-function M.pipe_transceive(h, input, out_len)
-    out_len = out_len or 256
-    local out = ffi.new('char[?]', out_len)
-    -- METHOD_NEITHER: input/output pass straight through as the raw user
-    -- buffers (no kernel-side copy).
-    local n = M.NtFsControlFile(h, M.FSCTL_PIPE_TRANSCEIVE,
-                                input, #input, out, out_len)
-    return ffi.string(out, n)
-end
-
--- pipe_disconnect(h) — server-end FSCTL_PIPE_DISCONNECT.  Tears the
--- instance down to DISCONNECTED state; the client's next read/write then
--- fails with STATUS_PIPE_DISCONNECTED.  Re-listen with pipe_listen.
-function M.pipe_disconnect(h)
-    M.NtFsControlFile(h, M.FSCTL_PIPE_DISCONNECT)
-end
-
--- pipe_listen(h) — server-end FSCTL_PIPE_LISTEN.  BLOCKS until a client
--- connects (so call it from a thread that can wait, or after arranging a
--- client open on another thread).
-function M.pipe_listen(h)
-    M.NtFsControlFile(h, M.FSCTL_PIPE_LISTEN)
-end
-
--- pipe_wait(leaf_name, timeout_secs) -> true.  FSCTL_PIPE_WAIT against
--- the \Device\NamedPipe root DCB: blocks (up to timeout_secs) until a
--- server instance of `leaf_name` is listening.  `leaf_name` is the bare
--- pipe name with NO leading backslash (npfs prepends one) — e.g. "foo"
--- for \Device\NamedPipe\foo.  timeout_secs nil -> use the pipe's own
--- DefaultTimeout.  Raises STATUS_OBJECT_NAME_NOT_FOUND if no such pipe
--- exists, STATUS_IO_TIMEOUT if the wait expires.
---
--- The TRAILING backslash is load-bearing: opening "\Device\NamedPipe"
--- (no slash) lands on the file-system VCB, but FSCTL_PIPE_WAIT requires
--- the root DCB, which npfs gives only when the remaining name is "\"
--- (npfs CREATE.C) — otherwise STATUS_ILLEGAL_FUNCTION.
-function M.pipe_wait(leaf_name, timeout_secs)
-    local root_oa = oa.path("\\Device\\NamedPipe\\")
-    local root = M.NtOpenFile(
-        bit.bor(M.FILE_GENERIC_READ, M.SYNCHRONIZE),
-        root_oa.oa,
-        bit.bor(M.FILE_SHARE_READ, M.FILE_SHARE_WRITE),
-        M.FILE_SYNCHRONOUS_IO_NONALERT)
-    local wchars = str.decode_utf8(leaf_name)
-    local n   = #wchars
-    local wb  = ffi.sizeof('wchar_t')
-    local buf = ffi.new('FILE_PIPE_WAIT_FOR_BUFFER', n)
-    buf.NameLength       = n * wb
-    buf.TimeoutSpecified = timeout_secs and 1 or 0
-    if timeout_secs then
-        buf.Timeout.QuadPart = -(timeout_secs * NT_TICKS_PER_SEC)
-    end
-    for i = 1, n do buf.Name[i-1] = wchars[i] end
-    local size = ffi.offsetof('FILE_PIPE_WAIT_FOR_BUFFER', 'Name') + n * wb
-    -- Close the root handle whether the FSCTL raised or not.
-    local ok, info = pcall(M.NtFsControlFile, root, M.FSCTL_PIPE_WAIT,
-                           buf, size, nil, 0)
-    root:close()
-    if not ok then error(info, 0) end
-    return true
-end
-
--- ------------------------------------------------------------------
--- Mailslots — datagram IPC.  The server (read) end is created with
--- create_mailslot; the client (write) end opens the same
--- \Device\Mailslot\<name> path with open_mailslot.  One NtWriteFile on
--- the client = one message; one NtReadFile on the server returns one
--- whole message (FIFO).  Messages flow client -> server only.
--- ------------------------------------------------------------------
-
--- Read-timeout sentinels (seconds, as passed to create_mailslot /
--- set_mailslot_timeout). 0 = return at once if no message; math.huge =
--- block until a message arrives.
-M.MAILSLOT_WAIT_IMMEDIATE = 0
-M.MAILSLOT_WAIT_FOREVER   = math.huge
-
--- Map a seconds value (0 / math.huge / N) onto an NT mailslot ReadTimeout
--- LARGE_INTEGER: 0 -> immediate, huge -> -1 (forever), else negative
--- relative ticks.  Writes into `li` (a LARGE_INTEGER cdata) and returns it.
-local function mailslot_timeout(li, secs)
-    secs = secs or 0
-    if secs == math.huge then
-        li.QuadPart = -1                          -- MAILSLOT_WAIT_FOREVER
-    else
-        li.QuadPart = -(secs * NT_TICKS_PER_SEC)  -- 0 -> immediate
-    end
-    return li
-end
-
--- create_mailslot(opts) -> (handle, disposition).  Server (read) end.
---   name              NT path "\\Device\\Mailslot\\foo"  (required)
---   access            DesiredAccess  (default GENERIC_READ|SYNCHRONIZE)
---   options           CreateOptions  (default FILE_SYNCHRONOUS_IO_NONALERT)
---   quota             MailslotQuota bytes, 0 = driver default
---   max_message_size  0 = unlimited
---   read_timeout      seconds; 0 = return immediately (default),
---                     math.huge = wait forever
-function M.create_mailslot(opts)
-    opts = opts or {}
-    if not opts.name then
-        error("fs.create_mailslot: opts.name is required", 2)
-    end
-    local noa  = oa.path(opts.name)
-    local h    = ffi.new('HANDLE[1]')
-    local iosb = ffi.new('IO_STATUS_BLOCK')
-    local rt   = mailslot_timeout(ffi.new('LARGE_INTEGER'), opts.read_timeout)
-
-    local st = ntdll.NtCreateMailslotFile(
-        h,
-        opts.access  or bit.bor(M.FILE_GENERIC_READ, M.SYNCHRONIZE),
-        noa.oa,
-        iosb,
-        opts.options or M.FILE_SYNCHRONOUS_IO_NONALERT,
-        opts.quota   or 0,
-        opts.max_message_size or 0,
-        rt)
-    if err.is_error(st) then err.raise('NtCreateMailslotFile', st) end
-    return handle.wrap(h[0]), iosb.Information
-end
-
--- open_mailslot(name, opts) -> (handle, disposition).  Client (write) end
--- of an existing mailslot.
---   access   DesiredAccess  (default GENERIC_WRITE)
---   share    ShareAccess    (default SHARE_READ|WRITE)
---   options  CreateOptions  (default FILE_SYNCHRONOUS_IO_NONALERT)
-function M.open_mailslot(name, opts)
-    opts = opts or {}
-    local noa = oa.path(name)
-    return M.NtCreateFile(
-        opts.access      or M.FILE_GENERIC_WRITE,
-        noa.oa, nil, M.FILE_ATTRIBUTE_NORMAL,
-        opts.share       or bit.bor(M.FILE_SHARE_READ, M.FILE_SHARE_WRITE),
-        opts.disposition or M.FILE_OPEN,
-        opts.options     or M.FILE_SYNCHRONOUS_IO_NONALERT)
-end
-
--- mailslot_info(h) -> FILE_MAILSLOT_QUERY_INFORMATION cdata.  On the
--- server handle.  NextMessageSize == MAILSLOT_NO_MESSAGE (0xFFFFFFFF)
--- when empty; MessagesAvailable counts queued messages.
-function M.mailslot_info(h)
-    local info = ffi.new('FILE_MAILSLOT_QUERY_INFORMATION')
-    local iosb = ffi.new('IO_STATUS_BLOCK')
-    local st = ntdll.NtQueryInformationFile(handle.raw(h), iosb, info,
-        ffi.sizeof('FILE_MAILSLOT_QUERY_INFORMATION'),
-        M.FileMailslotQueryInformation)
-    if err.is_error(st) then err.raise('NtQueryInformationFile', st) end
-    return info
-end
-
--- set_mailslot_timeout(h, secs) — adjust the server read timeout after
--- create.  The FILE_MAILSLOT_SET_INFORMATION field is a *pointer* to the
--- timeout; the kernel reads *ReadTimeout during this synchronous call, so
--- the LARGE_INTEGER only needs to outlive the call (it does, as a local).
-function M.set_mailslot_timeout(h, secs)
-    local rt   = mailslot_timeout(ffi.new('LARGE_INTEGER'), secs)
-    local info = ffi.new('FILE_MAILSLOT_SET_INFORMATION')
-    info.ReadTimeout = rt
-    M.NtSetInformationFile(h, info, ffi.sizeof('FILE_MAILSLOT_SET_INFORMATION'),
-                           M.FileMailslotSetInformation)
-end
-
--- mailslot_peek(h, max_data) -> table.  FSCTL_MAILSLOT_PEEK on the server
--- handle: inspects the next queued message WITHOUT consuming it.  The
--- METHOD_NEITHER contract is unusual — the count header
--- (FILE_MAILSLOT_PEEK_BUFFER) is written into the INPUT buffer, the
--- message bytes into the OUTPUT buffer.  Returns { available, messages,
--- message_length, data } (data truncated to max_data, default 256).
-function M.mailslot_peek(h, max_data)
-    max_data = max_data or 256
-    local hdr = ffi.new('FILE_MAILSLOT_PEEK_BUFFER')
-    local out = ffi.new('char[?]', max_data)
-    local n = M.NtFsControlFile(h, M.FSCTL_MAILSLOT_PEEK,
-                                hdr, ffi.sizeof('FILE_MAILSLOT_PEEK_BUFFER'),
-                                out, max_data)
-    local ndata = n < max_data and n or max_data
-    return {
-        available      = hdr.ReadDataAvailable,
-        messages       = hdr.NumberOfMessages,
-        message_length = hdr.MessageLength,
-        data           = ndata > 0 and ffi.string(out, ndata) or "",
-    }
 end
 
 function M.NtReadFile(h, buffer, length, byte_offset)
@@ -1415,9 +947,9 @@ return M
 -- Async / callback-driven:
 --   NtNotifyChangeDirectoryFile  dir watch — completes via APC/IOCP
 --
--- (NtCreateNamedPipeFile / NtCreateMailslotFile / NtFsControlFile are
--- bridged above — see M.create_named_pipe / M.create_mailslot and the
--- pipe_* / mailslot_* helpers.)
+-- (NtFsControlFile is bridged above.  NtCreateNamedPipeFile /
+-- NtCreateMailslotFile and their pipe_* / mailslot_* helpers live in
+-- nt.dll.npfs / nt.dll.msfs, which build on this module.)
 --
 -- Scatter/gather (verify NT 3.5 ntdll actually exports — may be NT4+):
 --   NtReadFileScatter

@@ -31,6 +31,7 @@ local ke     = require('nt.dll.ke')
 local se     = require('nt.dll.se')
 local sys    = require('nt.dll.sys')
 local fs     = require('nt.dll.fs')
+local npfs   = require('nt.dll.npfs')
 local oa     = require('nt.dll.oa')
 local err    = require('nt.dll.errors')
 local handle = require('nt.dll.handle')
@@ -112,7 +113,7 @@ local function spawn_and_capture(label, exe, cmdline, dll_path)
     -- buffer for data we'd write to the client; we don't write, so
     -- a small one is fine.  inbound_quota is the buffer for data
     -- coming FROM the client (the child's stdout) — must be large.
-    local server = fs.create_named_pipe{
+    local server = npfs.create_named_pipe{
         name           = pipe_name,
         inbound_quota  = PIPE_INBOUND_QUOTA,
         outbound_quota = 4096,

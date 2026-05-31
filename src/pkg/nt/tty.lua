@@ -107,6 +107,7 @@ end
 local ffi    = require('ffi')
 local bit    = require('bit')
 local fs     = require('nt.dll.fs')
+local npfs   = require('nt.dll.npfs')
 local oa     = require('nt.dll.oa')
 local ps     = require('nt.dll.ps')
 local ke     = require('nt.dll.ke')
@@ -149,7 +150,7 @@ local _seq = 0
 --   false  overlapped — its reads complete to an event we wait on alongside
 --          the serial port (the from-child stdout pipe).
 local function make_pipe(name, agent_access, child_access, server_sync)
-    local server = fs.create_named_pipe{
+    local server = npfs.create_named_pipe{
         name = name, access = agent_access, max_instances = 1,
         options = server_sync and fs.FILE_SYNCHRONOUS_IO_NONALERT or 0,
         inbound_quota = PIPE_BUF, outbound_quota = PIPE_BUF,
@@ -304,8 +305,8 @@ function M.run(opts)
                 local n   = tonumber(io_rp.Information)
                 local stu = err.normalize(io_rp.Status)
                 if n > 0 then emit(ffi.string(pbuf, n)) end
-                if stu == fs.STATUS_PIPE_BROKEN
-                   or stu == fs.STATUS_PIPE_CLOSING
+                if stu == npfs.STATUS_PIPE_BROKEN
+                   or stu == npfs.STATUS_PIPE_CLOSING
                    or stu == fs.STATUS_END_OF_FILE then
                     done = true
                 else

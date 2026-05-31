@@ -36,6 +36,7 @@
 
 local t      = require('test')
 local fs     = require('nt.dll.fs')       -- registers the IO cdefs
+require('nt.dll.npfs')                     -- registers the NtCreateNamedPipeFile cdef
 local oa     = require('nt.dll.oa')
 local err    = require('nt.dll.errors')
 local handle = require('nt.dll.handle')
