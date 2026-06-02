@@ -379,8 +379,14 @@ M.FILE_ATTRIBUTE_DIRECTORY     = 0x00000010
 -- (severity ERROR) is special-cased through NtReadFile rather than
 -- raised, so callers that want to detect EOF need this constant.
 M.STATUS_END_OF_FILE           = 0xC0000011
--- (Named-pipe read-boundary codes — PIPE_EMPTY / BROKEN / CLOSING — live
--- in nt.dll.npfs alongside the rest of the pipe surface.)
+-- A pipe whose writer has closed reports these on the read that follows
+-- the last buffered byte: they are end-of-stream, not errors. NtReadFile
+-- treats them like END_OF_FILE (returns a 0-byte read instead of raising)
+-- so a stream reader — nt.io reading a pipe stdin, say — sees a clean EOF
+-- rather than a fault. (npfs also defines these for its own API surface.)
+M.STATUS_PIPE_BROKEN           = 0xC000014B
+M.STATUS_PIPE_CLOSING          = 0xC00000B1
+-- (STATUS_PIPE_EMPTY and the rest of the pipe surface live in nt.dll.npfs.)
 M.STATUS_NO_MORE_FILES         = 0x80000006
 -- A filtered NtQueryDirectoryFile whose pattern matched nothing at all
 -- returns this on the first call (vs NO_MORE_FILES once some entries
@@ -455,7 +461,12 @@ function M.NtReadFile(h, buffer, length, byte_offset)
     local st = ntdll.NtReadFile(handle.raw(h), nil, nil, nil, iosb,
                                 buffer, length, byte_offset, nil)
     local stu = err.normalize(st)
-    if err.is_error(st) and stu ~= M.STATUS_END_OF_FILE then
+    -- EOF and the pipe end-of-stream codes are outcomes, not faults: the
+    -- caller detects them via a 0-byte Information return.
+    if err.is_error(st)
+       and stu ~= M.STATUS_END_OF_FILE
+       and stu ~= M.STATUS_PIPE_BROKEN
+       and stu ~= M.STATUS_PIPE_CLOSING then
         err.raise('NtReadFile', st)
     end
     return iosb.Information, stu

@@ -36,7 +36,7 @@ t.suite("harderr_xproc")
 -- Path layout assumes the standard MicroNT staging:
 --   \SystemRoot\System32\lua.exe (= run.exe, the LuaJIT interpreter)
 -- The child script lives in pkg\test.zip; we drive it via lua.exe's
--- -e flag (`require('test.harderr_raise')`) so the zip searcher can
+-- -e flag (`require('test.nt.harderr_raise')`) so the zip searcher can
 -- resolve it -- direct file-path invocation would miss the zip.
 local LUA_EXE = "\\SystemRoot\\System32\\lua.exe"
 
@@ -112,11 +112,11 @@ t.test("child raises -> daemon receives + replies -> child observes", function()
     -- through the zip searcher (test files live in pkg\test.zip --
     -- direct file path wouldn't find harderr_raise inside the zip).
     -- The preamble runs first on every lua.exe invocation, setting
-    -- package.path + zip searcher, so require('test.harderr_raise')
+    -- package.path + zip searcher, so require('test.nt.harderr_raise')
     -- resolves cleanly inside the child.
     local proc = ps.spawn{
         exe     = LUA_EXE,
-        cmdline = "\"lua.exe\" -e \"require('test.harderr_raise')\"",
+        cmdline = "\"lua.exe\" -e \"require('test.nt.harderr_raise')\"",
     }
     local child_exit = ps.wait_exit(proc)
 

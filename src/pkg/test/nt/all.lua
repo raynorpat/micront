@@ -1,0 +1,6 @@
+require('test.nt.str')
+require('test.nt.harderr')
+require('test.nt.harderr_xproc')
+require('test.nt.tree')
+require('test.nt.thread')
+require('test.nt.nls')

@@ -13,7 +13,7 @@ local ffi    = require('ffi')
 local ex     = require('nt.dll.ex')
 local ke     = require('nt.dll.ke')
 local handle = require('nt.dll.handle')
-local iosrc  = require('test.iosrc')
+local iosrc  = require('test.ntdll.iosrc')
 local thread = require('nt.thread')
 
 t.suite("iocp")
