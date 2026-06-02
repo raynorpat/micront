@@ -6,7 +6,7 @@
 #                [--disk-image PATH] [--ramdisk PATH] [--vmlinux PATH]
 #                [--vga] [--gdb] [--trace] [--netdump] [--coverage PATH]
 #                [--mem MB] [--kernel-opts STRING] [--net-harness PORT]
-#                [--kvm]
+#                [--netfwd SPEC] [--kvm]
 #   --disk-image PATH
 #               Boot this ESP image instead of the default
 #               build/disk/esp.img.  The Makefile passes per-profile
@@ -55,6 +55,13 @@
 #               built-in DHCP/DNS — the harness serves DHCP itself.
 #               --netdump still captures every frame (filter-dump
 #               attaches to the netdev by id, not to the backend).
+#   --netfwd SPEC
+#               Add a QEMU user-mode (SLIRP) host-forward so the host can
+#               reach a guest listener.  SPEC is a raw QEMU hostfwd value,
+#               e.g. tcp::2222-:22 (host 2222 -> guest 22) or udp::5353-:53.
+#               Repeatable: pass --netfwd once per forward.  Requires the
+#               default SLIRP backend; ignored (with a warning) under
+#               --net-harness, which has no user-mode NAT to forward through.
 #   --throttle N
 #               Throttle the QEMU process to N% of one host CPU using
 #               cpulimit (apt install cpulimit).  Useful for reproducing
@@ -68,6 +75,12 @@
 #               Pushed to the guest via fw_cfg blob `opt/micront/loadopts`,
 #               which boot-efi reads and stamps into the LPB.  Empty by
 #               default — kernel runs as if no flags were set.
+#               Text after a standalone `--` token is NOT parsed by the
+#               kernel; it is forwarded to the init process's argv.  On the
+#               default (steerable) disk the first such token names the Lua
+#               module to run, e.g. `--kernel-opts "-- smoke"` boots `smoke`
+#               instead of the agent, and `--kernel-opts "-- foo a b"` runs
+#               require('foo') with arguments a b — no rebuild.
 #
 # Same disk image works across every machine + disk combo: boot-efi
 # pre-loads atdisk + scsiport + scsidisk + nvme2k unconditionally and
@@ -108,6 +121,9 @@ ACCEL_FLAGS=""
 # packet harness.  The -device virtio-net-pci line is unchanged either
 # way — only the backend feeding netdev id n0 differs.
 NETDEV_BACKEND="-netdev user,id=n0"
+# Accumulated SLIRP host-forwards (--netfwd, repeatable).  Appended to the
+# user-mode netdev after arg parsing; only valid with the SLIRP backend.
+NETFWD_SPECS=""
 KERNEL_OPTS=""
 MEM=128
 # Canonical modern shape: q35 + NVMe, true PCIe topology, no legacy
@@ -210,6 +226,16 @@ while [ $# -gt 0 ]; do
                  "QEMU listening on 127.0.0.1:$1 (SLIRP off, no built-in DHCP)"
             shift
             ;;
+        --netfwd)
+            shift
+            if [ -z "$1" ]; then
+                echo "[boot.sh] --netfwd needs a hostfwd SPEC (e.g. tcp::2222-:22)" >&2
+                exit 2
+            fi
+            NETFWD_SPECS="$NETFWD_SPECS,hostfwd=$1"
+            echo "[boot.sh] net-forward: hostfwd=$1"
+            shift
+            ;;
         --mem)
             shift
             MEM="$1"
@@ -278,6 +304,21 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+# Apply accumulated --netfwd host-forwards.  hostfwd is a user-mode-netdev
+# feature; under --net-harness (socket backend) there is no NAT to forward
+# through, so warn and drop rather than emit a flag QEMU would reject.
+if [ -n "$NETFWD_SPECS" ]; then
+    case "$NETDEV_BACKEND" in
+        "-netdev user,"*|"-netdev user")
+            NETDEV_BACKEND="$NETDEV_BACKEND$NETFWD_SPECS"
+            ;;
+        *)
+            echo "[boot.sh] warning: --netfwd needs the SLIRP backend; ignoring" \
+                 "${NETFWD_SPECS#,} (no user-mode NAT under --net-harness)" >&2
+            ;;
+    esac
+fi
 
 # --- Sanity --------------------------------------------------------
 
