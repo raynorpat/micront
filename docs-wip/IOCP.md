@@ -1,12 +1,12 @@
 # IOCP-driven Lua coroutine reactor for MicroNT
 
-Status: **draft / deferred**. Captures the intended shape so we can pick
-this up cleanly in a future session. Nothing in this document is
-implemented yet — the AFD socket layer (`nt.afd`) currently exposes
-*synchronous* primitives that block on a per-IRP `Event` handle. This
-spec describes how to layer real NT I/O Completion Ports on top so a
-Lua coroutine scheduler can multiplex many concurrent sockets in one
-OS thread.
+Status: **deferred — foundation done & stress-tested, reactor not built**.
+The kernel I/O Completion layer this builds on is now implemented in Lua and
+hammered by the test suite (see "Kernel surface" below). What remains is the
+userland `nt.loop` coroutine scheduler. The AFD socket layer (`nt.afd`) still
+exposes only *synchronous* primitives that block on a per-IRP `Event` handle;
+this spec describes how to layer the reactor on top so one OS thread can
+multiplex many concurrent sockets.
 
 ## Why this exists
 
@@ -31,8 +31,16 @@ yields; the scheduler resumes it when the corresponding IRP completes.
 
 ## Kernel surface — what we're building on
 
-The relevant primitives are already in the MicroNT kernel
-(`src/NT/PRIVATE/NTOS/IO/COMPLETE.C` and `QSINFO.C`):
+The relevant primitives are in the MicroNT kernel
+(`src/NT/PRIVATE/NTOS/IO/COMPLETE.C` and `QSINFO.C`) and are now **wrapped in
+Lua and stress-tested** — `ex.iocompletion` (create / `:remove` / `:depth`)
+over `NtCreateIoCompletion`/`NtRemoveIoCompletion`, plus `nt.dll.fs`
+`NtSetInformationFile` + `FileCompletionInformation` for the file→port attach.
+`pkg/test/iocp.lua` + `pkg/test/fuzz/iocp.lua` cover: a real IRP completion
+round-tripping `(key, ApcContext, iosb)`, FIFO drain order, N completions
+across K consumer threads delivered exactly once, and concurrent
+producer+consumers with kernel-range fault injection. So the table below is a
+verified foundation, not a wish:
 
 | Syscall | Purpose |
 |---|---|
@@ -201,22 +209,18 @@ who mixes them up.
 
 ## Implementation plan (when we pick this up)
 
-1. **`nt.dll.io`** (~80 lines):
-   - cdef `NtCreateIoCompletion` / `NtRemoveIoCompletion` /
-     `NtSetIoCompletion` / `FILE_COMPLETION_INFORMATION` /
-     extra `IO_COMPLETION_INFORMATION_CLASS`.
-   - Wrappers raise via `nt.errors` per the existing pattern.
-   - Generic `NtSetInformationFile_completion(handle, port, key)`
-     helper — keeps `nt.dll.fs.NtSetInformationFile` un-bloated.
+1. **`nt.dll.io`** — **DONE** (landed in `nt.dll.ex` + `nt.dll.fs`, not a
+   separate module): `NtCreateIoCompletion`/`NtRemoveIoCompletion`/
+   `NtQueryIoCompletion`/`NtOpenIoCompletion` are cdef'd and wrapped in
+   `nt.dll.ex`; `NtSetInformationFile` + `FileCompletionInformation` (class 30)
+   live in `nt.dll.fs`. Wrappers raise via `nt.errors` as planned.
 
-2. **`nt.iocp`** (~50 lines):
-   - `iocp.create([max_concurrent])` returns `NT_HANDLE`.
-   - `iocp.attach(file_handle, key)` — wraps the
-     `FileCompletionInformation` set.
-   - `iocp.dequeue(port, timeout_secs)` returns
-     `(key, apc_context_lightud, iosb_cdata)` or `nil` on timeout.
-   - `iocp.post(port, key, apc_context, status, information)` for
-     scheduler self-wakeups.
+2. **`nt.iocp`** — **PARTIAL**: `ex.iocompletion{}` already gives
+   `create` / `:remove(timeout)` / `:depth()` (the dequeue + query surface,
+   stress-tested). Still to add for the reactor: `.attach(sock, key)` (the
+   `FileCompletionInformation` set — primitive present in `nt.dll.fs`,
+   exercised by the `iosrc` test helper) and `.post()` (`NtSetIoCompletion`)
+   for scheduler self-wakeups.
 
 3. **`nt.afd` async-aware tweak** (~30 lines):
    - Internal `read_io` / `write_io` / `ioctl` already accept a
@@ -262,8 +266,12 @@ who mixes them up.
   not for VLAs. Use a fixed-size struct.
 
 - **Does cancellation always produce a completion on the port?**
-  Per the spec yes. Worth a focused test early on so the scheduler
-  doesn't hang waiting for a cancelled IRP that never arrives.
+  Per the spec yes. Cancellation *itself* is now exercised — but only in
+  the synchronous Event path (`nt.net.afd` does `NtCancelIoFile` → drain →
+  `STATUS_CANCELLED`, tested in `pkg/test/afd.lua`). The IOCP variant — a
+  cancelled IRP landing on the *port* with `STATUS_CANCELLED` — is still
+  unverified; it wants its own focused test when the reactor lands, so the
+  scheduler doesn't hang waiting for a cancelled IRP that never arrives.
 
 - **Win32 socket compat layer**. Out of scope for v1; this is a
   Lua-native API. If LuaSocket portability is ever wanted, build it
