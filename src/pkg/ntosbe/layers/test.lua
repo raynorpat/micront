@@ -6,9 +6,10 @@
 -- test/init.lua (the harness); require('test.cm') / require('test.fuzz.se')
 -- -> the corresponding members.
 --
--- The entry scripts that drive the suites (selftest.lua / selfhost.lua)
--- are NOT in this zip — they're loaded by absolute path via the
--- profile's `entry`, so they stay loose top-level packages.
+-- selftest.lua (the script that drives the suites) is NOT in this zip —
+-- it's staged loose at \SystemRoot\pkg\selftest.lua via the selftest
+-- profile's `entry` and run through the launcher (System32\launch.lua
+-- selftest), which require()s it.
 
 local luapkg = require('ntosbe.luapkg')
 

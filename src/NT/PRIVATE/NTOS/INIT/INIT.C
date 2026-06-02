@@ -68,6 +68,11 @@ ExBurnMemory(
     IN PLOADER_PARAMETER_BLOCK LoaderBlock
     );
 
+VOID
+ExpCaptureUserLoadOptions(
+    IN PLOADER_PARAMETER_BLOCK LoaderBlock
+    );
+
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text(INIT,ExpInitializeExecutive)
 #pragma alloc_text(INIT,Phase1Initialization)
@@ -75,6 +80,7 @@ ExBurnMemory(
 #pragma alloc_text(INIT,NameToOrdinal)
 #pragma alloc_text(INIT,LookupEntryPoint)
 #pragma alloc_text(INIT,ExBurnMemory)
+#pragma alloc_text(INIT,ExpCaptureUserLoadOptions)
 #endif
 
 //
@@ -192,6 +198,79 @@ ULONG InitAnsiCodePageDataOffset;
 ULONG InitOemCodePageDataOffset;
 ULONG InitUnicodeCaseTableDataOffset;
 PVOID InitNlsSectionPointer;
+
+//
+// MicroNT: a userspace command-line tail forwarded to the initial process.
+//
+// LoaderBlock->LoadOptions may carry a standalone "--" token separating the
+// kernel's NT-style options (parsed by ExBurnMemory and elsewhere) from a tail
+// meant for user mode.  ExpCaptureUserLoadOptions copies that tail here, with
+// original case preserved (Lua module names are case-sensitive); QueryInitConfig
+// appends it to the initial process's command line, where it reaches the program
+// as argv.  256 matches the boot loader's command-line cap (boot/cmdline.c).
+// Empty string when LoadOptions has no "--".
+//
+static CHAR ExpUserLoadOptions[256];
+
+//
+// Split LoaderBlock->LoadOptions at a standalone "--" token: capture the tail
+// (post-"--") into ExpUserLoadOptions and NUL-terminate the kernel-visible
+// options at the separator so the NT option scans never see the userspace part.
+//
+// Must run before any consumer strupr's the options in place (KdInitSystem,
+// ExBurnMemory — either would mangle the tail's case) and before
+// MmFreeLoaderBlock frees the buffer.  Tolerates a NULL LoadOptions and an
+// absent "--".
+//
+VOID
+ExpCaptureUserLoadOptions(
+    IN PLOADER_PARAMETER_BLOCK LoaderBlock
+    )
+{
+    PCHAR opts = LoaderBlock->LoadOptions;
+    PCHAR p;
+    PCHAR tail;
+    ULONG i;
+
+    ExpUserLoadOptions[0] = '\0';
+    if (opts == NULL) {
+        return;
+    }
+
+    //
+    // Find a standalone "--": two dashes bounded by start-or-whitespace on the
+    // left and whitespace-or-end on the right, so a longer flag such as
+    // "--default" is never mistaken for the separator.
+    //
+    for (p = opts; *p != '\0'; p++) {
+        if (p[0] == '-' && p[1] == '-' &&
+            (p == opts || p[-1] == ' ' || p[-1] == '\t') &&
+            (p[2] == '\0' || p[2] == ' ' || p[2] == '\t')) {
+            break;
+        }
+    }
+    if (*p == '\0') {
+        return;             // no separator -- nothing for user mode
+    }
+
+    //
+    // Copy the tail (skip the "--" and any following whitespace) into the
+    // capture buffer, bounded by its size.
+    //
+    tail = p + 2;
+    while (*tail == ' ' || *tail == '\t') {
+        tail++;
+    }
+    for (i = 0; tail[i] != '\0' && i < sizeof(ExpUserLoadOptions) - 1; i++) {
+        ExpUserLoadOptions[i] = tail[i];
+    }
+    ExpUserLoadOptions[i] = '\0';
+
+    //
+    // Truncate the kernel-visible options at the separator.
+    //
+    *p = '\0';
+}
 
 VOID
 ExBurnMemory(
@@ -363,6 +442,15 @@ Return Value:
 
     if (Number == 0) {
         InitializationPhase = 0L;
+
+        //
+        // MicroNT: split off any userspace command-line tail (text after a
+        // standalone "--") into ExpUserLoadOptions for the initial process.
+        // Do this first: KdInitSystem and ExBurnMemory both strupr the options
+        // in place (which would destroy the case-sensitive tail), and
+        // MmFreeLoaderBlock later frees the buffer.
+        //
+        ExpCaptureUserLoadOptions(LoaderBlock);
 
         //
         // Compute PhysicalMemoryBlock
@@ -877,6 +965,24 @@ QueryInitConfig(
         RtlAppendUnicodeToString(&ProcessParameters->CommandLine, L" ");
         RtlAppendUnicodeToString(&ProcessParameters->CommandLine,
                                  (PCWSTR)info->Data);
+    }
+
+    /* MicroNT: append the userspace command-line tail (text after a standalone
+     * "--" in LoaderBlock->LoadOptions, captured by ExpCaptureUserLoadOptions).
+     * It becomes the init process's trailing argv, so a fixed disk can pick what
+     * to run at boot without a rebuild — launch.lua require()s the first token.
+     * Tail is ASCII; widen byte-by-byte (paths/options are ASCII). The append is
+     * bounded by CommandLine.MaximumLength. */
+    if (ExpUserLoadOptions[0] != '\0') {
+        WCHAR wtail[sizeof(ExpUserLoadOptions)];
+        ULONG i;
+
+        for (i = 0; ExpUserLoadOptions[i] != '\0'; i++) {
+            wtail[i] = (WCHAR)(UCHAR)ExpUserLoadOptions[i];
+        }
+        wtail[i] = L'\0';
+        RtlAppendUnicodeToString(&ProcessParameters->CommandLine, L" ");
+        RtlAppendUnicodeToString(&ProcessParameters->CommandLine, wtail);
     }
 
     /* Stdio — open device inheritable; place handle in all three stdio

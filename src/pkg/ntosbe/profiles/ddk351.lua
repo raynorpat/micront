@@ -5,7 +5,8 @@
 -- summary.  The runner ships with its binary bundle (the ddk351 layer
 -- stages main.lua + bin/*.EXE under pkg/ddk351/), so the entry is set
 -- via explicit init.args rather than the `entry` sugar (which would
--- double-stage main.lua).
+-- double-stage main.lua).  The launcher require()s the runner as the
+-- module ddk351.main (resolved from the layer-staged pkg\ddk351\main.lua).
 
 return {
     layers = {
@@ -13,5 +14,5 @@ return {
         "drivers.storage.*", "drivers.fs.*",
         "drivers.net", "drivers.input", "drivers.video", "drivers.virtio.*",
     },
-    init = { args = "\\SystemRoot\\pkg\\ddk351\\main.lua" },
+    init = { args = "\\SystemRoot\\System32\\launch.lua ddk351.main" },
 }

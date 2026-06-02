@@ -1,7 +1,7 @@
 -- MicroNT selftest entry point. Runs every suite under test/ and
--- prints a pass/fail summary. Launch via `make selftest`; the
--- Makefile target sets INIT_ARGS so run.exe points here instead of
--- main.lua.
+-- prints a pass/fail summary. Launch via `make selftest`; the selftest
+-- profile's `entry` points Control\Init Args at the launcher
+-- (\SystemRoot\System32\launch.lua selftest), which require()s this module.
 --
 -- Tests run in-process under pcall isolation. When NtCreateThread
 -- and NtCreateProcess are bridged we'll extend the harness to run

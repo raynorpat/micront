@@ -87,19 +87,20 @@ local function resolve_init(order, profile, opts_init)
     if profile.init then
         for k, v in pairs(profile.init) do init[k] = v end
     end
-    -- `entry` names a profile's program.  Two forms:
-    --   "name.lua"        a loose top-level script — init.args points
-    --                     straight at pkg\name.lua (staged in compose).
-    --   "a.dotted.module" a module shipped inside a package zip — run
-    --                     via the launcher (System32\launch.lua) which
-    --                     require()s it.  Nothing to stage here; the
-    --                     owning package's layer ships the module.
+    -- `entry` names a profile's program; every entry runs through the universal
+    -- launcher (System32\launch.lua), which require()s the named module.  Two
+    -- forms differ only in staging:
+    --   "name.lua"        a loose top-level script staged at pkg\name.lua (below);
+    --                     the module name is its stem ("name").
+    --   "a.dotted.module" a module shipped inside a package zip / a layer subdir —
+    --                     nothing to stage here; the owning package supplies it.
+    -- A profile that wants to be steerable (the boot command-line tail chooses the
+    -- module) sets `init.args` to bare "launch.lua" itself — see profiles/default.
     if not init.args and profile.entry then
-        if profile.entry:match("%.lua$") then
-            init.args = "\\SystemRoot\\pkg\\" .. profile.entry
-        else
-            init.args = "\\SystemRoot\\System32\\launch.lua " .. profile.entry
-        end
+        local mod = profile.entry:match("%.lua$")
+            and profile.entry:gsub("%.lua$", "")   -- "selftest.lua" -> "selftest"
+            or  profile.entry                       -- already a dotted module
+        init.args = "\\SystemRoot\\System32\\launch.lua " .. mod
     end
     if opts_init then
         for k, v in pairs(opts_init) do init[k] = v end
