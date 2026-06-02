@@ -815,6 +815,20 @@ function M.main(opts)
     end
     clean_dirs.windows_bcryptprimitives = { WIN .. "/BASE/BCRYPTP", WIN .. "/BASE/BCRYPTP/obj" }
 
+    -- ----- WINDOWS/BASE/DJBCRYPT — djbcrypt.dll: the DJB crypto primitive
+    -- set (X25519/Ed25519/ChaCha20/Poly1305/SHA-512/SHA-256) for the SSH
+    -- stack.  Vendored Monocypher 4.0.2 (built as C++) + B-Con SHA-256;
+    -- 64-bit math via INT64.LIB.  Pure functions, FFI'd from pkg/ssh.
+    targets.windows_base_djbcrypt = function()
+        local since = platform.now()
+        local rc = run_nmake(WIN .. "/BASE/DJBCRYPT",
+                         "WINDOWS/BASE/DJBCRYPT - djbcrypt.dll",
+                         { "makedll=1" })
+        if rc ~= 0 then return rc end
+        return splitsym_dir(PUB_LIB, since)
+    end
+    clean_dirs.windows_base_djbcrypt = { WIN .. "/BASE/DJBCRYPT", WIN .. "/BASE/DJBCRYPT/obj" }
+
     -- ----- WINDOWS/CMD — NT 3.5 cmd.exe lifted from stuff/.
     -- NMAKE shells inline commands (@if exist, &&, |, redirections)
     -- through COMSPEC; without a working cmd.exe those _spawn calls
@@ -1406,7 +1420,7 @@ function M.main(opts)
     local USERLAND_TARGETS = {
         "rtl_user", "ntdll", "urtl", "windows_base_client", "windows_advapi",
         "windows_user32", "windows_shell32", "windows_ws2_32", "windows_wsock32",
-        "windows_bcryptprimitives",
+        "windows_bcryptprimitives", "windows_base_djbcrypt",
         "cmd",
     }
 

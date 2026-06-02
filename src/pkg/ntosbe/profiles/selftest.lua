@@ -12,7 +12,7 @@
 
 return {
     layers = {
-        "lua", "test",
+        "lua", "test", "ssh",
         "drivers.storage.*", "drivers.fs.*",
         "drivers.net", "drivers.input", "drivers.video", "drivers.virtio.*",
     },

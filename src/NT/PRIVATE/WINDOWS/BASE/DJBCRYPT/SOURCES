@@ -1,0 +1,51 @@
+!IF 0
+
+Module Name:
+
+    sources.
+
+Abstract:
+
+    djbcrypt.dll -- DJB crypto primitive set (X25519, Ed25519, ChaCha20,
+    Poly1305, SHA-512, SHA-256) for MicroNT's SSH stack.
+
+    djbcrypt.c is C-linkage glue (cdecl) over vendored reference C:
+      mono.cpp / monoed.cpp  Monocypher 4.0.2  (compiled as C++ -- the .cpp
+                             extension selects the C++ front-end, which
+                             accepts Monocypher's C99-isms; its headers carry
+                             extern "C" guards so the exports stay C-linkage)
+      sha256.c               B-Con crypto-algorithms, public domain
+
+    64-bit integer math (Monocypher's uint64_t field/MAC arithmetic, sha256's
+    bit-length counter) routes through INT64.LIB's __allmul/__allshl/etc.
+    stdint.h (local shim) supplies the C99 fixed-width names the period MSVC
+    front-end lacks; '.' is on INCLUDES so the <stdint.h> include finds it.
+
+    Pure functions, no randombytes -- entropy is the caller's job.
+
+!ENDIF
+
+MAJORCOMP=windows
+MINORCOMP=base
+
+TARGETNAME=djbcrypt
+TARGETPATH=$(BASEDIR)\public\sdk\lib
+TARGETTYPE=DYNLINK
+DLLENTRY=DjbcryptDllInit
+
+LINKLIBS=$(BASEDIR)\public\sdk\lib\*\kernel32.lib \
+         $(BASEDIR)\public\sdk\lib\*\ntdll.lib \
+         $(BASEDIR)\public\sdk\lib\*\INT64.LIB
+
+INCLUDES=.;..\inc;..\..\inc;..\..\..\inc
+
+NTDEBUGTYPE=coff
+
+SOURCES=djbcrypt.c \
+        mono.cpp   \
+        monoed.cpp \
+        sha256.c
+
+UMTYPE=console
+
+DLLDEF=djbcrypt.def

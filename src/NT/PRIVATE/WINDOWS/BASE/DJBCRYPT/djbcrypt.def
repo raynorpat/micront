@@ -1,0 +1,14 @@
+LIBRARY djbcrypt
+
+DESCRIPTION 'MicroNT DJB crypto primitives (X25519/Ed25519/ChaCha20/Poly1305/SHA-2)'
+
+EXPORTS
+
+    dc_sha256
+    dc_sha512
+    dc_x25519
+    dc_ed25519_pubkey
+    dc_ed25519_sign
+    dc_ed25519_verify
+    dc_chacha20
+    dc_poly1305

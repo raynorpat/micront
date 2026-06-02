@@ -313,6 +313,30 @@ function M.run_nmake(linux_dir, desc, extra_args, opts)
     local envp = M.build_envp({ "MAKEDIR=" .. makedir_win })
     local rc = spawn_tool(linux_dir, nmake, tool_args, envp)
 
+    -- Guard against silent compiler crashes.  A CL internal error (ICE) can
+    -- leave a 0-byte .obj behind — sometimes even with rc==0 — and an empty
+    -- obj left in place poisons the next incremental build: nmake's mtime
+    -- check reuses it and the librarian/linker dies much later with a cryptic
+    -- LNK1136 ("invalid or corrupt file"), far from the real cause.  Nuke any
+    -- empty .obj here and surface it as a clear failure at the actual culprit.
+    do
+        local objdir  = linux_dir .. "/obj/i386"
+        local empties = {}
+        for _, name in ipairs(platform.list_dir(objdir)) do
+            if name:sub(-4) == ".obj"
+            and platform.file_size(objdir .. "/" .. name) == 0 then
+                os.remove(objdir .. "/" .. name)
+                empties[#empties + 1] = name
+            end
+        end
+        if #empties > 0 then
+            platform.log((">>> %s: removed 0-byte object(s) [%s] — compiler "
+                .. "likely crashed (ICE); treating as build failure"):format(
+                desc, table.concat(empties, ", ")))
+            if rc == 0 then rc = 1 end
+        end
+    end
+
     if rc == 0 then
         _write_stamp(linux_dir .. "/obj/i386/.syms-stamp",
                      cfg.debug_symbols and "syms" or "retail")

@@ -5,4 +5,4 @@ require('test.term.all')
 require('test.net.all')
 require('test.ntdll.all')
 require('test.fuzz.all')
-
+require('test.ssh.all')
