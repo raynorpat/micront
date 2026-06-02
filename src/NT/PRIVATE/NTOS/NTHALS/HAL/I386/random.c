@@ -9,7 +9,6 @@
  *
  *   - TSC: the low bits, plus the variation in when each boot point is
  *     reached, are the jitter source on platforms without a hardware RNG.
- *   - PIT channel 0 counter: its phase relative to the TSC adds noise.
  *   - The boot wall-clock seed (HalpBootSystemTime), read once via the HAL's
  *     detected clock-source backend -- NOT re-read here, so there is no CMOS
  *     port-I/O on this path.
@@ -18,8 +17,16 @@
  *     natively under KVM and is fast; the earlier boot stalls were the CMOS
  *     RTC UIP spin, not RDRAND.
  *
- * Ongoing reseeding (periodic RDRAND off the critical path) is the job of the
- * entropy thread added with RngInitSystem phase 1.
+ * The boot path no longer reads the PIT directly: latching channel 0 here
+ * races the live clock ISR (which latches it every tick for timekeeping) and
+ * could corrupt the system-time delta.  Instead the clock ISR -- the sole
+ * legitimate owner of channel 0 -- folds the counter it already reads into
+ * HalpTickJitter (a cheap integer fold, no lock, no permute), and the reseed
+ * thread drains that word into the pool.  PIT interrupt-latency jitter is thus
+ * still captured, but only the clock owner ever touches the hardware.
+ *
+ * Ongoing reseeding (periodic RDRAND + the accumulated tick jitter, off the
+ * critical path) is the job of the entropy thread below.
  *
  * CL 8.50 predates RDTSC/CPUID/RDRAND, so those are hand-emitted as opcode
  * bytes, exactly as stubs.c already does for RDTSC and CPUID.
@@ -31,6 +38,12 @@ static BOOLEAN HalpRandProbed   = FALSE;
 static BOOLEAN HalpHaveRdrand   = FALSE;
 static BOOLEAN HalpHaveRdseed   = FALSE;
 static BOOLEAN HalpRdrandSeeded = FALSE;   /* RDRAND folded into the seed once */
+
+/* PIT interrupt-latency jitter, accumulated by the clock ISR (time.c) and
+ * drained into the pool by the reseed thread.  Written blind from the ISR at
+ * CLOCK2_LEVEL; a torn read/clear on the (UP-only) drain side only loses a
+ * sample's worth of entropy, never corrupts. */
+volatile ULONG HalpTickJitter = 0;
 
 /* RDTSC -> EDX:EAX (0F 31), as in stubs.c. */
 static ULONGLONG
@@ -81,7 +94,7 @@ HalpRandProbe(VOID)
     }
 
     HalpRandProbed = TRUE;
-    HalpSerialPrint("HAL: entropy sources: TSC+PIT+epoch always; RDRAND ");
+    HalpSerialPrint("HAL: RDRAND ");
     HalpSerialPrint(HalpHaveRdrand ? "yes" : "no");
     HalpSerialPrint(", RDSEED ");
     HalpSerialPrint(HalpHaveRdseed ? "yes\r\n" : "no\r\n");
@@ -100,7 +113,6 @@ HalpAbsorbBootEntropy(VOID)
     UCHAR buf[64];
     ULONG n = 0;
     ULONGLONG tsc;
-    USHORT pit;
 
     if (!HalpRandProbed) {
         HalpRandProbe();
@@ -111,18 +123,11 @@ HalpAbsorbBootEntropy(VOID)
     RtlCopyMemory(buf + n, &tsc, sizeof(tsc));
     n += sizeof(tsc);
 
-    /* 2. PIT channel 0 counter (latch, then read lo/hi). */
-    HalpWritePort(0x43, 0x00);
-    pit  = (USHORT)HalpReadPort(0x40);
-    pit |= (USHORT)((USHORT)HalpReadPort(0x40) << 8);
-    RtlCopyMemory(buf + n, &pit, sizeof(pit));
-    n += sizeof(pit);
-
-    /* 3. Boot wall-clock seed (0 until HalpInitTscClock runs in Phase 1). */
+    /* 2. Boot wall-clock seed (0 until HalpInitTscClock runs in Phase 1). */
     RtlCopyMemory(buf + n, &HalpBootSystemTime, sizeof(HalpBootSystemTime));
     n += sizeof(HalpBootSystemTime);
 
-    /* 4. RDRAND, folded in once.  Native + fast under KVM. */
+    /* 3. RDRAND, folded in once.  Native + fast under KVM. */
     if (HalpHaveRdrand && !HalpRdrandSeeded) {
         ULONG i, tries, val;
         for (i = 0; i < 8; i += 1) {
@@ -138,12 +143,15 @@ HalpAbsorbBootEntropy(VOID)
         HalpRdrandSeeded = TRUE;
     }
 
-    /* 5. TSC again -- folds in the time spent gathering the above. */
+    /* 4. TSC again -- folds in the time spent gathering the above. */
     tsc = HalpRandReadTsc();
     RtlCopyMemory(buf + n, &tsc, sizeof(tsc));
     n += sizeof(tsc);
 
     RngAddEntropy(buf, n);
+
+    /* Don't leave raw entropy (notably the RDRAND batch) on the stack. */
+    RtlZeroMemory(buf, sizeof(buf));
 }
 
 /* ~60s reseed cadence, as negative (relative) 100ns units. */
@@ -170,7 +178,7 @@ HalpEntropyThread(IN PVOID Context)
 {
     LARGE_INTEGER interval;
     UCHAR     buf[64];
-    ULONG     n, i, tries, v;
+    ULONG     n, i, tries, v, jit;
     ULONGLONG tsc;
 
     UNREFERENCED_PARAMETER(Context);
@@ -201,7 +209,19 @@ HalpEntropyThread(IN PVOID Context)
         RtlCopyMemory(buf + n, &tsc, sizeof(tsc));
         n += sizeof(tsc);
 
+        /* Drain the PIT interrupt-latency jitter the clock ISR has folded into
+         * HalpTickJitter since our last pass.  Plain read+clear: a tick landing
+         * between the two only loses one sample's entropy (UP today; SMP would
+         * want an interlocked exchange). */
+        jit = HalpTickJitter;
+        HalpTickJitter = 0;
+        RtlCopyMemory(buf + n, &jit, sizeof(jit));
+        n += sizeof(jit);
+
         RngAddEntropy(buf, n);
+
+        /* Don't leave raw entropy (notably the RDRAND batch) on the stack. */
+        RtlZeroMemory(buf, sizeof(buf));
     }
 }
 

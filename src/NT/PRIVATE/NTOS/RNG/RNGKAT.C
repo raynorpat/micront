@@ -17,8 +17,16 @@ Abstract:
 
       Stage 2 -- Xoodyak-Hash of the empty message, 32-byte output.  Matches
                  Count = 1 of the official NIST LWC Xoodyak hash KAT
-                 (LWC_HASH_KAT_256.txt).  This exercises the full Cyclist
-                 absorb + squeeze path the pool uses, not just the permutation.
+                 (LWC_HASH_KAT_256.txt).  Exercises a single (padding-only)
+                 Down plus the multi-chunk squeeze path.
+
+      Stage 3 -- Xoodyak-Hash of the 32-byte message 00 01 .. 1F (Count = 33
+                 of the same NIST KAT).  The empty message above never crosses
+                 a rate boundary on input, so it leaves the Up-between-blocks
+                 branch of RngpAbsorbAny untested -- yet that branch runs on
+                 every boot (the >R_hash init label) and on every multi-block
+                 RngAddEntropy.  This vector is two absorb blocks, so it is the
+                 canary that pins that branch.
 
 --*/
 
@@ -50,6 +58,16 @@ static const UCHAR RngpKatHashEmpty[32] = {
     0xE3, 0x69, 0xEE, 0x50, 0xDC, 0x8F, 0x8B, 0xD1
 };
 
+//
+// Xoodyak-Hash(00 01 .. 1F) -- 32-byte message, 32-byte output.
+//
+static const UCHAR RngpKatHashMulti[32] = {
+    0xCE, 0xBE, 0x4A, 0xFF, 0x9E, 0xAC, 0x22, 0x18,
+    0x01, 0x7D, 0xDA, 0x5F, 0x82, 0x07, 0xBA, 0x83,
+    0x0E, 0x98, 0x91, 0x87, 0x25, 0x65, 0x39, 0xBD,
+    0x7D, 0x31, 0xAE, 0x5E, 0x94, 0xFF, 0x0C, 0x6E
+};
+
 ULONG
 RngpSelfTest (
     VOID
@@ -58,6 +76,7 @@ RngpSelfTest (
     RNG_CYCLIST xk;
     ULONG state[XOODOO_LANES];
     UCHAR buf[XOODOO_BYTES];
+    UCHAR msg[32];
     ULONG i;
 
     //
@@ -82,6 +101,21 @@ RngpSelfTest (
     RngpSqueezeAny(&xk, buf, 32);
     if (RtlCompareMemory(buf, (PVOID)RngpKatHashEmpty, 32) != 32) {
         return 2;
+    }
+
+    //
+    // Stage 3: Xoodyak-Hash of the 32-byte message 00 01 .. 1F.  Two absorb
+    // blocks, so RngpAbsorbAny takes its Up-between-blocks path -- the branch
+    // stage 2 never reaches.
+    //
+    for (i = 0; i < sizeof(msg); i += 1) {
+        msg[i] = (UCHAR)i;
+    }
+    RngpCyclistInit(&xk);
+    RngpAbsorbAny(&xk, msg, sizeof(msg), 0x03);
+    RngpSqueezeAny(&xk, buf, 32);
+    if (RtlCompareMemory(buf, (PVOID)RngpKatHashMulti, 32) != 32) {
+        return 3;
     }
 
     return 0;

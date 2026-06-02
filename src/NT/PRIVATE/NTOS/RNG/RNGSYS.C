@@ -13,8 +13,11 @@ Abstract:
 
 #include "rngp.h"
 
+static VOID RngpAbsorbLoaderBlock(IN PLOADER_PARAMETER_BLOCK LoaderBlock);
+
 #if defined(ALLOC_PRAGMA)
 #pragma alloc_text(INIT, RngInitSystem)
+#pragma alloc_text(INIT, RngpAbsorbLoaderBlock)
 #endif
 
 //
@@ -23,6 +26,41 @@ Abstract:
 //
 static const UCHAR RngpInitLabel[] = "MicroNT-RNG/Xoodyak-v1";
 
+//
+// Fold the loader's view of the machine into the pool: the physical memory
+// map (each descriptor's type + base + extent).  For a fixed platform/VM
+// config these are largely constant across reboots -- this is domain
+// separation / uniqueness, not secret bits -- but they cost nothing (the
+// loader already built the list) and they reach the pool at Phase 0, before
+// any clock tick or RDRAND batch, when it would otherwise hold only the static
+// init label.  Purely passive: we read a list the loader populated and touch
+// no hardware.  (The boot-driver load order is a candidate second source here
+// once its list-entry layout is pinned down.)
+//
+static VOID
+RngpAbsorbLoaderBlock (
+    IN PLOADER_PARAMETER_BLOCK LoaderBlock
+    )
+{
+    PLIST_ENTRY                   head;
+    PLIST_ENTRY                   next;
+    PMEMORY_ALLOCATION_DESCRIPTOR md;
+    struct {
+        ULONG Type;
+        ULONG BasePage;
+        ULONG PageCount;
+    } rec;
+
+    head = &LoaderBlock->MemoryDescriptorListHead;
+    for (next = head->Flink; next != head; next = next->Flink) {
+        md = CONTAINING_RECORD(next, MEMORY_ALLOCATION_DESCRIPTOR, ListEntry);
+        rec.Type      = (ULONG)md->MemoryType;
+        rec.BasePage  = md->BasePage;
+        rec.PageCount = md->PageCount;
+        RngpAbsorbAny(&RngpPool, (const UCHAR *)&rec, sizeof(rec), 0x03);
+    }
+}
+
 BOOLEAN
 RngInitSystem (
     IN ULONG Phase,
@@ -30,8 +68,6 @@ RngInitSystem (
     )
 {
     ULONG failedStage;
-
-    UNREFERENCED_PARAMETER(LoaderBlock);
 
     if (Phase == 0) {
 
@@ -51,6 +87,12 @@ RngInitSystem (
                       RngpInitLabel,
                       sizeof(RngpInitLabel) - 1,
                       0x03);
+
+        //
+        // Fold in the loader's memory map -- the earliest available entropy,
+        // before HAL gathering or any clock tick.
+        //
+        RngpAbsorbLoaderBlock(LoaderBlock);
 
         DbgPrint("RNG: Xoodyak pool initialized, self-test OK\n");
     }

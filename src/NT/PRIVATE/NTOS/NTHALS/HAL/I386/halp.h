@@ -332,7 +332,7 @@ VOID HalpCpuid(IN ULONG Leaf, IN ULONG Subleaf,
                OUT PULONG OutEax, OUT PULONG OutEbx,
                OUT PULONG OutEcx, OUT PULONG OutEdx);
 
-/* Entropy gatherer (random.c): sample TSC/PIT/epoch/RDRAND and feed the RNG
+/* Entropy gatherer (random.c): sample TSC/epoch/RDRAND and feed the RNG
  * subsystem's pool.  RngAddEntropy is exported by ntoskrnl. */
 VOID HalpAbsorbBootEntropy(VOID);
 VOID RngAddEntropy(IN PVOID Buffer, IN ULONG Length);
@@ -340,6 +340,11 @@ VOID RngAddEntropy(IN PVOID Buffer, IN ULONG Length);
 /* Periodic reseed thread (random.c).  HAL export; the executive calls it once
  * the process subsystem is up so system threads can be created. */
 VOID HalStartEntropyThread(VOID);
+
+/* PIT interrupt-latency jitter accumulator (defined in random.c).  The clock
+ * ISR (time.c) folds the channel-0 counter it already reads into this word;
+ * the reseed thread drains it.  See random.c for the ownership rationale. */
+extern volatile ULONG HalpTickJitter;
 
 /* Boot wall-clock seed (time.c); 0 until HalpInitTscClock runs.  Absorbed as
  * one of the entropy sources. */

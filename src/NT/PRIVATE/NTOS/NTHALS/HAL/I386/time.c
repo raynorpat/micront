@@ -682,6 +682,15 @@ HalpClockTickIncrement(VOID)
 
     current = HalpReadPitCounter();
 
+    /* Donate the just-read counter to the RNG pool's jitter accumulator.
+     * `current` is reload minus the PIT clocks that elapsed before this ISR
+     * got to read it, i.e. interrupt-service latency -- which jitters with
+     * host scheduling and is a real entropy source on the no-RDRAND/TCG path.
+     * Cheap integer fold only (rotate-and-XOR); the Xoodyak permutation runs
+     * later, off this path, when random.c's reseed thread drains the word.
+     * No lock needed: a torn UP race only loses entropy. */
+    HalpTickJitter = ((HalpTickJitter << 7) | (HalpTickJitter >> 25)) ^ current;
+
     if (!HalpPitClockInit) {
         HalpLastPitCount = current;
         HalpPitClockInit = TRUE;

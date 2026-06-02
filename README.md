@@ -17,6 +17,7 @@ Implemented:
 - [x] LAPIC + IOAPIC interrupt delivery (graceful 8259 fallback) — boots
   default `microvm` and runs under KVM (in-kernel irqchip)
 - [x] Fast `SYSENTER`/`SYSEXIT` & Zw* kernel service dispatch
+- [x] Kernel CSPRNG ([Xoodyak cyclist](https://tosc.iacr.org/index.php/ToSC/article/view/8618))
 - [x] VirtIO transport (modern PCI, shared `virtio.lib`)
   - [x] virtio-blk
   - [x] virtio-net (NDIS 3 miniport)
