@@ -17,6 +17,60 @@ long-term (e.g. the srv03 net stack → `MODERN-IPSTACK.md`).
 ## Already covered — no work
 - **ntdll.dll** — all 5 needed already exported: `NtOpenFile`, `NtReadFile`,
   `NtWriteFile`, `NtCreateNamedPipeFile`, `RtlNtStatusToDosError`.
+- **kernel syscalls** — audited the whole `hello` surface against `SERVICES.TAB`:
+  every Nt* the 27 kernel32 funcs need *already exists* except `NtYieldExecution`
+  (now added). The remaining syscall-layer work is info-class behaviour, not new
+  services. Semaphore/timer primitives are exposed + tested in `nt.dll.ex`.
+
+## Progress (this branch)
+- **P0 `NtYieldExecution`** — DONE (commit 99649234), boot-tested. Backs
+  `SwitchToThread`. Established the add-a-syscall loop: one `KE/SERVICES.TAB`
+  line → gensrv (kernel systable + ntdll Nt/Zw stubs) → `EX/*.C` body →
+  `NTEXAPI.H` proto → `nt.dll.ke` FFI → `pkg/test/ntdll` test. Body delegates to
+  `KeDelayExecutionThread` with a zero (already-expired) interval, which drops
+  into the dispatcher round-robin yield branch — no hand-rolled context switch.
+- **P2 semaphore/timer** — already exposed in `nt.dll.ex` (`ex.semaphore` /
+  `ex.timer` factories + raw `Nt{Create,Release}Semaphore` / `Nt{Create,Set}Timer`);
+  only the concurrent-waiter case was missing. Added a `release(K)`-wakes-K-waiters
+  test — proves the counting-semaphore "no lost wakeups" contract `WaitOnAddress`
+  rests on. **Semaphore primitive is verified sufficient for the synch DLL.**
+- **P1 file info-classes** — PENDING: `FileLinkInformation` (set → `CreateHardLinkW`)
+  and `FileNameInformation` (query → `GetFinalPathNameByHandleW`). Add the class +
+  real-FS test in `nt.dll.fs`; both ride existing `Nt{Query,Set}InformationFile`.
+
+## srv03 portability map (the 27 kernel32 funcs)
+Surveyed `stuff/srv03rtm-anika` (NT 5.2): it has the XP-era funcs verbatim, is
+missing the Vista/Win8 ones. Key result: **no `hello` path needs deeper-subsystem
+work that `hello` actually exercises** — every genuine subsystem dependency sits
+behind a code path console-`hello` never hits, so it's a resolve-only stub for now.
+
+- **Tier 1 — lift verbatim** (single Nt* call): `GetFileSizeEx` (filehops.c:1906),
+  `SetFilePointerEx` (filehops.c:882), `CreateHardLinkW` (winlinks.c:68),
+  `CancelIo` (filehops.c:2646), `SwitchToThread` (thread.c:3591 — **DONE** via P0),
+  `GetProcessId` (process.c:6545), `RtlCaptureContext` (rtl/i386/xcptmisc.asm:435),
+  `Module32First/NextW` (toolhelp.c:1157/1296).
+- **Tier 2 — present, MODERATE** (self-contained helpers): `FindFirstFileExW`
+  (filefind.c:600), `CreateToolhelp32Snapshot` (toolhelp.c:102 — collapse to a
+  self-process LDR walk; Rust only needs own-module backtrace), `SetWaitableTimer`
+  (synch.c:1857 — drop the SxS callback path).
+- **Tier 3 — ABSENT in srv03, write fresh/alias**: `GetSystemTimePreciseAsFileTime`
+  (alias `GetSystemTimeAsFileTime`), `CreateWaitableTimerExW` (wrap `NtCreateTimer`),
+  `CompareStringOrdinal` (~15-line UTF-16 compare), `SetThreadStackGuarantee` (TEB),
+  `GetFileInformationByHandleEx`/`SetFileInformationByHandle` (dispatch over
+  `Nt{Query,Set}InformationFile` by class), `GetFinalPathNameByHandleW`
+  (`NtQueryObject` / `FileNameInformation`), `InitOnceBeginInitialize` /
+  `InitOnceComplete` (lift from nxdk, MIT).
+- **Tier 4 — deeper subsystem, but `hello` doesn't hit it → resolve-stub now**:
+  `AddVectoredExceptionHandler` (ntdll/vectxcpt.c:104 — the *register* body is pure
+  userland TRIVIAL to lift; only the *dispatch* wiring is DEEP, and `hello` just
+  registers a stack-guard VEH it never triggers), the proc-thread-attribute trio
+  (`Initialize`/`Update`/`DeleteProcThreadAttributeList` — Vista, only on spawn),
+  `CopyFileExW` (fileopcr.c:1956 — reparse-heavy; plain-copy degrades fine),
+  `CreateSymbolicLinkW` (ABSENT + needs reparse kernel support).
+
+msvcrt 10: all TRIVIAL (accessors + data exports) except `__getmainargs`
+(crtlib.c:282, MODERATE). `userenv!GetUserProfileDirectoryW`: srv03's is DEEP
+(registry+SID) — write the minimal `%USERPROFILE%` version instead.
 
 ## DLLs MicroNT must add
 | DLL | why |
@@ -105,13 +159,18 @@ the HAL + virtio-rng feed) rather than poking viorng directly.
 GetUserProfileDirectoryW   ; stub a path
 ```
 
-## api-ms-win-core-synch-l1-2-0.dll — new DLL
+## api-ms-win-core-synch-l1-2-0.dll — new DLL  ◀ ACTIVE
 ```
 WaitOnAddress
 WakeByAddressAll
 WakeByAddressSingle
 ```
 Rust imports ONLY these 3 from this apiset (no condvar re-exports needed).
+
+Underlying primitive **verified ready** (P2): `NtCreateSemaphore` +
+`NtWaitForSingleObject` + `NtReleaseSemaphore` are exposed and tested, including
+the concurrent `release(K)`-wakes-K-waiters / no-lost-wakeups case. The DLL is
+now the keystone task for `hello`.
 
 Reference impl (Win7 backport, Cristian Adam):
 https://github.com/cristianadam/api-ms-win-core-synch-Win7/blob/43cef8c1a108cbb85719cadc3eb9d6d5d479af81/api-ms-win-core-synch-l1-2-0.c

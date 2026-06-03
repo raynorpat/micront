@@ -2,10 +2,12 @@
 -- Exercises both raw Nt* wrappers and the Lua-idiomatic factory
 -- objects with their :method() surface.
 
-local t  = require('test')
-local ke = require('nt.dll.ke')
-local ex = require('nt.dll.ex')
-local ps = require('nt.dll.ps')
+local t      = require('test')
+local ke     = require('nt.dll.ke')
+local ex     = require('nt.dll.ex')
+local ps     = require('nt.dll.ps')
+local thread = require('nt.thread')
+local handle = require('nt.dll.handle')
 
 t.suite("sync")
 
@@ -139,6 +141,45 @@ end)
 t.test("semaphore: missing maximum raises", function()
     t.raises(function() ex.semaphore{ initial = 1 } end,
              "maximum is required")
+end)
+
+-- Each waiter runs in its own cr_thread lua_State and borrows the shared
+-- semaphore handle (same process => same handle value). It blocks on a slot
+-- the semaphore does not have yet, then reports the outcome.
+local SEM_WAITER = [[
+local ex     = require('nt.dll.ex')
+local handle = require('nt.dll.handle')
+local sem = setmetatable({ _h = handle.from_payload(PAYLOAD) }, ex.Semaphore)
+return sem:acquire(10.0) and "got" or "timeout"
+]]
+
+-- The exact contract WaitOnAddress is built on: K threads block, a single
+-- release(K) (the WakeByAddressAll path) wakes all K. A counting semaphore
+-- gives "no lost wakeups" by construction -- the K released permits persist,
+-- so a waiter that has not blocked yet still acquires immediately. Correctness
+-- is therefore timing-independent; the delay below only makes the "all
+-- genuinely blocked first" case the common one.
+t.test("semaphore: release(K) wakes K concurrent waiters, no lost wakeups", function()
+    local K = 4
+    local s = ex.semaphore{ initial = 0, maximum = K }
+    local semh = handle.to_payload(s:handle())
+
+    local waiters = {}
+    for i = 1, K do waiters[i] = thread.run(SEM_WAITER, semh) end
+
+    ke.NtDelayExecution(false, ke.timeout(0.1))   -- let them reach acquire()
+    t.eq(s:release(K), 0, "count was 0 before the wake-all")
+
+    local got = 0
+    for i = 1, K do
+        t.ok(waiters[i]:wait(10.0), "waiter " .. i .. " finished")
+        local st, v = waiters[i]:result()
+        t.eq(st, "ok", "waiter " .. i .. " status (" .. tostring(v) .. ")")
+        if v == "got" then got = got + 1 end
+        waiters[i]:close()
+    end
+    t.eq(got, K, "all " .. K .. " waiters acquired exactly one slot")
+    s:close()
 end)
 
 -- ------------------------------------------------------------------
