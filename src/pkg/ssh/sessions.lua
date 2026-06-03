@@ -47,12 +47,21 @@ function M.shell(o)
         bridge.cooked(S, sess.tin, sess.tout, c, {
             prompt  = o.prompt or "",
             onlcr   = sess.pty,                  -- raw-mode pty client needs \n -> \r\n
-            on_done = function()                 -- child's stdout hit EOF
-                sess.exit_status(c:wait())       -- it has exited; status is ready
+            on_done = function()                 -- child's stdout hit EOF: it exited
+                sess.exit_status(c:wait())       -- report its status to the client
                 sess.tout:close()                -- EOF + CLOSE; mux drains + stops
             end,
         })
-        sess.defer(function() c:close() end)
+        -- Single authoritative teardown, after the reactor stops for ANY reason
+        -- (clean exit, client disconnect, error).  terminate() is the safety
+        -- net: if the client dropped and the program ignored its stdin EOF, the
+        -- on_done chain never fired and the child is still running — kill it so
+        -- it can't outlive the session, then close handles.
+        sess.defer(function()
+            c:terminate()
+            c:close()
+            sess.log('session: child reaped')
+        end)
     end
 end
 

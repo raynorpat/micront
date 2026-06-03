@@ -21,6 +21,7 @@ local stream = require('nt.term.stream')
 local npfs   = require('nt.dll.npfs')
 local fs     = require('nt.dll.fs')
 local ps     = require('nt.dll.ps')
+local ke     = require('nt.dll.ke')
 local handle = require('nt.dll.handle')
 
 -- Disambiguates multiple children spawned from the SAME thread; the
@@ -70,12 +71,22 @@ function M.spawn(opts)
     }, Child)
 end
 
--- Block until the child exits; returns its exit status.  Synchronous (a
--- one-shot wait, not part of the reactor) — call it after the bridge
--- tasks have drained, or from a task via the process handle if you need
--- it cooperatively.
+-- Block until the child exits; returns its NTSTATUS exit code.  Synchronous
+-- (a one-shot wait, not part of the reactor) — call it once the child's stdout
+-- has hit EOF, when exit is imminent.  Unlike ps.wait_exit it does NOT close
+-- the process/thread handles — Child:close owns that — so a caller can wait,
+-- read the status, and close exactly once.
 function Child:wait()
-    return ps.wait_exit(self.proc)
+    ke.NtWaitForSingleObject(self.proc.process, false, nil)
+    return ps.NtQueryInformationProcess_Basic(self.proc.process).exit_status
+end
+
+-- Terminate the child if it is still running.  The teardown safety net: a
+-- program that ignored its stdin EOF (so the child-exit chain never fired)
+-- must not outlive the session.  Errors are swallowed — terminating an
+-- already-exited process is a no-op, not a failure.
+function Child:terminate()
+    pcall(ps.NtTerminateProcess, self.proc.process, 0)
 end
 
 function Child:close()

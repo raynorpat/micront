@@ -150,6 +150,11 @@ local function data_phase(S, io, ctx, session_fn, defer)
         end)
         if not ok then log('demux: %s', tostring(e)) end
         tin:close()                 -- socket gone -> the session sees EOF
+        S:stop()                    -- ...and tear the reactor down now: don't
+                                    -- park forever waiting on a child whose
+                                    -- client has disconnected (a clean child
+                                    -- exit instead stops via the mux).  The
+                                    -- child is killed by the session's defer.
     end)
 
     -- Hand the session its transport.  It spawns its own task(s) and returns;
@@ -328,6 +333,7 @@ function M.serve(sock, opts)
 
     for i = #defers, 1, -1 do pcall(defers[i]) end
     sk:close()
+    log('connection closed')
 end
 
 return M
