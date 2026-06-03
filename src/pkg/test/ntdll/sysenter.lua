@@ -197,7 +197,9 @@ t.test("syscall storm: 4 threads x 5000 NtQuerySystemTime", function()
     for i = 1, N_THREADS do
         threads[i]:wait()
         local s, v = threads[i]:result()
-        t.eq(s, "ok", ("thread %d"):format(i))
+        -- Surface the worker's error payload (v) when the status isn't ok —
+        -- this storm is intermittent, so the message is what we need to debug.
+        t.eq(s, "ok", ("thread %d: %s"):format(i, tostring(v)))
         t.eq(v, "ok", ("thread %d"):format(i))
         threads[i]:close()
     end

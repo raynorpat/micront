@@ -1,2 +1,6 @@
 require('test.ssh.wire')
 require('test.ssh.crypto')
+require('test.ssh.kex')
+require('test.ssh.cipoly')
+require('test.ssh.userauth')
+require('test.ssh.channel')

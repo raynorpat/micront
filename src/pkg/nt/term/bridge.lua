@@ -49,9 +49,14 @@ function M.raw(S, tin, tout, child, opts)
 end
 
 -- cooked: the line discipline is the filter; only committed lines (with a
--- trailing \n) reach the child.
+-- trailing \n) reach the child.  opts.onlcr turns on the OUTPUT half of the
+-- discipline (a tty's OPOST/ONLCR): the child writes bare \n, but a terminal
+-- in raw mode — an SSH pty client, say — needs \r\n or its lines staircase, so
+-- child output gets bare LF -> CRLF.  (The line editor's own echo already
+-- emits \r\n via the renderer, so only the child's stream is cooked here.)
 function M.cooked(S, tin, tout, child, opts)
     local on_done = (opts and opts.on_done) or default_done(tout)
+    local onlcr   = opts and opts.onlcr
     local rl = line.new{ input = tin, output = tout,
                          prompt = opts and opts.prompt or "" }
     S:spawn(function()                       -- terminal -> cook -> child stdin
@@ -65,6 +70,7 @@ function M.cooked(S, tin, tout, child, opts)
         while true do
             local d = child.stdout:read()
             if d == nil then on_done(); break end
+            if onlcr then d = (d:gsub("\r?\n", "\r\n")) end
             tout:write(d)
         end
     end)

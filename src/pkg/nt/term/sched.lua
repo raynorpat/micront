@@ -240,4 +240,75 @@ end
 
 function Chan:is_closed() return self.closed end
 
+-- ===================================================================
+-- Mailbox — a queue of DISCRETE messages between coroutines on one
+-- scheduler.  Single reader; any number of writers.  Unlike Chan (a
+-- byte stream that concatenates writes), each put() is one message that
+-- get() returns whole — what a packet mux needs.  get() parks when
+-- empty and resumes on the next put or on close (EOF, returns nil).
+-- ===================================================================
+
+local Mbox = {}
+Mbox.__index = Mbox
+M._Mbox = Mbox
+
+-- get() → the next message, or nil at end of queue (closed and drained).
+-- Parks the caller while empty.
+function Mbox:get()
+    while self.head > self.tail do
+        if self.closed then return nil end
+        if self.reader and self.reader ~= self.sched.current then
+            error("mailbox: a second reader tried to park", 2)
+        end
+        self.reader = self.sched.current
+        coroutine.yield(PARK)            -- woken by put/close; loop re-checks
+    end
+    self.reader = nil
+    self.head = self.head + 1
+    local item = self.q[self.head - 1]
+    self.q[self.head - 1] = nil
+    return item
+end
+
+-- put(item) — enqueue one message and wake a parked reader.  A put after
+-- close is silently dropped: writers racing teardown shouldn't error.
+function Mbox:put(item)
+    if self.closed then return self end
+    self.tail = self.tail + 1
+    self.q[self.tail] = item
+    if self.reader then
+        local co = self.reader
+        self.reader = nil
+        self.sched:wake(co)
+    end
+    return self
+end
+
+-- close — no more puts; a parked reader is woken to observe EOF after the
+-- queue drains.
+function Mbox:close()
+    if self.closed then return self end
+    self.closed = true
+    if self.reader then
+        local co = self.reader
+        self.reader = nil
+        self.sched:wake(co)
+    end
+    return self
+end
+
+function Mbox:is_closed() return self.closed end
+
+-- A message mailbox bound to this scheduler.
+function Sched:mailbox()
+    return setmetatable({
+        sched  = self,
+        q      = {},
+        head   = 1,        -- next index to read
+        tail   = 0,        -- last index written
+        reader = nil,
+        closed = false,
+    }, Mbox)
+end
+
 return M

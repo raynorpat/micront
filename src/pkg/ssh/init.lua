@@ -23,10 +23,19 @@
 --   xport    transport over an nt.net.afd socket: version-string exchange
 --            + buffered read-exactly-N / write.
 --
--- Still to come (own modules, see the TODO doc):
 --   kex      KEXINIT negotiation + curve25519 ECDH + exchange hash + keys
 --   userauth publickey (ssh-ed25519)
---   channel  session channel → nt.term
+--   channel  session-channel message builders
+--   conn     one connection as an event-driven reactor (the I/O composition)
+--   sessions what runs on the channel: a launched program / line REPL / echo
+--
+-- This is a LIBRARY: it knows SSH over a given socket and nothing about how
+-- the host gets an IP or which program is the shell.  Listening, network
+-- bring-up and shell policy belong to the deployment (see pkg/sshd.lua).
+--
+-- Public surface for building a server:
+--   ssh.serve(sock, { hostkey, session, authorize })  -- run one connection
+--   ssh.sessions.shell{ exe = ... }                   -- attach a program
 --
 -- Nothing here holds module-local connection state: sequence numbers,
 -- cipher keys and channel tables all live on per-connection instances, so
@@ -34,12 +43,20 @@
 -- discipline).
 
 local M = {
-    crypto = require('ssh.crypto'),
-    wire   = require('ssh.wire'),
-    consts = require('ssh.consts'),
-    packet = require('ssh.packet'),
-    xport  = require('ssh.xport'),
+    crypto   = require('ssh.crypto'),
+    wire     = require('ssh.wire'),
+    consts   = require('ssh.consts'),
+    packet   = require('ssh.packet'),
+    cipoly   = require('ssh.cipoly'),
+    kex      = require('ssh.kex'),
+    userauth = require('ssh.userauth'),
+    channel  = require('ssh.channel'),
+    xport    = require('ssh.xport'),
+    conn     = require('ssh.conn'),
+    sessions = require('ssh.sessions'),
 }
+
+M.serve = M.conn.serve              -- ssh.serve(sock, opts) — run one connection
 
 M.VERSION_ID = "SSH-2.0-MicroNT_0.1"
 

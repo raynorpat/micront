@@ -1,44 +1,44 @@
--- ssh.xport — SSH transport over an nt.net.afd TCP socket.
+-- ssh.xport — SSH framing over a byte transport.
 --
 -- Two jobs the packet layer needs from the byte transport:
---   * read EXACTLY n bytes (afd.recv returns up to n, so we buffer and
---     loop) — packet parsing is framed and cannot tolerate short reads;
+--   * read EXACTLY n bytes (a stream/socket read returns up to n, so we
+--     buffer and loop) — packet parsing is framed and cannot tolerate
+--     short reads;
 --   * the version-string exchange (RFC 4253 §4.2) that precedes the
 --     binary packet protocol.
 --
--- A Conn wraps one connected afd socket and owns the receive buffer, so
--- no transport state leaks into module globals.  It deliberately knows
--- nothing about packets, ciphers, or sequence numbers — that is the
--- packet/transport-discipline layer's concern, kept separate per the
--- pkg/nt pure-library split.
-
-local afd = require('nt.net.afd')
+-- It wraps any transport that presents `io:read([max]) -> bytes|nil` (nil
+-- at end of stream) and `io:write(bytes)` — an overlapped nt.term.stream
+-- over the AFD socket (the reactor uses this, so reads/writes park the
+-- calling task on I/O completion), or any equivalent byte source/sink.
+--
+-- A Conn owns only the receive buffer; no transport state leaks into
+-- module globals.  It deliberately knows nothing about packets, ciphers,
+-- or sequence numbers — that is the packet/transport-discipline layer's
+-- concern, kept separate per the pkg/nt pure-library split.
 
 local M = {}
 
 -- RFC 4253 §4.2: an identification string (incl. CR LF) is at most 255
 -- bytes.  Cap line reads so a peer can't make us buffer unboundedly
 -- before the SSH banner appears.
-local MAX_LINE      = 255
-local RECV_CHUNK    = 4096
-local DEFAULT_TIMEO = 30          -- seconds
+local MAX_LINE   = 255
+local RECV_CHUNK = 4096
 
 local Conn = {}
 Conn.__index = Conn
 
--- wrap(sock, opts?) — opts.timeout overrides the per-op timeout (seconds).
-function M.wrap(sock, opts)
-    opts = opts or {}
+-- wrap(io) — io provides read([max]) -> bytes|nil and write(bytes).
+function M.wrap(io)
     return setmetatable({
-        sock    = sock,
-        rbuf    = "",
-        timeout = opts.timeout or DEFAULT_TIMEO,
+        io   = io,
+        rbuf = "",
     }, Conn)
 end
 
 -- pull one more chunk into rbuf; raises on EOF/closed peer.
 function Conn:_fill()
-    local chunk = afd.recv(self.sock, RECV_CHUNK, self.timeout)
+    local chunk = self.io:read(RECV_CHUNK)
     if not chunk or chunk == "" then
         error("ssh.xport: connection closed by peer", 2)
     end
@@ -56,11 +56,11 @@ function Conn:read(n)
     return out
 end
 
--- write all of s.  afd.send is expected to deliver the whole buffer (it
--- rides the async bridge); if a partial-write path ever surfaces it
--- belongs here, not in callers.
+-- write all of s.  The transport's write is expected to deliver the whole
+-- buffer (the stream backend writes it as one overlapped op); if a
+-- partial-write path ever surfaces it belongs here, not in callers.
 function Conn:write(s)
-    afd.send(self.sock, s, self.timeout)
+    self.io:write(s)
 end
 
 -- read one CR/LF- or LF-terminated line, returned WITHOUT the terminator.

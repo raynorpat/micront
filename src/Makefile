@@ -46,7 +46,7 @@ SRC         := $(REPO)/src
 BOOT_EFI    := $(SRC)/boot/efi
 BUILD       := $(REPO)/build/disk
 
-.PHONY: cr disk boot selftest selftest-ramdisk selftest-ramdisk-disk selfhost smoketest smoke-disk iprepro gdb qcov coverage coverage-html vmlinux ramdisk boot-ramdisk smoke-ramdisk smoke-ramdisk-disk
+.PHONY: cr disk boot selftest selftest-ramdisk selftest-ramdisk-disk sshd-ramdisk selfhost smoketest smoke-disk iprepro gdb qcov coverage coverage-html vmlinux ramdisk boot-ramdisk smoke-ramdisk smoke-ramdisk-disk
 
 # ---------------- cr binaries (run.exe + lua.dll) -------------------
 #
@@ -132,6 +132,16 @@ endif
 
 ifdef NETDUMP
 BOOT_FLAGS += --netdump
+endif
+# NETFWD=SPEC — add a SLIRP host-forward so the host can reach a guest
+# listener.  e.g. make boot-ramdisk NETFWD=tcp::2222-:22
+ifdef NETFWD
+BOOT_FLAGS += --netfwd $(NETFWD)
+endif
+# KERNEL_OPTS="..." — kernel-opts / init `--` tail forwarded to boot.sh.
+# e.g. make boot-ramdisk KERNEL_OPTS="-- sshd 22" to steer the launcher.
+ifdef KERNEL_OPTS
+BOOT_FLAGS += --kernel-opts "$(KERNEL_OPTS)"
 endif
 
 boot: disk
@@ -270,6 +280,17 @@ selftest-ramdisk: PROFILE_FLAG := --profile selftest
 selftest-ramdisk: INIT_ARGS_FLAG :=
 selftest-ramdisk: RAMDISK_BUILD := $(REPO)/build/disk-selftest-ramdisk
 selftest-ramdisk: boot-ramdisk
+
+# sshd-ramdisk — boot the `sshd` profile (the SSH server, pkg/sshd.lua) as a
+# PVH ramdisk with host :2222 forwarded to the guest's SSH port.  Once it logs
+# "listening on 0.0.0.0:22", drive it from the host:
+#   ssh -vvv -p 2222 -o StrictHostKeyChecking=no \
+#       -o UserKnownHostsFile=/dev/null localhost
+sshd-ramdisk: PROFILE_FLAG := --profile sshd
+sshd-ramdisk: INIT_ARGS_FLAG :=
+sshd-ramdisk: RAMDISK_BUILD := $(REPO)/build/disk-sshd-ramdisk
+sshd-ramdisk: BOOT_FLAGS += --netfwd tcp::2222-:22
+sshd-ramdisk: boot-ramdisk
 
 selftest-ramdisk-disk: PROFILE_FLAG := --profile selftest
 selftest-ramdisk-disk: INIT_ARGS_FLAG :=

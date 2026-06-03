@@ -25,19 +25,26 @@ Abstract:
 
 !ENDIF
 
-MAJORCOMP=windows
-MINORCOMP=base
+MAJORCOMP=crypto
+MINORCOMP=djbcrypt
 
 TARGETNAME=djbcrypt
 TARGETPATH=$(BASEDIR)\public\sdk\lib
 TARGETTYPE=DYNLINK
 DLLENTRY=DjbcryptDllInit
 
-LINKLIBS=$(BASEDIR)\public\sdk\lib\*\kernel32.lib \
-         $(BASEDIR)\public\sdk\lib\*\ntdll.lib \
-         $(BASEDIR)\public\sdk\lib\*\INT64.LIB
+# Standalone native DLL: it imports ZERO functions (not Win32, not even ntdll).
+# The only external references are the 32-bit __allmul/__aullshr/... 64-bit
+# integer-math helpers, satisfied statically by INT64.LIB; memcpy/memset inline
+# as intrinsics (call sites in djbcrypt.c/sha256.c are optimized, constant-
+# sized).  kernel32.lib and ntdll.lib were both removed because nothing
+# resolves against them -- verified: the built image is byte-identical with or
+# without ntdll.lib.  (MS LINK still stamps an inert, zero-thunk ntdll.dll
+# import descriptor into every DLL; that is a linker artifact, not a real
+# dependency, and LINKLIBS can't suppress it.)
+LINKLIBS=$(BASEDIR)\public\sdk\lib\*\INT64.LIB
 
-INCLUDES=.;..\inc;..\..\inc;..\..\..\inc
+INCLUDES=.
 
 NTDEBUGTYPE=coff
 
