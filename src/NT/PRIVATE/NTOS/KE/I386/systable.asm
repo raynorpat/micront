@@ -283,8 +283,9 @@ TABLE_ENTRY  WriteRequestData, 1, 6
 TABLE_ENTRY  WriteVirtualMemory, 1, 5 
 TABLE_ENTRY  GenerateSecureRandom, 1, 2 
 TABLE_ENTRY  QueryFullAttributesFile, 1, 2 
+TABLE_ENTRY  YieldExecution, 0, 0 
 
-TABLE_END 184 
+TABLE_END 185 
 
 ARGTBL_BEGIN
 ARGTBL_ENTRY 24,32,24,24,8,4,4,24 

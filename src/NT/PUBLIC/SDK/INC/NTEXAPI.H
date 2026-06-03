@@ -34,6 +34,17 @@ NtDelayExecution (
     IN BOOLEAN Alertable,
     IN PLARGE_INTEGER DelayInterval
     );
+
+//
+// Yield execution to another ready thread (backs Win32 SwitchToThread).
+//
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+NtYieldExecution (
+    VOID
+    );
 
 //
 // Query and set system environment variables.

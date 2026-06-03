@@ -202,6 +202,26 @@ t.test("event_pair: two threads rendezvous via set-and-wait atomics", function()
     ep:close()
 end)
 
+-- ------------------------------------------------------------------
+-- Yield (ke) — NtYieldExecution, backs Win32 SwitchToThread
+-- ------------------------------------------------------------------
+
+t.test("yield: returns a success status, never raises", function()
+    local st = ke.NtYieldExecution()
+    -- STATUS_SUCCESS when a switch happened, STATUS_NO_YIELD_PERFORMED
+    -- when nothing else was runnable. Both are success codes, not errors.
+    t.ok(st == 0 or st == 0x40000024,
+         "unexpected status 0x" .. string.format("%08X", st))
+end)
+
+t.test("yield: a burst of yields completes without hanging", function()
+    -- Proves the dispatcher round-robin path returns control to us rather
+    -- than losing the thread — if it didn't, the VM would hang here and the
+    -- suite would never report.
+    for _ = 1, 1000 do ke.NtYieldExecution() end
+    t.ok(true, "1000 yields returned")
+end)
+
 -- IoCompletion has its own suite — see test/iocp.lua (idiomatic +
 -- concurrency) and test/fuzz/iocp.lua (raw-ntdll adversarial cases).
 

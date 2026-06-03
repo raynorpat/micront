@@ -39,6 +39,7 @@ NTSTATUS __stdcall NtWaitForMultipleObjects(ULONG Count,
                                             LARGE_INTEGER *Timeout);
 NTSTATUS __stdcall NtDelayExecution(unsigned char Alertable,
                                     LARGE_INTEGER *DelayInterval);
+NTSTATUS __stdcall NtYieldExecution(void);
 NTSTATUS __stdcall NtAlertThread   (HANDLE ThreadHandle);
 
 NTSTATUS __stdcall NtQuerySystemTime(LARGE_INTEGER *SystemTime);
@@ -106,6 +107,15 @@ end
 function M.NtDelayExecution(alertable, delay_interval)
     local st = ntdll.NtDelayExecution(alertable and 1 or 0, delay_interval)
     if err.is_error(st) then err.raise('NtDelayExecution', st) end
+end
+
+-- Yield the processor to another ready thread (backs Win32 SwitchToThread).
+-- Never blocks and takes no arguments. Returns the normalized NTSTATUS:
+-- STATUS_SUCCESS (0) when a switch occurred, STATUS_NO_YIELD_PERFORMED
+-- (0x40000024) when no other thread was runnable — both are success codes,
+-- so this never raises.
+function M.NtYieldExecution()
+    return err.normalize(ntdll.NtYieldExecution())
 end
 
 function M.NtAlertThread(thread_handle)

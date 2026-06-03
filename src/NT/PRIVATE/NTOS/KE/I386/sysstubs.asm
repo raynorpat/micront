@@ -1631,5 +1631,13 @@ SYSSTUBS_ENTRY5  184, QueryFullAttributesFile, 2
 SYSSTUBS_ENTRY6  184, QueryFullAttributesFile, 2 
 SYSSTUBS_ENTRY7  184, QueryFullAttributesFile, 2 
 SYSSTUBS_ENTRY8  184, QueryFullAttributesFile, 2 
+SYSSTUBS_ENTRY1  185, YieldExecution, 0 
+SYSSTUBS_ENTRY2  185, YieldExecution, 0 
+SYSSTUBS_ENTRY3  185, YieldExecution, 0 
+SYSSTUBS_ENTRY4  185, YieldExecution, 0 
+SYSSTUBS_ENTRY5  185, YieldExecution, 0 
+SYSSTUBS_ENTRY6  185, YieldExecution, 0 
+SYSSTUBS_ENTRY7  185, YieldExecution, 0 
+SYSSTUBS_ENTRY8  185, YieldExecution, 0 
 
 STUBS_END
