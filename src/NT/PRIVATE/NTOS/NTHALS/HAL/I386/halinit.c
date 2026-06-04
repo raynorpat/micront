@@ -107,6 +107,26 @@ HalInitSystem(
             mov cr0, eax
         }
 
+        /* Establish the clock tick length (100000 * 100ns = 10ms) NOW, in
+         * Phase 0 — before any hardware clock is connected.  KeSetTimeIncrement
+         * only stores KeMaximumIncrement/KeTimeIncrement/KeTimeAdjustment; it
+         * touches no hardware, so it is safe this early.
+         *
+         * It MUST run here and not in Phase 1: KiInitializeKernel computes the
+         * timer-table reciprocal (KiTimeIncrementReciprocal/ShiftCount) exactly
+         * once, in KERNLINI.C right after HalInitSystem(0) returns, as
+         * KiComputeReciprocal(KeMaximumIncrement).  Stock x86 HALs set the
+         * increment in Phase 0 precisely so KeMaximumIncrement is non-zero by
+         * then.  Deferring this to Phase 1 left KeMaximumIncrement == 0 at that
+         * point, so KiComputeReciprocal(0) produced a garbage reciprocal and
+         * every timer hashed to the wrong KiTimerTableListHead bucket — firing
+         * only on a near-full table sweep (~TIMER_TABLE_SIZE * 10ms ≈ 1.28s)
+         * instead of at its true due time. */
+        {
+            extern VOID KeSetTimeIncrement(ULONG Max, ULONG Min);
+            KeSetTimeIncrement(100000, 100000);
+        }
+
         /* First boot-time entropy sample. */
         HalpAbsorbBootEntropy();
 
@@ -201,18 +221,13 @@ HalInitSystem(
             HalpWritePort(PIC1_DATA, 0xFA);  /* 11111010 = all but IRQ0+IRQ2 */
         }
 
-        /* Tell the kernel our tick length (100000 * 100ns = 10ms).
-         * Without this, KeTimeAdjustment stays 0 → KeUpdateSystemTime
-         * increments SystemTime by 0 per tick → NtQuerySystemTime
-         * returns a frozen 0, NtDelayExecution never wakes from its
-         * timer wait, and everything timer-related silently breaks.
-         * TickCountLow and InterruptTime advance fine without this —
-         * they use separate counters — which is why the symptom only
-         * surfaces when something reads SystemTime. */
-        {
-            extern VOID KeSetTimeIncrement(ULONG Max, ULONG Min);
-            KeSetTimeIncrement(100000, 100000);
-        }
+        /* The tick length (KeSetTimeIncrement, 10ms) is now established in
+         * Phase 0 — it must precede KiInitializeKernel's one-shot timer-table
+         * reciprocal computation, which runs right after HalInitSystem(0).
+         * See the Phase 0 block above for the full rationale.  Without that
+         * increment KeTimeAdjustment stays 0 and KeUpdateSystemTime would
+         * advance SystemTime by 0 per tick; with it, SystemTime advances and
+         * the timer table is correctly indexed. */
 
         /* Third sample, after the clock is live. */
         HalpAbsorbBootEntropy();
