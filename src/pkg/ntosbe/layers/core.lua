@@ -164,6 +164,10 @@ function M.files(paths)
         -- WaitOnAddress futex apiset (Rust std). Long apiset name = LFN on FAT16.
         { dest = "System32/api-ms-win-core-synch-l1-2-0.dll",
           src = paths.sdk_lib .. "/api-ms-win-core-synch-l1-2-0.dll" },
+        { dest = "System32/userenv.dll", src = paths.sdk_lib .. "/userenv.dll" },
+        -- Resolver data: gethostbyname / getaddrinfo read \SystemRoot\System32\hosts
+        -- (flat, not drivers\etc). No DNS yet, so this is the whole name map.
+        { dest = "System32/hosts", src = paths.nt .. "/PRIVATE/WINDOWS/BASE/WS2_32/hosts" },
 
         -- Base system drivers — loaded post-boot by IoLoadDriver from
         -- \SystemRoot\System32\Drivers, so they stay on the root volume.

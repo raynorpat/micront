@@ -41,6 +41,10 @@ EXPORTS
 ;   --- WSA 2.0 socket calls (24-50) ---
 ;   Only the synchronous subset; WSAIoctl rejects overlapped/extension codes.
     WSAIoctl        @36
+    WSASocketW          @24
+    WSADuplicateSocketW @25
+    WSARecv             @27
+    WSASend             @28
 
 ;   --- Resolver stubs (51-57; 54=getprotobynumber not imported) ---
     gethostbyaddr   @51
@@ -50,6 +54,8 @@ EXPORTS
     getservbyname   @55
     getservbyport   @56
     gethostname     @57
+    getaddrinfo     @58
+    freeaddrinfo    @59
 
 ;   --- WSA 1.1 startup / error (111-116; 113-114 not imported by _socket.pyd) ---
     WSAGetLastError         @111

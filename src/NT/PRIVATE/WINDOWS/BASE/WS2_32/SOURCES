@@ -57,7 +57,9 @@ SOURCES= init.c \
          sockdata.c \
          strcscmp.c \
          helper.c \
-         resolver.c
+         resolver.c \
+         wsa2.c \
+         gai.c
 # writev.c dropped: scatter/gather writev is unexported + pulls malloc/free;
 # not needed for the bare-essentials BSD surface.
 

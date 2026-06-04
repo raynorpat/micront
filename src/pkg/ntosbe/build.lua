@@ -829,6 +829,18 @@ function M.main(opts)
     end
     clean_dirs.windows_base_synch = { WIN .. "/BASE/SYNCH", WIN .. "/BASE/SYNCH/obj" }
 
+    -- ----- WINDOWS/BASE/USERENV — userenv.dll: GetUserProfileDirectoryW,
+    -- Rust std's home_dir fallback.  Returns a fixed profile path for now.
+    targets.windows_base_userenv = function()
+        local since = platform.now()
+        local rc = run_nmake(WIN .. "/BASE/USERENV",
+                         "WINDOWS/BASE/USERENV - userenv.dll",
+                         { "makedll=1" })
+        if rc ~= 0 then return rc end
+        return splitsym_dir(PUB_LIB, since)
+    end
+    clean_dirs.windows_base_userenv = { WIN .. "/BASE/USERENV", WIN .. "/BASE/USERENV/obj" }
+
     -- ----- WINDOWS/CMD — NT 3.5 cmd.exe lifted from stuff/.
     -- NMAKE shells inline commands (@if exist, &&, |, redirections)
     -- through COMSPEC; without a working cmd.exe those _spawn calls
@@ -1437,7 +1449,7 @@ function M.main(opts)
     local USERLAND_TARGETS = {
         "rtl_user", "ntdll", "urtl", "windows_base_client", "windows_advapi",
         "windows_user32", "windows_shell32", "windows_ws2_32", "windows_wsock32",
-        "windows_bcryptprimitives", "windows_base_synch",
+        "windows_bcryptprimitives", "windows_base_synch", "windows_base_userenv",
         "cmd",
         "crypto_djbcrypt",
     }

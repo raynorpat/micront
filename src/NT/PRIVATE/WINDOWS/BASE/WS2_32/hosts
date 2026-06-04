@@ -1,0 +1,6 @@
+# MicroNT hosts file -- \SystemRoot\System32\hosts
+# Static name -> IPv4 map consulted by gethostbyname / getaddrinfo.
+# There is no DNS resolver yet, so names not listed here do not resolve.
+#
+127.0.0.1	localhost
+127.0.0.1	micront

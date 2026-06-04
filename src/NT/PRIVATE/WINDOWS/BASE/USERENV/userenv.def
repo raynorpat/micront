@@ -1,0 +1,7 @@
+LIBRARY userenv
+
+DESCRIPTION 'MicroNT user-profile environment (GetUserProfileDirectoryW)'
+
+EXPORTS
+
+    GetUserProfileDirectoryW

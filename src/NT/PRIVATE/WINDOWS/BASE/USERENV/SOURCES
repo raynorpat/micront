@@ -1,0 +1,34 @@
+!IF 0
+
+Module Name:
+
+    sources.
+
+Abstract:
+
+    userenv.dll -- user-profile environment helpers.  Exports
+    GetUserProfileDirectoryW (Rust std's home_dir fallback), returning a
+    single fixed profile path until MicroNT grows real per-user profiles.
+
+!ENDIF
+
+MAJORCOMP=windows
+MINORCOMP=base
+
+TARGETNAME=userenv
+TARGETPATH=$(BASEDIR)\public\sdk\lib
+TARGETTYPE=DYNLINK
+DLLENTRY=UserenvDllInit
+
+LINKLIBS=$(BASEDIR)\public\sdk\lib\*\kernel32.lib \
+         $(BASEDIR)\public\sdk\lib\*\ntdll.lib
+
+INCLUDES=..\inc;..\..\inc;..\..\..\inc
+
+NTDEBUGTYPE=coff
+
+SOURCES=userenv.c
+
+UMTYPE=console
+
+DLLDEF=userenv.def

@@ -77,6 +77,10 @@ src/NT/PUBLIC/SDK/LIB/I386/bcryptprimitives.lib
 src/NT/PUBLIC/SDK/LIB/I386/api-ms-win-core-synch-l1-2-0.dll
 src/NT/PUBLIC/SDK/LIB/I386/api-ms-win-core-synch-l1-2-0.exp
 src/NT/PUBLIC/SDK/LIB/I386/api-ms-win-core-synch-l1-2-0.lib
+# userenv.dll (GetUserProfileDirectoryW — Rust std home_dir) — build outputs.
+src/NT/PUBLIC/SDK/LIB/I386/userenv.dll
+src/NT/PUBLIC/SDK/LIB/I386/userenv.exp
+src/NT/PUBLIC/SDK/LIB/I386/userenv.lib
 # djbcrypt.dll (DJB crypto — Monocypher X25519/Ed25519/ChaCha20/Poly1305 +
 # SHA-256/512) — built from source, no bootstrap consumer; pure build outputs.
 src/NT/PUBLIC/SDK/LIB/I386/djbcrypt.dll
