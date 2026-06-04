@@ -24,6 +24,16 @@ Revision History:
 #ifndef _AFD_
 #define _AFD_
 
+//
+// Pin the alignment of every struct here to natural (8) so the sizes ws2_32
+// and afd.sys compute always match. AFD.H has no pack pragmas of its own and
+// is included after tdi.h, whose packon/packoff leaks pack(2); without this,
+// AFD_INFORMATION (which has a LARGE_INTEGER union) is 12 bytes in ws2_32 but
+// 16 in the kernel, and IOCTL_AFD_SET_INFORMATION rejects the short buffer
+// with STATUS_BUFFER_TOO_SMALL.
+//
+#pragma pack(push, 8)
+
 #define AFD_DEVICE_NAME L"\\Device\\Afd"
 
 //
@@ -225,5 +235,7 @@ typedef struct _AFD_INFORMATION {
 #define IOCTL_AFD_SET_CONTEXT             _AFD_CONTROL_CODE( 12, METHOD_BUFFERED )
 
 #define IOCTL_AFD_GET_INFORMATION         _AFD_CONTROL_CODE( 25, METHOD_BUFFERED )
+
+#pragma pack(pop)
 
 #endif // ndef _AFD_
