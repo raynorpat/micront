@@ -355,4 +355,61 @@ function M.getcwd()
     return str.from_utf16(hdr.CurrentDirectoryDosPath)
 end
 
+-- RtlCaptureContext — snapshot the calling thread's CPU registers into a
+-- CONTEXT (the _CONTEXT cdef comes from nt.dll.ps, required above).  Backs
+-- kernel32!RtlCaptureContext, which std backtrace/panic code calls.  The asm
+-- captures every register unconditionally, so ContextFlags need not be set.
+ffi.cdef[[
+void __stdcall RtlCaptureContext(CONTEXT *ContextRecord);
+]]
+
+function M.RtlCaptureContext()
+    local ctx = ffi.new('CONTEXT')
+    ntdll.RtlCaptureContext(ctx)
+    return ctx
+end
+
+-- Vectored exception handlers.  RtlDispatchException consults this process-wide
+-- list (see ntdll dll\vectxcpt.c) BEFORE the frame-based SEH search; a handler
+-- returns EXCEPTION_CONTINUE_EXECUTION to resume the faulting context or
+-- EXCEPTION_CONTINUE_SEARCH to defer.  Backs kernel32!AddVectoredExceptionHandler.
+ffi.cdef[[
+typedef struct _EXCEPTION_RECORD {
+    unsigned long  ExceptionCode;
+    unsigned long  ExceptionFlags;
+    void          *ExceptionRecord;
+    void          *ExceptionAddress;
+    unsigned long  NumberParameters;
+    unsigned long  ExceptionInformation[15];
+} EXCEPTION_RECORD;
+typedef struct _EXCEPTION_POINTERS {
+    EXCEPTION_RECORD *ExceptionRecord;
+    void             *ContextRecord;   /* CONTEXT* */
+} EXCEPTION_POINTERS;
+typedef long (__stdcall *PVECTORED_EXCEPTION_HANDLER)(EXCEPTION_POINTERS *Info);
+void *        __stdcall RtlAddVectoredExceptionHandler(unsigned long First,
+                                                       PVECTORED_EXCEPTION_HANDLER Handler);
+unsigned long __stdcall RtlRemoveVectoredExceptionHandler(void *Handle);
+]]
+
+M.EXCEPTION_CONTINUE_EXECUTION = -1
+M.EXCEPTION_CONTINUE_SEARCH    = 0
+M.STATUS_BREAKPOINT            = 0x80000003
+
+-- Register a vectored handler. `handler` is a Lua function taking an
+-- EXCEPTION_POINTERS* and returning one of the EXCEPTION_CONTINUE_* values.
+-- `first` true => run before existing handlers. Returns (handle, callback):
+-- the caller MUST keep the callback referenced while registered (LuaJIT frees
+-- an unreferenced ffi callback, which would crash the dispatcher).
+function M.add_vectored_handler(first, handler)
+    local cb = ffi.cast('PVECTORED_EXCEPTION_HANDLER', handler)
+    local h  = ntdll.RtlAddVectoredExceptionHandler(first and 1 or 0, cb)
+    return h, cb
+end
+
+-- Returns true if the handle was found and removed.
+function M.remove_vectored_handler(h)
+    return ntdll.RtlRemoveVectoredExceptionHandler(h) ~= 0
+end
+
 return M

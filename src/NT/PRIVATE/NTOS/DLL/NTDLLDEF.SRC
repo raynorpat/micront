@@ -41,6 +41,7 @@ EXPORTS
     RtlAddActionToRXact
     RtlAddAttributeActionToRXact
     RtlAddAuditAccessAce
+    RtlAddVectoredExceptionHandler
     RtlAdjustPrivilege
     RtlAllocateAndInitializeSid
     RtlAllocateHeap
@@ -58,6 +59,7 @@ EXPORTS
     RtlAreBitsClear
     RtlAreBitsSet
     RtlAssert
+    RtlCaptureContext
     RtlCharToInteger
     RtlCheckRegistryKey
     RtlClearAllBits
@@ -238,6 +240,7 @@ EXPORTS
     RtlReleasePebLock
     RtlReleaseResource
     RtlRemoteCall
+    RtlRemoveVectoredExceptionHandler
     RtlRunDecodeUnicodeString
     RtlRunEncodeUnicodeString
     RtlSecondsSince1970ToTime

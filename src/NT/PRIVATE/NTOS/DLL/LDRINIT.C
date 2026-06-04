@@ -38,6 +38,8 @@ ULONG LdrpNumberOfProcessors;
 
 UNICODE_STRING LdrpDefaultPath;
 RTL_CRITICAL_SECTION FastPebLock;
+extern LIST_ENTRY           RtlpCalloutEntryList;   // vectxcpt.c
+extern RTL_CRITICAL_SECTION RtlpCalloutEntryLock;   // vectxcpt.c
 SYSTEM_BASIC_INFORMATION SystemInfo;
 BOOLEAN LdrpShutdownInProgress = FALSE;
 BOOLEAN LdrpImageHasTls = FALSE;
@@ -435,6 +437,13 @@ LdrpForkProcess( VOID )
         }
     Peb->FastPebLockRoutine = (PVOID)&RtlEnterCriticalSection;
     Peb->FastPebUnlockRoutine = (PVOID)&RtlLeaveCriticalSection;
+
+    //
+    // Vectored exception handler list (consulted by RtlDispatchException
+    // before the frame-based search).  Init before any user code runs.
+    //
+    InitializeListHead( &RtlpCalloutEntryList );
+    RtlInitializeCriticalSection( &RtlpCalloutEntryLock );
     Peb->InheritedAddressSpace = FALSE;
     RtlInitializeHeapManager();
     Peb->ProcessHeap = RtlCreateHeap( HEAP_GROWABLE,    // Flags
@@ -808,6 +817,13 @@ Return Value:
         }
     Peb->FastPebLockRoutine = (PVOID)&RtlEnterCriticalSection;
     Peb->FastPebUnlockRoutine = (PVOID)&RtlLeaveCriticalSection;
+
+    //
+    // Vectored exception handler list (consulted by RtlDispatchException
+    // before the frame-based search).  Init before any user code runs.
+    //
+    InitializeListHead( &RtlpCalloutEntryList );
+    RtlInitializeCriticalSection( &RtlpCalloutEntryLock );
 
     RtlInitializeHeapManager();
     Peb->ProcessHeap = RtlCreateHeap( HEAP_GROWABLE | HEAP_CLASS_0,

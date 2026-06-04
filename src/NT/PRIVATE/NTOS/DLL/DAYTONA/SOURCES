@@ -49,6 +49,7 @@ SOURCES=\
         ..\dllssstb.c  \
         ..\dlluistb.c  \
         ..\ldrinit.c   \
+        ..\vectxcpt.c  \
         ..\ldrsnap.c   \
         ..\ldrapi.c    \
         ..\ntdll.rc    \

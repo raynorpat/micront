@@ -63,6 +63,18 @@ RtlpExecuteHandlerForUnwind (
     IN OUT PVOID DispatcherContext,
     IN PEXCEPTION_ROUTINE ExceptionRoutine
     );
+
+#ifndef NTOS_KERNEL_RUNTIME
+//
+// Vectored exception handlers (user mode only) -- see dll\vectxcpt.c.
+// Consulted before the frame-based search below.
+//
+BOOLEAN
+RtlCallVectoredExceptionHandlers (
+    IN PEXCEPTION_RECORD ExceptionRecord,
+    IN PCONTEXT ContextRecord
+    );
+#endif
 
 BOOLEAN
 RtlDispatchException (
@@ -104,6 +116,19 @@ Return Value:
     ULONG HighLimit;
     ULONG LowLimit;
     EXCEPTION_RECORD ExceptionRecord1;
+
+#ifndef NTOS_KERNEL_RUNTIME
+
+    //
+    // Give any registered vectored exception handlers first crack at the
+    // exception.  If one resumes execution, skip the frame-based search.
+    //
+
+    if (RtlCallVectoredExceptionHandlers(ExceptionRecord, ContextRecord)) {
+        return TRUE;
+    }
+
+#endif
 
     //
     // Get current stack limits.
