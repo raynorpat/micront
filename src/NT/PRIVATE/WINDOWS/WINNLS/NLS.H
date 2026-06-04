@@ -2005,9 +2005,6 @@ GetCalendar(
  *  Section Routines - section.c.
  */
 ULONG
-CreateNlsObjectDirectory(void);
-
-ULONG
 OpenRegKey(
     PHANDLE phKeyHandle,
     LPWSTR pBaseName,

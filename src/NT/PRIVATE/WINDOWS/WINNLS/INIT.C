@@ -45,9 +45,6 @@ HANDLE     hOemLocaleKey;             /* handle to System\OemLocale key */
  *  Forward Declarations.
  */
 ULONG
-NlsServerInitialize(void);
-
-ULONG
 NlsProcessInitialize(void);
 
 
@@ -80,15 +77,9 @@ BOOLEAN NlsDllInitialize(
         hModule = (HANDLE)hMod;
 
         /*
-         *  Process attaching, so initialize tables.
+         *  Map the NLS tables into this process. The \NLS namespace is
+         *  published by system startup (nt.nls); kernel32 only consumes it.
          */
-        rc = NlsServerInitialize();
-        if (rc)
-        {
-            KdPrint(("NLSAPI: Could NOT initialize Server - %lx.\n", rc));
-            return ( FALSE );
-        }
-
         rc = NlsProcessInitialize();
         if (rc)
         {
@@ -96,7 +87,7 @@ BOOLEAN NlsDllInitialize(
             return ( FALSE );
         }
     }
-    
+
     /*
      *  Return success.
      */
@@ -109,79 +100,6 @@ BOOLEAN NlsDllInitialize(
 /*-------------------------------------------------------------------------*\
  *                           INTERNAL ROUTINES                             *
 \*-------------------------------------------------------------------------*/
-
-
-/***************************************************************************\
-* NlsServerInitialize
-*
-* Server initialization procedure for NLSAPI.  This is the ONE-TIME
-* initialization code for the NLSAPI DLL.  It simply does the calls
-* to NtCreateSection for the code pages that are currently found in the
-* system.
-*
-* 05-31-91    JulieB    Created.
-\***************************************************************************/
-
-ULONG NlsServerInitialize(void)
-{
-    HANDLE hSec = (HANDLE)0;           /* section handle */
-    ULONG rc = 0L;                     /* return code */
-
-
-#ifndef DOSWIN32
-    PIMAGE_NT_HEADERS NtHeaders;
-    
-    /*
-     *  This is to avoid being initialized again when NTSD dynlinks to
-     *  a server to get at its debugger extensions.
-     */
-    NtHeaders = RtlImageNtHeader( NtCurrentPeb()->ImageBaseAddress );
-    if (NtHeaders->OptionalHeader.Subsystem != IMAGE_SUBSYSTEM_NATIVE)
-    {
-        return ( NO_ERROR );
-    }
-#endif
-
-
-    /*
-     *  Create the NLS object directory.
-     *
-     *  Must create a separate directory off the root in order to have
-     *  CreateSection access on the fly.
-     */
-    if (rc = CreateNlsObjectDirectory())
-    {
-        return ( rc );
-    }
-
-    /*
-     *  The ACP, OEMCP, and Default Language files are already created
-     *  at boot time.  The pointers to the files are stored in the PEB.
-     * 
-     *  Create the section for the following data files:
-     *      UNICODE
-     *      LOCALE
-     *      CTYPE
-     *      SORTKEY
-     *      SORT TABLES
-     *
-     *  All other data files will have the sections created only as they
-     *  are needed.
-     */
-    if ( (rc = CreateSection( &hSec, NLS_FILE_UNICODE,  NLS_SECTION_UNICODE )) ||
-         (rc = CreateSection( &hSec, NLS_FILE_LOCALE,   NLS_SECTION_LOCALE ))  ||
-         (rc = CreateSection( &hSec, NLS_FILE_CTYPE,    NLS_SECTION_CTYPE ))   ||
-         (rc = CreateSection( &hSec, NLS_FILE_SORTKEY,  NLS_SECTION_SORTKEY )) ||
-         (rc = CreateSection( &hSec, NLS_FILE_SORTTBLS, NLS_SECTION_SORTTBLS )) )
-    {
-        return ( rc );
-    }
-
-    /*
-     *  Return success.
-     */
-    return ( NO_ERROR );
-}
 
 
 /***************************************************************************\
