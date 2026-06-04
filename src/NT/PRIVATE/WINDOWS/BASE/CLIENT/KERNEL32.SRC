@@ -651,4 +651,13 @@ EXPORTS
     GetHandleInformation
     SetHandleInformation
     RegisterWowBaseHandlers
+
+    ; MicroNT: kernel32 surface for modern (Rust/mingw) binaries.
+    GetFileSizeEx
+    SetFilePointerEx
+    CancelIo
+    SwitchToThread
+    GetProcessId
+    RtlCaptureContext = NTDLL.RtlCaptureContext
+    AddVectoredExceptionHandler = NTDLL.RtlAddVectoredExceptionHandler
 

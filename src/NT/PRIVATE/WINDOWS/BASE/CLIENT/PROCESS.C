@@ -4281,3 +4281,28 @@ fail:
         }
     return rv;
 }
+
+//
+// MicroNT: process id from a process handle, via
+// NtQueryInformationProcess(ProcessBasicInformation).
+//
+DWORD
+WINAPI
+GetProcessId(
+    HANDLE Process
+    )
+{
+    NTSTATUS Status;
+    PROCESS_BASIC_INFORMATION pbi;
+
+    Status = NtQueryInformationProcess( Process,
+                                        ProcessBasicInformation,
+                                        &pbi,
+                                        sizeof(pbi),
+                                        NULL );
+    if ( !NT_SUCCESS(Status) ) {
+        BaseSetLastNTError(Status);
+        return 0;
+    }
+    return (DWORD)pbi.UniqueProcessId;
+}

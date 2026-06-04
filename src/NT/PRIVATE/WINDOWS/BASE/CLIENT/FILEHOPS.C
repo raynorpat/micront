@@ -2242,4 +2242,128 @@ Return Value:
             }
         }
 }
-
+
+
+//
+// MicroNT: 64-bit file size query for modern (Rust/mingw) binaries.  Thin
+// wrapper over NtQueryInformationFile(FileStandardInformation).
+//
+BOOL
+WINAPI
+GetFileSizeEx(
+    HANDLE hFile,
+    PLARGE_INTEGER lpFileSize
+    )
+{
+    NTSTATUS Status;
+    IO_STATUS_BLOCK IoStatusBlock;
+    FILE_STANDARD_INFORMATION StandardInfo;
+
+    Status = NtQueryInformationFile( hFile,
+                                     &IoStatusBlock,
+                                     &StandardInfo,
+                                     sizeof(StandardInfo),
+                                     FileStandardInformation );
+    if ( !NT_SUCCESS(Status) ) {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+    *lpFileSize = StandardInfo.EndOfFile;
+    return TRUE;
+}
+
+//
+// MicroNT: 64-bit file-pointer seek.  FILE_BEGIN/CURRENT/END resolved via
+// NtQueryInformationFile, then NtSetInformationFile(FilePositionInformation).
+//
+BOOL
+WINAPI
+SetFilePointerEx(
+    HANDLE hFile,
+    LARGE_INTEGER liDistanceToMove,
+    PLARGE_INTEGER lpNewFilePointer,
+    DWORD dwMoveMethod
+    )
+{
+    NTSTATUS Status;
+    IO_STATUS_BLOCK IoStatusBlock;
+    FILE_POSITION_INFORMATION CurrentPosition;
+    FILE_STANDARD_INFORMATION StandardInfo;
+
+    switch ( dwMoveMethod ) {
+        case FILE_BEGIN:
+            CurrentPosition.CurrentByteOffset = liDistanceToMove;
+            break;
+
+        case FILE_CURRENT:
+            Status = NtQueryInformationFile( hFile,
+                                             &IoStatusBlock,
+                                             &CurrentPosition,
+                                             sizeof(CurrentPosition),
+                                             FilePositionInformation );
+            if ( !NT_SUCCESS(Status) ) {
+                BaseSetLastNTError(Status);
+                return FALSE;
+            }
+            CurrentPosition.CurrentByteOffset.QuadPart += liDistanceToMove.QuadPart;
+            break;
+
+        case FILE_END:
+            Status = NtQueryInformationFile( hFile,
+                                             &IoStatusBlock,
+                                             &StandardInfo,
+                                             sizeof(StandardInfo),
+                                             FileStandardInformation );
+            if ( !NT_SUCCESS(Status) ) {
+                BaseSetLastNTError(Status);
+                return FALSE;
+            }
+            CurrentPosition.CurrentByteOffset.QuadPart =
+                StandardInfo.EndOfFile.QuadPart + liDistanceToMove.QuadPart;
+            break;
+
+        default:
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+    }
+
+    if ( CurrentPosition.CurrentByteOffset.QuadPart < 0 ) {
+        SetLastError(ERROR_NEGATIVE_SEEK);
+        return FALSE;
+    }
+
+    Status = NtSetInformationFile( hFile,
+                                   &IoStatusBlock,
+                                   &CurrentPosition,
+                                   sizeof(CurrentPosition),
+                                   FilePositionInformation );
+    if ( !NT_SUCCESS(Status) ) {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    if ( ARGUMENT_PRESENT(lpNewFilePointer) ) {
+        *lpNewFilePointer = CurrentPosition.CurrentByteOffset;
+    }
+    return TRUE;
+}
+
+//
+// MicroNT: cancel the calling thread's outstanding I/O on a handle.
+//
+BOOL
+WINAPI
+CancelIo(
+    HANDLE hFile
+    )
+{
+    NTSTATUS Status;
+    IO_STATUS_BLOCK IoStatusBlock;
+
+    Status = NtCancelIoFile( hFile, &IoStatusBlock );
+    if ( !NT_SUCCESS(Status) ) {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+    return TRUE;
+}

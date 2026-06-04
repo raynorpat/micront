@@ -1851,3 +1851,24 @@ Return Value:
 
     return rv;
 }
+
+//
+// MicroNT: yield the processor to another ready thread (over NtYieldExecution,
+// added in ke\services.tab).  Returns FALSE if nothing else was runnable.
+//
+#ifndef STATUS_NO_YIELD_PERFORMED
+#define STATUS_NO_YIELD_PERFORMED ((NTSTATUS)0x40000024L)
+#endif
+
+BOOL
+WINAPI
+SwitchToThread(
+    VOID
+    )
+{
+    if ( NtYieldExecution() == STATUS_NO_YIELD_PERFORMED ) {
+        return FALSE;
+    } else {
+        return TRUE;
+    }
+}
