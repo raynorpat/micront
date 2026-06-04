@@ -2629,3 +2629,153 @@ SetFileInformationByHandle(
     }
     return TRUE;
 }
+
+//
+// MicroNT: GetFinalPathNameByHandleW.  NtQueryObject gives the file's NT name
+// ("\Device\HarddiskVolumeN\rest"); for the default VOLUME_NAME_DOS we reverse-
+// map the device prefix to a drive letter via QueryDosDeviceW and emit
+// "\\?\C:\rest".  VOLUME_NAME_NT returns the NT path verbatim; a device with no
+// drive letter falls back to "\\?\GLOBALROOT" + the NT path.  FILE_NAME_OPENED
+// vs NORMALIZED are equivalent here (no reparse points).
+//
+#ifndef VOLUME_NAME_DOS
+#define VOLUME_NAME_DOS       0x00000000
+#define VOLUME_NAME_GUID      0x00000001
+#define VOLUME_NAME_NT        0x00000002
+#define VOLUME_NAME_NONE      0x00000004
+#define FILE_NAME_NORMALIZED  0x00000000
+#define FILE_NAME_OPENED      0x00000008
+#endif
+
+extern DWORD WINAPI QueryDosDeviceW( PCWSTR lpDeviceName, PWSTR lpTargetPath, DWORD ucchMax );
+
+//
+// Concatenate prefix (counted wchars) + path (counted wchars) + NUL into lpDst.
+// On success returns the length in wchars excluding the NUL; if the buffer is
+// too small returns the required size INCLUDING the NUL (nothing written).
+//
+static DWORD
+GfpnEmit(
+    LPWSTR lpDst,
+    DWORD  cchDst,
+    PCWSTR Prefix,
+    DWORD  PrefixChars,
+    PCWSTR Path,
+    DWORD  PathChars
+    )
+{
+    DWORD total = PrefixChars + PathChars;
+
+    if ( cchDst < total + 1 ) {
+        return total + 1;
+    }
+    if ( PrefixChars != 0 ) {
+        RtlMoveMemory( lpDst, Prefix, PrefixChars * sizeof(WCHAR) );
+    }
+    if ( PathChars != 0 ) {
+        RtlMoveMemory( lpDst + PrefixChars, Path, PathChars * sizeof(WCHAR) );
+    }
+    lpDst[total] = L'\0';
+    return total;
+}
+
+DWORD
+WINAPI
+GetFinalPathNameByHandleW(
+    HANDLE hFile,
+    LPWSTR lpszFilePath,
+    DWORD  cchFilePath,
+    DWORD  dwFlags
+    )
+{
+    NTSTATUS Status;
+    ULONG    retLen;
+    ULONG    bufSize = 2048;
+    POBJECT_NAME_INFORMATION nameInfo;
+    PWSTR    ntPath;
+    ULONG    ntChars;
+    DWORD    volFlag = dwFlags & 0x7;
+    DWORD    result = 0;
+    WCHAR    letter;
+    WCHAR    drive[3];
+    WCHAR    target[MAX_PATH];
+
+    nameInfo = (POBJECT_NAME_INFORMATION)RtlAllocateHeap( RtlProcessHeap(), 0, bufSize );
+    if ( nameInfo == NULL ) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return 0;
+    }
+
+    Status = NtQueryObject( hFile, ObjectNameInformation, nameInfo, bufSize, &retLen );
+    if ( Status == STATUS_BUFFER_OVERFLOW ||
+         Status == STATUS_BUFFER_TOO_SMALL ||
+         Status == STATUS_INFO_LENGTH_MISMATCH ) {
+        RtlFreeHeap( RtlProcessHeap(), 0, nameInfo );
+        bufSize = retLen + 64;
+        nameInfo = (POBJECT_NAME_INFORMATION)RtlAllocateHeap( RtlProcessHeap(), 0, bufSize );
+        if ( nameInfo == NULL ) {
+            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            return 0;
+        }
+        Status = NtQueryObject( hFile, ObjectNameInformation, nameInfo, bufSize, &retLen );
+    }
+    if ( !NT_SUCCESS(Status) ) {
+        BaseSetLastNTError(Status);
+        goto done;
+    }
+
+    ntPath  = nameInfo->Name.Buffer;
+    ntChars = nameInfo->Name.Length / sizeof(WCHAR);
+    if ( ntPath == NULL || ntChars == 0 ) {
+        SetLastError(ERROR_INVALID_HANDLE);
+        goto done;
+    }
+
+    if ( volFlag == VOLUME_NAME_NT ) {
+        result = GfpnEmit( lpszFilePath, cchFilePath, NULL, 0, ntPath, ntChars );
+        goto done;
+    }
+
+    //
+    // VOLUME_NAME_DOS (and GUID, which we fall back to DOS): reverse-map the
+    // device prefix to a drive letter.
+    //
+    for ( letter = L'A'; letter <= L'Z'; letter += 1 ) {
+        UNICODE_STRING targetUs;
+        ULONG          tchars;
+
+        drive[0] = letter; drive[1] = L':'; drive[2] = L'\0';
+        if ( QueryDosDeviceW( drive, target, MAX_PATH ) == 0 ) {
+            continue;
+        }
+        RtlInitUnicodeString( &targetUs, target );
+        tchars = targetUs.Length / sizeof(WCHAR);
+        if ( tchars == 0 || tchars > ntChars ) {
+            continue;
+        }
+        if ( RtlPrefixUnicodeString( &targetUs, &nameInfo->Name, TRUE ) &&
+             ( tchars == ntChars || ntPath[tchars] == L'\\' ) ) {
+            WCHAR prefix[6];
+            prefix[0]=L'\\'; prefix[1]=L'\\'; prefix[2]=L'?'; prefix[3]=L'\\';
+            prefix[4]=letter; prefix[5]=L':';
+            result = GfpnEmit( lpszFilePath, cchFilePath,
+                               prefix, 6,
+                               ntPath + tchars, ntChars - tchars );
+            goto done;
+        }
+    }
+
+    //
+    // No drive letter maps this device -- emit the NT path under GLOBALROOT.
+    //
+    {
+        static const WCHAR gr[] = L"\\\\?\\GLOBALROOT";
+        result = GfpnEmit( lpszFilePath, cchFilePath,
+                           gr, (sizeof(gr) / sizeof(WCHAR)) - 1,
+                           ntPath, ntChars );
+    }
+
+done:
+    RtlFreeHeap( RtlProcessHeap(), 0, nameInfo );
+    return result;
+}

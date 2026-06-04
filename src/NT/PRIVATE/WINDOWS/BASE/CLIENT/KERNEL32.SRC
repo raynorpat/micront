@@ -678,4 +678,8 @@ EXPORTS
     UpdateProcThreadAttribute
     DeleteProcThreadAttributeList
     FindFirstFileExW
+    CreateToolhelp32Snapshot
+    Module32FirstW
+    Module32NextW
+    GetFinalPathNameByHandleW
 

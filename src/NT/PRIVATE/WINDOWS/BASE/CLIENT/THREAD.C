@@ -292,7 +292,9 @@ Return Value:
                 Status = NtResumeThread(Handle,&i);
                 }
 
-            *lpThreadId = (DWORD)ClientId.UniqueThread;
+            if ( ARGUMENT_PRESENT(lpThreadId) ) {
+                *lpThreadId = (DWORD)ClientId.UniqueThread;
+            }
             return Handle;
             }
         }

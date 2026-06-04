@@ -3157,3 +3157,178 @@ BaseDllFreeResourceId(
         RtlFreeUnicodeString( &UnicodeString );
         }
 }
+
+//
+// MicroNT: Toolhelp module snapshots.  Self-process only -- a snapshot of the
+// PEB loader list captured into a heap block returned as the snapshot HANDLE.
+// Module32First/NextW iterate it.  Rust's panic backtrace uses this to map
+// addresses to modules.  Process / thread / heap snapshots and cross-process
+// module enumeration are not supported (truthful errors).  CloseHandle on the
+// snapshot returns FALSE and the block is not reclaimed -- acceptable on the
+// cold (panic) path; a real section-backed handle is the future refinement.
+//
+#ifndef TH32CS_SNAPMODULE
+#define TH32CS_SNAPHEAPLIST 0x00000001
+#define TH32CS_SNAPPROCESS  0x00000002
+#define TH32CS_SNAPTHREAD   0x00000004
+#define TH32CS_SNAPMODULE   0x00000008
+#define TH32CS_SNAPMODULE32 0x00000010
+#endif
+#define MAX_MODULE_NAME32   255
+
+typedef struct tagMODULEENTRY32W {
+    DWORD   dwSize;
+    DWORD   th32ModuleID;
+    DWORD   th32ProcessID;
+    DWORD   GlblcntUsage;
+    DWORD   ProccntUsage;
+    BYTE   *modBaseAddr;
+    DWORD   modBaseSize;
+    HMODULE hModule;
+    WCHAR   szModule[MAX_MODULE_NAME32 + 1];
+    WCHAR   szExePath[MAX_PATH];
+} MODULEENTRY32W, *LPMODULEENTRY32W;
+
+#define MNT_TH32_MAGIC  0x4D4F4453UL   /* 'MODS' */
+
+typedef struct _MNT_TH32_SNAPSHOT {
+    DWORD          Magic;
+    DWORD          Count;
+    DWORD          Index;
+    MODULEENTRY32W Modules[1];   /* [Count] */
+} MNT_TH32_SNAPSHOT;
+
+static VOID
+MntCopyWStr(
+    PWSTR Dst,
+    ULONG DstCount,
+    PUNICODE_STRING Src
+    )
+{
+    ULONG n = Src->Length / sizeof(WCHAR);
+    if ( n > DstCount - 1 ) {
+        n = DstCount - 1;
+    }
+    if ( n != 0 && Src->Buffer != NULL ) {
+        RtlMoveMemory( Dst, Src->Buffer, n * sizeof(WCHAR) );
+    }
+    Dst[n] = L'\0';
+}
+
+HANDLE
+WINAPI
+CreateToolhelp32Snapshot(
+    DWORD dwFlags,
+    DWORD th32ProcessID
+    )
+{
+    PPEB Peb;
+    PLIST_ENTRY Head;
+    PLIST_ENTRY Next;
+    PLDR_DATA_TABLE_ENTRY Entry;
+    MNT_TH32_SNAPSHOT *snap;
+    DWORD count;
+    DWORD i;
+    ULONG bytes;
+
+    if ( (dwFlags & (TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32)) == 0 ) {
+        SetLastError(ERROR_INVALID_PARAMETER);   // only module snapshots supported
+        return INVALID_HANDLE_VALUE;
+    }
+    if ( th32ProcessID != 0 && th32ProcessID != GetCurrentProcessId() ) {
+        SetLastError(ERROR_ACCESS_DENIED);        // self-process only
+        return INVALID_HANDLE_VALUE;
+    }
+
+    Peb  = NtCurrentPeb();
+    Head = &Peb->Ldr->InLoadOrderModuleList;
+
+    count = 0;
+    for ( Next = Head->Flink; Next != Head; Next = Next->Flink ) {
+        count += 1;
+    }
+
+    bytes = (3 * sizeof(DWORD)) + (count * sizeof(MODULEENTRY32W));
+    snap = (MNT_TH32_SNAPSHOT *)RtlAllocateHeap( RtlProcessHeap(), 0, bytes );
+    if ( snap == NULL ) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return INVALID_HANDLE_VALUE;
+    }
+    snap->Magic = MNT_TH32_MAGIC;
+    snap->Count = count;
+    snap->Index = 0;
+
+    i = 0;
+    for ( Next = Head->Flink; Next != Head && i < count; Next = Next->Flink, i += 1 ) {
+        MODULEENTRY32W *m = &snap->Modules[i];
+        Entry = CONTAINING_RECORD( Next, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks );
+
+        RtlZeroMemory( m, sizeof(*m) );
+        m->dwSize        = sizeof(MODULEENTRY32W);
+        m->th32ModuleID  = 1;
+        m->th32ProcessID = GetCurrentProcessId();
+        m->GlblcntUsage  = 0xFFFF;
+        m->ProccntUsage  = 0xFFFF;
+        m->modBaseAddr   = (BYTE *)Entry->DllBase;
+        m->modBaseSize   = Entry->SizeOfImage;
+        m->hModule       = (HMODULE)Entry->DllBase;
+        MntCopyWStr( m->szModule,  MAX_MODULE_NAME32 + 1, &Entry->BaseDllName );
+        MntCopyWStr( m->szExePath, MAX_PATH,              &Entry->FullDllName );
+    }
+
+    return (HANDLE)snap;
+}
+
+static BOOL
+MntTh32Get(
+    HANDLE hSnapshot,
+    LPMODULEENTRY32W lpme,
+    BOOL First
+    )
+{
+    MNT_TH32_SNAPSHOT *snap = (MNT_TH32_SNAPSHOT *)hSnapshot;
+
+    if ( hSnapshot == NULL || hSnapshot == INVALID_HANDLE_VALUE ||
+         snap->Magic != MNT_TH32_MAGIC ) {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+    if ( lpme == NULL || lpme->dwSize < sizeof(MODULEENTRY32W) ) {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    if ( First ) {
+        snap->Index = 0;
+    } else {
+        snap->Index += 1;
+    }
+
+    if ( snap->Index >= snap->Count ) {
+        SetLastError(ERROR_NO_MORE_FILES);
+        return FALSE;
+    }
+
+    *lpme = snap->Modules[snap->Index];
+    return TRUE;
+}
+
+BOOL
+WINAPI
+Module32FirstW(
+    HANDLE hSnapshot,
+    LPMODULEENTRY32W lpme
+    )
+{
+    return MntTh32Get( hSnapshot, lpme, TRUE );
+}
+
+BOOL
+WINAPI
+Module32NextW(
+    HANDLE hSnapshot,
+    LPMODULEENTRY32W lpme
+    )
+{
+    return MntTh32Get( hSnapshot, lpme, FALSE );
+}
