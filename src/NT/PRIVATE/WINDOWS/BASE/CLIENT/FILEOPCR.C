@@ -1873,4 +1873,39 @@ Return Value:
         FileDispositionInformation
         );
 }
-
+
+
+//
+// MicroNT: CopyFileExW.  Real copy via CopyFileW.  The progress callback and
+// mid-copy cancellation (pbCancel) are not delivered -- the file is still
+// copied correctly; only the optional notifications are absent.  Reparse /
+// restartable / stream-copy refinements (the heavy srv03 machinery) are not
+// reproduced.
+//
+#ifndef COPY_FILE_FAIL_IF_EXISTS
+#define COPY_FILE_FAIL_IF_EXISTS  0x00000001
+#endif
+
+BOOL
+WINAPI
+CopyFileExW(
+    LPCWSTR lpExistingFileName,
+    LPCWSTR lpNewFileName,
+    LPVOID  lpProgressRoutine,      // LPPROGRESS_ROUTINE -- not invoked
+    LPVOID  lpData,
+    LPBOOL  pbCancel,
+    DWORD   dwCopyFlags
+    )
+{
+    BOOL bFailIfExists = (dwCopyFlags & COPY_FILE_FAIL_IF_EXISTS) != 0;
+
+    UNREFERENCED_PARAMETER( lpProgressRoutine );
+    UNREFERENCED_PARAMETER( lpData );
+
+    if ( ARGUMENT_PRESENT(pbCancel) && *pbCancel ) {
+        SetLastError(ERROR_REQUEST_ABORTED);
+        return FALSE;
+    }
+
+    return CopyFileW( lpExistingFileName, lpNewFileName, bFailIfExists );
+}

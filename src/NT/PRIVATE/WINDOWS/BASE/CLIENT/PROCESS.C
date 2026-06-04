@@ -4306,3 +4306,105 @@ GetProcessId(
     }
     return (DWORD)pbi.UniqueProcessId;
 }
+
+//
+// MicroNT: process/thread attribute lists (Vista STARTUPINFOEX).  A real
+// userland container -- the caller sizes it via InitializeProcThreadAttributeList,
+// fills entries with UpdateProcThreadAttribute, and frees the blob itself
+// (DeleteProcThreadAttributeList holds no resources).  CreateProcess does not
+// yet consume the stored attributes (hello does not spawn); the list management
+// itself is real.  Param types are ULONG/PVOID -- ABI-identical on i386 to the
+// SIZE_T/DWORD_PTR the caller declares.
+//
+typedef struct _MNT_PTAL_ENTRY {
+    ULONG Attribute;
+    ULONG cbSize;
+    PVOID lpValue;
+} MNT_PTAL_ENTRY;
+
+typedef struct _MNT_PTAL {
+    ULONG          Capacity;
+    ULONG          Used;
+    MNT_PTAL_ENTRY Entries[1];   /* [Capacity] */
+} MNT_PTAL;
+
+BOOL
+WINAPI
+InitializeProcThreadAttributeList(
+    PVOID  lpAttributeList,
+    ULONG  dwAttributeCount,
+    ULONG  dwFlags,
+    PULONG lpSize
+    )
+{
+    ULONG    required;
+    MNT_PTAL *list;
+
+    UNREFERENCED_PARAMETER( dwFlags );
+
+    if ( lpSize == NULL ) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    required = (2 * sizeof(ULONG)) + (dwAttributeCount * sizeof(MNT_PTAL_ENTRY));
+
+    if ( lpAttributeList == NULL || *lpSize < required ) {
+        *lpSize = required;
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    list = (MNT_PTAL *)lpAttributeList;
+    list->Capacity = dwAttributeCount;
+    list->Used     = 0;
+    *lpSize = required;
+    return TRUE;
+}
+
+BOOL
+WINAPI
+UpdateProcThreadAttribute(
+    PVOID  lpAttributeList,
+    ULONG  dwFlags,
+    ULONG  Attribute,
+    PVOID  lpValue,
+    ULONG  cbSize,
+    PVOID  lpPreviousValue,
+    PULONG lpReturnSize
+    )
+{
+    MNT_PTAL *list = (MNT_PTAL *)lpAttributeList;
+
+    UNREFERENCED_PARAMETER( dwFlags );
+    UNREFERENCED_PARAMETER( lpPreviousValue );
+    UNREFERENCED_PARAMETER( lpReturnSize );
+
+    if ( list == NULL ) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if ( list->Used >= list->Capacity ) {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    list->Entries[list->Used].Attribute = Attribute;
+    list->Entries[list->Used].lpValue   = lpValue;
+    list->Entries[list->Used].cbSize    = cbSize;
+    list->Used += 1;
+    return TRUE;
+}
+
+VOID
+WINAPI
+DeleteProcThreadAttributeList(
+    PVOID lpAttributeList
+    )
+{
+    //
+    // The list is a flat, caller-allocated blob -- we hold no resources of our
+    // own, so the caller frees it.
+    //
+    UNREFERENCED_PARAMETER( lpAttributeList );
+}

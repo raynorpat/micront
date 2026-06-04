@@ -547,4 +547,61 @@ lstrlenW(
     }
 }
 
-
+
+//
+// MicroNT: CompareStringOrdinal -- code-point (ordinal) comparison of two
+// counted UTF-16 strings, optionally case-insensitive.  Backed by ntdll's
+// RtlCompareUnicodeString (binary compare; its case-insensitive mode upcases
+// via the NLS table, which matches ordinal upcase for the common ASCII/path
+// inputs Rust uses).  Returns CSTR_LESS_THAN / EQUAL / GREATER_THAN (1/2/3).
+//
+#ifndef CSTR_LESS_THAN
+#define CSTR_LESS_THAN     1
+#define CSTR_EQUAL         2
+#define CSTR_GREATER_THAN  3
+#endif
+
+INT
+WINAPI
+CompareStringOrdinal(
+    LPCWSTR lpString1,
+    INT cchCount1,
+    LPCWSTR lpString2,
+    INT cchCount2,
+    BOOL bIgnoreCase
+    )
+{
+    UNICODE_STRING s1;
+    UNICODE_STRING s2;
+    LONG result;
+
+    if ( lpString1 == NULL || lpString2 == NULL ) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
+    if ( cchCount1 < 0 ) {
+        RtlInitUnicodeString( &s1, lpString1 );
+    } else {
+        s1.Buffer = (PWSTR)lpString1;
+        s1.Length = (USHORT)(cchCount1 * sizeof(WCHAR));
+        s1.MaximumLength = s1.Length;
+    }
+
+    if ( cchCount2 < 0 ) {
+        RtlInitUnicodeString( &s2, lpString2 );
+    } else {
+        s2.Buffer = (PWSTR)lpString2;
+        s2.Length = (USHORT)(cchCount2 * sizeof(WCHAR));
+        s2.MaximumLength = s2.Length;
+    }
+
+    result = RtlCompareUnicodeString( &s1, &s2, (BOOLEAN)bIgnoreCase );
+    if ( result < 0 ) {
+        return CSTR_LESS_THAN;
+    } else if ( result > 0 ) {
+        return CSTR_GREATER_THAN;
+    } else {
+        return CSTR_EQUAL;
+    }
+}

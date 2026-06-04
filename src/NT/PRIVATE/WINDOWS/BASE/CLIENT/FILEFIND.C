@@ -1093,3 +1093,47 @@ Return Value:
 {
     return CloseHandle(hChangeHandle);
 }
+
+//
+// MicroNT: FindFirstFileExW.  Standard/Basic info with name-match search is
+// exactly FindFirstFileW, so delegate.  The Ex-only search operations
+// (LimitToDirectories / LimitToDevices) and custom filters are not supported
+// and rejected truthfully; the CASE_SENSITIVE / LARGE_FETCH flags are advisory.
+//
+typedef enum _FINDEX_INFO_LEVELS {
+    FindExInfoStandard,
+    FindExInfoBasic,
+    FindExInfoMaxInfoLevel
+} FINDEX_INFO_LEVELS;
+
+typedef enum _FINDEX_SEARCH_OPS {
+    FindExSearchNameMatch,
+    FindExSearchLimitToDirectories,
+    FindExSearchLimitToDevices,
+    FindExSearchMaxSearchOp
+} FINDEX_SEARCH_OPS;
+
+HANDLE
+WINAPI
+FindFirstFileExW(
+    LPCWSTR lpFileName,
+    FINDEX_INFO_LEVELS fInfoLevelId,
+    LPVOID lpFindFileData,
+    FINDEX_SEARCH_OPS fSearchOp,
+    LPVOID lpSearchFilter,
+    DWORD dwAdditionalFlags
+    )
+{
+    UNREFERENCED_PARAMETER( dwAdditionalFlags );
+
+    if ( fInfoLevelId != FindExInfoStandard && fInfoLevelId != FindExInfoBasic ) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return INVALID_HANDLE_VALUE;
+    }
+    if ( fSearchOp != FindExSearchNameMatch || ARGUMENT_PRESENT(lpSearchFilter) ) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return INVALID_HANDLE_VALUE;
+    }
+
+    return FindFirstFileW( lpFileName, (LPWIN32_FIND_DATAW)lpFindFileData );
+}
