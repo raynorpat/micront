@@ -1872,3 +1872,20 @@ SwitchToThread(
         return TRUE;
     }
 }
+
+//
+// MicroNT: stack-overflow guarantee.  The NT 3.5 TEB has no GuaranteedStackBytes
+// field and the kernel reserves no stack-overflow guard region, so the request
+// cannot be honoured.  Report it truthfully -- callers treat this best-effort
+// API's failure as "no guarantee", which is the accurate state here.
+//
+BOOL
+WINAPI
+SetThreadStackGuarantee(
+    PULONG StackSizeInBytes
+    )
+{
+    UNREFERENCED_PARAMETER( StackSizeInBytes );
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return FALSE;
+}

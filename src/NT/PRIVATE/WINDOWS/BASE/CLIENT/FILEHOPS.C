@@ -2367,3 +2367,265 @@ CancelIo(
     }
     return TRUE;
 }
+
+//
+// MicroNT: file-info-by-handle-class enum (Win32, absent from the NT 3.5 SDK).
+// The Win32 FILE_*_INFO buffers are layout-identical to the NT FILE_*_INFORMATION
+// ones, so GetFileInformationByHandleEx / SetFileInformationByHandle just map the
+// class and forward the caller's buffer to Nt[Query/Set]InformationFile.
+//
+typedef enum _FILE_INFO_BY_HANDLE_CLASS {
+    FileBasicInfo,
+    FileStandardInfo,
+    FileNameInfo,
+    FileRenameInfo,
+    FileDispositionInfo,
+    FileAllocationInfo,
+    FileEndOfFileInfo,
+    FileStreamInfo,
+    FileCompressionInfo,
+    FileAttributeTagInfo,
+    FileIdBothDirectoryInfo,
+    FileIdBothDirectoryRestartInfo,
+    FileIoPriorityHintInfo,
+    FileRemoteProtocolInfo,
+    FileFullDirectoryInfo,
+    FileFullDirectoryRestartInfo,
+    MaximumFileInfoByHandleClass
+} FILE_INFO_BY_HANDLE_CLASS, *PFILE_INFO_BY_HANDLE_CLASS;
+
+//
+// MicroNT: create a hard link.  The FS decides: NTFS honours
+// FileLinkInformation; FASTFAT returns STATUS_INVALID_DEVICE_REQUEST, which
+// surfaces here as a truthful failure (FAT has no hard links).
+//
+BOOL
+WINAPI
+CreateHardLinkW(
+    LPCWSTR lpLinkName,
+    LPCWSTR lpExistingFileName,
+    LPSECURITY_ATTRIBUTES lpSecurityAttributes
+    )
+{
+    NTSTATUS Status;
+    UNICODE_STRING OldFileName;
+    UNICODE_STRING NewFileName;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    IO_STATUS_BLOCK IoStatusBlock;
+    PFILE_LINK_INFORMATION NewName = NULL;
+    HANDLE FileHandle = NULL;
+    BOOL ReturnValue = FALSE;
+
+    if ( !ARGUMENT_PRESENT(lpLinkName) || !ARGUMENT_PRESENT(lpExistingFileName) ) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    OldFileName.Buffer = NULL;
+    NewFileName.Buffer = NULL;
+
+    if ( !RtlDosPathNameToNtPathName_U( lpExistingFileName, &OldFileName, NULL, NULL ) ) {
+        SetLastError(ERROR_PATH_NOT_FOUND);
+        goto cleanup;
+    }
+
+    InitializeObjectAttributes( &ObjectAttributes,
+                                &OldFileName,
+                                OBJ_CASE_INSENSITIVE,
+                                NULL,
+                                NULL );
+    if ( ARGUMENT_PRESENT(lpSecurityAttributes) ) {
+        ObjectAttributes.SecurityDescriptor = lpSecurityAttributes->lpSecurityDescriptor;
+    }
+
+    Status = NtOpenFile( &FileHandle,
+                         FILE_WRITE_ATTRIBUTES | SYNCHRONIZE,
+                         &ObjectAttributes,
+                         &IoStatusBlock,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         FILE_SYNCHRONOUS_IO_NONALERT );
+    if ( !NT_SUCCESS(Status) ) {
+        BaseSetLastNTError(Status);
+        goto cleanup;
+    }
+
+    if ( !RtlDosPathNameToNtPathName_U( lpLinkName, &NewFileName, NULL, NULL ) ) {
+        SetLastError(ERROR_PATH_NOT_FOUND);
+        goto cleanup;
+    }
+
+    NewName = RtlAllocateHeap( RtlProcessHeap(), 0,
+                              NewFileName.Length + sizeof(*NewName) );
+    if ( NewName == NULL ) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        goto cleanup;
+    }
+
+    RtlMoveMemory( NewName->FileName, NewFileName.Buffer, NewFileName.Length );
+    NewName->ReplaceIfExists = FALSE;
+    NewName->RootDirectory = NULL;
+    NewName->FileNameLength = NewFileName.Length;
+
+    Status = NtSetInformationFile( FileHandle,
+                                   &IoStatusBlock,
+                                   NewName,
+                                   NewFileName.Length + sizeof(*NewName),
+                                   FileLinkInformation );
+    if ( !NT_SUCCESS(Status) ) {
+        BaseSetLastNTError(Status);
+        goto cleanup;
+    }
+
+    ReturnValue = TRUE;
+
+cleanup:
+    if ( NewName != NULL ) {
+        RtlFreeHeap( RtlProcessHeap(), 0, NewName );
+    }
+    if ( FileHandle != NULL ) {
+        NtClose( FileHandle );
+    }
+    if ( NewFileName.Buffer != NULL ) {
+        RtlFreeHeap( RtlProcessHeap(), 0, NewFileName.Buffer );
+    }
+    if ( OldFileName.Buffer != NULL ) {
+        RtlFreeHeap( RtlProcessHeap(), 0, OldFileName.Buffer );
+    }
+    return ReturnValue;
+}
+
+//
+// MicroNT: symbolic links need a reparse-point subsystem MicroNT does not have.
+// Real Windows also fails this without SeCreateSymbolicLinkPrivilege; report that
+// truthful status rather than pretending to create the link.
+//
+BOOLEAN
+WINAPI
+CreateSymbolicLinkW(
+    LPCWSTR lpSymlinkFileName,
+    LPCWSTR lpTargetFileName,
+    DWORD dwFlags
+    )
+{
+    UNREFERENCED_PARAMETER( lpSymlinkFileName );
+    UNREFERENCED_PARAMETER( lpTargetFileName );
+    UNREFERENCED_PARAMETER( dwFlags );
+
+    SetLastError(ERROR_PRIVILEGE_NOT_HELD);
+    return FALSE;
+}
+
+//
+// MicroNT: query file info by FILE_INFO_BY_HANDLE_CLASS.  Maps to the NT info
+// class and forwards the buffer; directory-enumeration classes go through
+// NtQueryDirectoryFile.  Classes that postdate NT 3.5 (attribute-tag, id-both-
+// directory) are rejected truthfully.
+//
+BOOL
+WINAPI
+GetFileInformationByHandleEx(
+    HANDLE hFile,
+    FILE_INFO_BY_HANDLE_CLASS FileInformationClass,
+    LPVOID lpFileInformation,
+    DWORD dwBufferSize
+    )
+{
+    NTSTATUS Status;
+    IO_STATUS_BLOCK IoStatusBlock;
+    FILE_INFORMATION_CLASS NtClass;
+    BOOLEAN IsDirectoryQuery = FALSE;
+    BOOLEAN RestartScan = FALSE;
+
+    switch ( FileInformationClass ) {
+        case FileBasicInfo:       NtClass = FileBasicInformation; break;
+        case FileStandardInfo:    NtClass = FileStandardInformation; break;
+        case FileNameInfo:        NtClass = FileNameInformation; break;
+        case FileStreamInfo:      NtClass = FileStreamInformation; break;
+        case FileCompressionInfo: NtClass = FileCompressionInformation; break;
+
+        case FileFullDirectoryRestartInfo:
+            RestartScan = TRUE;
+            /* fall through */
+        case FileFullDirectoryInfo:
+            NtClass = FileFullDirectoryInformation;
+            IsDirectoryQuery = TRUE;
+            break;
+
+        default:
+            //
+            // Attribute-tag / id-both-directory / etc. postdate NT 3.5.
+            //
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+    }
+
+    if ( IsDirectoryQuery ) {
+        Status = NtQueryDirectoryFile( hFile,
+                                       NULL, NULL, NULL,
+                                       &IoStatusBlock,
+                                       lpFileInformation,
+                                       dwBufferSize,
+                                       NtClass,
+                                       FALSE,
+                                       NULL,
+                                       RestartScan );
+        if ( Status == STATUS_PENDING ) {
+            NtWaitForSingleObject( hFile, FALSE, NULL );
+            Status = IoStatusBlock.Status;
+        }
+    } else {
+        Status = NtQueryInformationFile( hFile,
+                                         &IoStatusBlock,
+                                         lpFileInformation,
+                                         dwBufferSize,
+                                         NtClass );
+    }
+
+    if ( !NT_SUCCESS(Status) ) {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+//
+// MicroNT: set file info by FILE_INFO_BY_HANDLE_CLASS (rename / delete /
+// truncate / allocate / basic).  Maps to the NT info class and forwards the
+// buffer to NtSetInformationFile.
+//
+BOOL
+WINAPI
+SetFileInformationByHandle(
+    HANDLE hFile,
+    FILE_INFO_BY_HANDLE_CLASS FileInformationClass,
+    LPVOID lpFileInformation,
+    DWORD dwBufferSize
+    )
+{
+    NTSTATUS Status;
+    IO_STATUS_BLOCK IoStatusBlock;
+    FILE_INFORMATION_CLASS NtClass;
+
+    switch ( FileInformationClass ) {
+        case FileBasicInfo:       NtClass = FileBasicInformation; break;
+        case FileRenameInfo:      NtClass = FileRenameInformation; break;
+        case FileDispositionInfo: NtClass = FileDispositionInformation; break;
+        case FileAllocationInfo:  NtClass = FileAllocationInformation; break;
+        case FileEndOfFileInfo:   NtClass = FileEndOfFileInformation; break;
+
+        default:
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+    }
+
+    Status = NtSetInformationFile( hFile,
+                                   &IoStatusBlock,
+                                   lpFileInformation,
+                                   dwBufferSize,
+                                   NtClass );
+    if ( !NT_SUCCESS(Status) ) {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+    return TRUE;
+}

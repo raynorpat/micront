@@ -660,4 +660,16 @@ EXPORTS
     GetProcessId
     RtlCaptureContext = NTDLL.RtlCaptureContext
     AddVectoredExceptionHandler = NTDLL.RtlAddVectoredExceptionHandler
+    CreateHardLinkW
+    CreateSymbolicLinkW
+    GetFileInformationByHandleEx
+    SetFileInformationByHandle
+    CreateWaitableTimerExW
+    CreateWaitableTimerW
+    SetWaitableTimer
+    CancelWaitableTimer
+    SetThreadStackGuarantee
+    GetSystemTimePreciseAsFileTime = GetSystemTimeAsFileTime
+    InitOnceBeginInitialize
+    InitOnceComplete
 

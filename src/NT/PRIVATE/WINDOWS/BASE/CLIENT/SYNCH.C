@@ -1554,3 +1554,257 @@ rewait:
         }
     return Status == STATUS_USER_APC ? WAIT_IO_COMPLETION : 0;
 }
+
+//
+// MicroNT: waitable timers.  The kernel timer here is the NT 3.1-era object:
+// NtCreateTimer is 3-arg (notification / manual-reset only, no Synchronization
+// type, no high-resolution source) and NtSetTimer is 5-arg (one-shot, no
+// period, no resume).  So the Ex flags are advisory and periodic / APC-
+// completion timers are truthfully unsupported -- the timer still arms, fires,
+// and signals its handle, which is what the wait-on-handle pattern needs.
+//
+#ifndef CREATE_WAITABLE_TIMER_MANUAL_RESET
+#define CREATE_WAITABLE_TIMER_MANUAL_RESET    0x00000001
+#endif
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+#ifndef TIMER_ALL_ACCESS
+#define TIMER_ALL_ACCESS  (STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0x3)
+#endif
+
+typedef VOID (APIENTRY *PTIMERAPCROUTINE)(
+    LPVOID lpArgToCompletionRoutine,
+    DWORD  dwTimerLowValue,
+    DWORD  dwTimerHighValue
+    );
+
+HANDLE
+APIENTRY
+CreateWaitableTimerExW(
+    LPSECURITY_ATTRIBUTES lpTimerAttributes,
+    LPCWSTR lpTimerName,
+    DWORD dwFlags,
+    DWORD dwDesiredAccess
+    )
+{
+    NTSTATUS Status;
+    OBJECT_ATTRIBUTES Obja;
+    POBJECT_ATTRIBUTES pObja;
+    HANDLE Handle;
+    UNICODE_STRING ObjectName;
+
+    //
+    // dwFlags (MANUAL_RESET / HIGH_RESOLUTION) is advisory -- the kernel timer
+    // is notification-only and normal-resolution.  The timer still works.
+    //
+    UNREFERENCED_PARAMETER( dwFlags );
+
+    if ( ARGUMENT_PRESENT(lpTimerName) ) {
+        RtlInitUnicodeString( &ObjectName, lpTimerName );
+        pObja = BaseFormatObjectAttributes( &Obja, lpTimerAttributes, &ObjectName );
+    } else {
+        pObja = BaseFormatObjectAttributes( &Obja, lpTimerAttributes, NULL );
+    }
+
+    Status = NtCreateTimer( &Handle, dwDesiredAccess, pObja );
+    if ( NT_SUCCESS(Status) ) {
+        if ( Status == STATUS_OBJECT_NAME_EXISTS ) {
+            SetLastError(ERROR_ALREADY_EXISTS);
+        } else {
+            SetLastError(0);
+        }
+        return Handle;
+    } else {
+        BaseSetLastNTError(Status);
+        return NULL;
+    }
+}
+
+HANDLE
+APIENTRY
+CreateWaitableTimerW(
+    LPSECURITY_ATTRIBUTES lpTimerAttributes,
+    BOOL bManualReset,
+    LPCWSTR lpTimerName
+    )
+{
+    return CreateWaitableTimerExW( lpTimerAttributes,
+                                   lpTimerName,
+                                   bManualReset ? CREATE_WAITABLE_TIMER_MANUAL_RESET : 0,
+                                   TIMER_ALL_ACCESS );
+}
+
+BOOL
+APIENTRY
+SetWaitableTimer(
+    HANDLE hTimer,
+    const LARGE_INTEGER *lpDueTime,
+    LONG lPeriod,
+    PTIMERAPCROUTINE pfnCompletionRoutine,
+    LPVOID lpArgToCompletionRoutine,
+    BOOL fResume
+    )
+{
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER( lpArgToCompletionRoutine );
+    UNREFERENCED_PARAMETER( fResume );   // wake-from-suspend: not plumbed (cloud VM)
+
+    //
+    // The NT 3.1 kernel timer is one-shot with no APC completion.  Reject the
+    // periodic and APC-completion variants truthfully rather than silently
+    // arming a plain one-shot.
+    //
+    if ( lPeriod != 0 ) {
+        SetLastError(ERROR_NOT_SUPPORTED);
+        return FALSE;
+    }
+    if ( pfnCompletionRoutine != NULL ) {
+        SetLastError(ERROR_NOT_SUPPORTED);
+        return FALSE;
+    }
+
+    Status = NtSetTimer( hTimer, (PLARGE_INTEGER)lpDueTime, NULL, NULL, NULL );
+    if ( !NT_SUCCESS(Status) ) {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+BOOL
+APIENTRY
+CancelWaitableTimer(
+    HANDLE hTimer
+    )
+{
+    NTSTATUS Status;
+
+    Status = NtCancelTimer( hTimer, NULL );
+    if ( !NT_SUCCESS(Status) ) {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+//
+// MicroNT: one-time initialization (INIT_ONCE / RTL_RUN_ONCE).  Synchronous mode
+// only -- the mode Rust std's thread-local key init uses: flags 0, NULL context,
+// no INIT_ONCE_ASYNC.  The INIT_ONCE is a single PVOID; we run a 3-state machine
+// over it with the NT 3.51 PVOID InterlockedCompareExchange.  Waiters yield-spin
+// until the initializer publishes DONE -- InitOnce contention is rare and the
+// init window brief, so this is a correct (if not keyed-event-efficient) wait.
+// Context-pointer payload and the async protocol are not supported (Rust uses
+// neither); they would need a different encoding.
+//
+typedef union _INIT_ONCE {
+    PVOID Ptr;
+} INIT_ONCE, *PINIT_ONCE, *LPINIT_ONCE;
+
+#define INIT_ONCE_CHECK_ONLY    0x00000001UL
+#define INIT_ONCE_ASYNC         0x00000002UL
+#define INIT_ONCE_INIT_FAILED   0x00000004UL
+
+#define INITONCE_UNINIT      ((PVOID)0)
+#define INITONCE_INPROGRESS  ((PVOID)1)
+#define INITONCE_DONE        ((PVOID)2)
+
+//
+// kernel32's own NT 3.51-form interlocked CAS (i386\critsect.asm).  PVOID is
+// ABI-identical to the modern LONG form on i386.
+//
+PVOID
+WINAPI
+InterlockedCompareExchange(
+    PVOID *Destination,
+    PVOID Exchange,
+    PVOID Comperand
+    );
+
+BOOL
+WINAPI
+InitOnceBeginInitialize(
+    LPINIT_ONCE lpInitOnce,
+    DWORD dwFlags,
+    PBOOL fPending,
+    LPVOID *lpContext
+    )
+{
+    PVOID Old;
+
+    if ( ARGUMENT_PRESENT(lpContext) ) {
+        *lpContext = NULL;
+    }
+
+    //
+    // INIT_ONCE_CHECK_ONLY: report completion without claiming or blocking.
+    //
+    if ( dwFlags & INIT_ONCE_CHECK_ONLY ) {
+        if ( lpInitOnce->Ptr == INITONCE_DONE ) {
+            *fPending = FALSE;
+            return TRUE;
+        }
+        *fPending = TRUE;
+        SetLastError(ERROR_GEN_FAILURE);
+        return FALSE;
+    }
+
+    for (;;) {
+        Old = InterlockedCompareExchange( &lpInitOnce->Ptr,
+                                          INITONCE_INPROGRESS,
+                                          INITONCE_UNINIT );
+        if ( Old == INITONCE_UNINIT ) {
+            //
+            // We claimed it -- the caller performs the initialization and then
+            // calls InitOnceComplete.
+            //
+            *fPending = TRUE;
+            return TRUE;
+        }
+
+        if ( Old == INITONCE_DONE ) {
+            *fPending = FALSE;
+            return TRUE;
+        }
+
+        //
+        // Old == INITONCE_INPROGRESS: another thread is initializing.  Yield
+        // until the state leaves IN_PROGRESS, then re-evaluate (DONE -> not
+        // pending; UNINIT after a failed Complete -> try to claim).
+        //
+        do {
+            SwitchToThread();
+        } while ( lpInitOnce->Ptr == INITONCE_INPROGRESS );
+    }
+}
+
+BOOL
+WINAPI
+InitOnceComplete(
+    LPINIT_ONCE lpInitOnce,
+    DWORD dwFlags,
+    LPVOID lpContext
+    )
+{
+    UNREFERENCED_PARAMETER( lpContext );   // context payload not stored (sync mode)
+
+    if ( dwFlags & INIT_ONCE_INIT_FAILED ) {
+        //
+        // Initialization failed -- reset to uninitialized so another thread can
+        // retry.
+        //
+        (void) InterlockedCompareExchange( &lpInitOnce->Ptr,
+                                           INITONCE_UNINIT,
+                                           INITONCE_INPROGRESS );
+    } else {
+        //
+        // Success -- publish DONE.  Waiters spinning on IN_PROGRESS observe it.
+        //
+        (void) InterlockedCompareExchange( &lpInitOnce->Ptr,
+                                           INITONCE_DONE,
+                                           INITONCE_INPROGRESS );
+    }
+    return TRUE;
+}
