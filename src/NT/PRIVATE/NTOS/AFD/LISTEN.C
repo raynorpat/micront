@@ -304,7 +304,7 @@ Return Value:
         );
 
     Irp->IoStatus.Information =
-        sizeof(*listenResponse) - sizeof(TRANSPORT_ADDRESS) +
+        FIELD_OFFSET( AFD_LISTEN_RESPONSE_INFO, RemoteAddress ) +
             connection->RemoteAddressLength;
 
     //
@@ -786,7 +786,7 @@ AfdRestartAccept (
             );
 
         waitForListenIrp->IoStatus.Information =
-            sizeof(*listenResponse) - sizeof(TRANSPORT_ADDRESS) +
+            FIELD_OFFSET( AFD_LISTEN_RESPONSE_INFO, RemoteAddress ) +
                 connection->RemoteAddressLength;
 
         //

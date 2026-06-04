@@ -145,8 +145,14 @@ TdiQueryInformation(PTDI_REQUEST Request, uint QueryType, PNDIS_BUFFER Buffer,
 			break;
 
 		case TDI_QUERY_ADDRESS_INFO:
-			InfoSize = sizeof(TDI_ADDRESS_INFO) - sizeof(TRANSPORT_ADDRESS) +
-				TCP_TA_SIZE;
+			// ActivityCount prefix + one IP TRANSPORT_ADDRESS (TCP_TA_SIZE=22)
+			// = 26, the wire size every client allocates. Use offsetof, not
+			// sizeof(TDI_ADDRESS_INFO)-sizeof(TRANSPORT_ADDRESS): this compiler
+			// leaves a standalone TRANSPORT_ADDRESS un-trailing-padded (10) yet
+			// occupies 12 for it inside TDI_ADDRESS_INFO, so the subtraction is
+			// 6 not 4 -> a bogus InfoSize of 28 and a spurious BUFFER_OVERFLOW
+			// on an exact-fit buffer.
+			InfoSize = FIELD_OFFSET(TDI_ADDRESS_INFO, Address) + TCP_TA_SIZE;
 			CTEMemSet(&InfoBuf.AddrInfo, 0, TCP_TA_SIZE);
 			InfoBuf.AddrInfo.ActivityCount = 1;		// Since noone knows what
 													// this means, we'll set
