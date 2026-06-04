@@ -815,6 +815,20 @@ function M.main(opts)
     end
     clean_dirs.windows_bcryptprimitives = { WIN .. "/BASE/BCRYPTP", WIN .. "/BASE/BCRYPTP/obj" }
 
+    -- ----- WINDOWS/BASE/SYNCH — api-ms-win-core-synch-l1-2-0.dll: the
+    -- WaitOnAddress / WakeByAddress* futex family, layered on a per-address
+    -- counting semaphore.  Rust std's sync primitives import these 3 from
+    -- this apiset; the long apiset DLL name is the TARGETNAME.
+    targets.windows_base_synch = function()
+        local since = platform.now()
+        local rc = run_nmake(WIN .. "/BASE/SYNCH",
+                         "WINDOWS/BASE/SYNCH - api-ms-win-core-synch-l1-2-0.dll",
+                         { "makedll=1" })
+        if rc ~= 0 then return rc end
+        return splitsym_dir(PUB_LIB, since)
+    end
+    clean_dirs.windows_base_synch = { WIN .. "/BASE/SYNCH", WIN .. "/BASE/SYNCH/obj" }
+
     -- ----- WINDOWS/CMD — NT 3.5 cmd.exe lifted from stuff/.
     -- NMAKE shells inline commands (@if exist, &&, |, redirections)
     -- through COMSPEC; without a working cmd.exe those _spawn calls
@@ -1423,7 +1437,7 @@ function M.main(opts)
     local USERLAND_TARGETS = {
         "rtl_user", "ntdll", "urtl", "windows_base_client", "windows_advapi",
         "windows_user32", "windows_shell32", "windows_ws2_32", "windows_wsock32",
-        "windows_bcryptprimitives",
+        "windows_bcryptprimitives", "windows_base_synch",
         "cmd",
         "crypto_djbcrypt",
     }

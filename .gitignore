@@ -72,6 +72,11 @@ src/NT/PUBLIC/SDK/LIB/I386/advapi32.exp
 src/NT/PUBLIC/SDK/LIB/I386/bcryptprimitives.dll
 src/NT/PUBLIC/SDK/LIB/I386/bcryptprimitives.exp
 src/NT/PUBLIC/SDK/LIB/I386/bcryptprimitives.lib
+# api-ms-win-core-synch-l1-2-0.dll (WaitOnAddress futex apiset) — built from
+# source, no in-tree consumer (Rust links it on the mingw side); build outputs.
+src/NT/PUBLIC/SDK/LIB/I386/api-ms-win-core-synch-l1-2-0.dll
+src/NT/PUBLIC/SDK/LIB/I386/api-ms-win-core-synch-l1-2-0.exp
+src/NT/PUBLIC/SDK/LIB/I386/api-ms-win-core-synch-l1-2-0.lib
 # djbcrypt.dll (DJB crypto — Monocypher X25519/Ed25519/ChaCha20/Poly1305 +
 # SHA-256/512) — built from source, no bootstrap consumer; pure build outputs.
 src/NT/PUBLIC/SDK/LIB/I386/djbcrypt.dll

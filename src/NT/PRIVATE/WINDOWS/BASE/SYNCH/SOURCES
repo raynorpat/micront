@@ -1,0 +1,36 @@
+!IF 0
+
+Module Name:
+
+    sources.
+
+Abstract:
+
+    api-ms-win-core-synch-l1-2-0.dll -- the WaitOnAddress / WakeByAddress*
+    futex family, layered on a per-address counting semaphore.  Rust std's
+    sync primitives import these three names from this apiset.  The output
+    DLL name (the long apiset name) comes from TARGETNAME; the sources here
+    keep short 8.3 stems.
+
+!ENDIF
+
+MAJORCOMP=windows
+MINORCOMP=base
+
+TARGETNAME=api-ms-win-core-synch-l1-2-0
+TARGETPATH=$(BASEDIR)\public\sdk\lib
+TARGETTYPE=DYNLINK
+DLLENTRY=SynchDllInit
+
+LINKLIBS=$(BASEDIR)\public\sdk\lib\*\kernel32.lib \
+         $(BASEDIR)\public\sdk\lib\*\ntdll.lib
+
+INCLUDES=..\inc;..\..\inc;..\..\..\inc
+
+NTDEBUGTYPE=coff
+
+SOURCES=woa.c
+
+UMTYPE=console
+
+DLLDEF=synch.def

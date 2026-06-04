@@ -161,6 +161,9 @@ function M.files(paths)
         { dest = "System32/wsock32.dll",  src = paths.sdk_lib .. "/wsock32.dll"  },
         { dest = "System32/bcryptprimitives.dll", src = paths.sdk_lib .. "/bcryptprimitives.dll" },
         { dest = "System32/djbcrypt.dll",         src = paths.sdk_lib .. "/djbcrypt.dll" },
+        -- WaitOnAddress futex apiset (Rust std). Long apiset name = LFN on FAT16.
+        { dest = "System32/api-ms-win-core-synch-l1-2-0.dll",
+          src = paths.sdk_lib .. "/api-ms-win-core-synch-l1-2-0.dll" },
 
         -- Base system drivers — loaded post-boot by IoLoadDriver from
         -- \SystemRoot\System32\Drivers, so they stay on the root volume.

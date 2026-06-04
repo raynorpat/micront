@@ -1,0 +1,9 @@
+LIBRARY api-ms-win-core-synch-l1-2-0
+
+DESCRIPTION 'MicroNT WaitOnAddress (userland futex) over a counting semaphore'
+
+EXPORTS
+
+    WaitOnAddress
+    WakeByAddressAll
+    WakeByAddressSingle
