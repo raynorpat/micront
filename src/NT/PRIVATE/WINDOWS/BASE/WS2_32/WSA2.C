@@ -52,11 +52,13 @@ WSASocketW(
     }
 
     //
-    // WSA_FLAG_OVERLAPPED is the only flag callers pass; every AFD socket is
-    // already overlapped-capable, so it needs no special handling.  Any other
+    // WSA_FLAG_OVERLAPPED -- every AFD socket is already overlapped-capable,
+    // so it needs no special handling.  WSA_FLAG_NO_HANDLE_INHERIT (which
+    // mio/Tokio pass) is already the default: AFD socket handles are opened
+    // without OBJ_INHERIT, so they are non-inheritable already.  Any other
     // flag bit is not implemented.
     //
-    if ((dwFlags & ~WSA_FLAG_OVERLAPPED) != 0) {
+    if ((dwFlags & ~(WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT)) != 0) {
         WSASetLastError( WSAEINVAL );
         return INVALID_SOCKET;
     }
@@ -183,4 +185,74 @@ WSASend(
         *lpNumberOfBytesSent = total;
     }
     return 0;
+}
+
+//
+// WSARecvFrom / WSASendTo / WSASendMsg -- the datagram WSA-2 scatter/gather
+// variants, and WSAPoll -- the poll() multiplexer.  Exported so modern
+// toolchains (mio/tokio, socket2) resolve their imports, but the TCP reactor
+// path never calls them.  Rather than risk a silent wrong answer they return
+// WSAEOPNOTSUPP truthfully; wire real bodies if a consumer is found to need
+// them.  Exotic Vista-era parameter types (WSAMSG, WSAPOLLFD) are taken as
+// opaque pointers -- pointer-width on x86, so the __stdcall frame is correct
+// even when called.
+//
+
+int PASCAL
+WSARecvFrom(
+    IN     SOCKET                             Handle,
+    IN     LPWSABUF                            lpBuffers,
+    IN     DWORD                              dwBufferCount,
+    OUT    LPDWORD                            lpNumberOfBytesRecvd,
+    IN OUT LPDWORD                            lpFlags,
+    OUT    void *                             lpFrom,
+    IN OUT void *                             lpFromlen,
+    IN     LPWSAOVERLAPPED                    lpOverlapped,
+    IN     LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
+    )
+{
+    WSASetLastError( WSAEOPNOTSUPP );
+    return SOCKET_ERROR;
+}
+
+int PASCAL
+WSASendTo(
+    IN  SOCKET                             Handle,
+    IN  LPWSABUF                            lpBuffers,
+    IN  DWORD                              dwBufferCount,
+    OUT LPDWORD                            lpNumberOfBytesSent,
+    IN  DWORD                              dwFlags,
+    IN  const void *                      lpTo,
+    IN  int                               iToLen,
+    IN  LPWSAOVERLAPPED                    lpOverlapped,
+    IN  LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
+    )
+{
+    WSASetLastError( WSAEOPNOTSUPP );
+    return SOCKET_ERROR;
+}
+
+int PASCAL
+WSASendMsg(
+    IN  SOCKET                             Handle,
+    IN  void *                            lpMsg,
+    IN  DWORD                             dwFlags,
+    OUT LPDWORD                           lpNumberOfBytesSent,
+    IN  LPWSAOVERLAPPED                   lpOverlapped,
+    IN  LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
+    )
+{
+    WSASetLastError( WSAEOPNOTSUPP );
+    return SOCKET_ERROR;
+}
+
+int PASCAL
+WSAPoll(
+    IN OUT void *fdArray,
+    IN     ULONG nfds,
+    IN     INT   timeout
+    )
+{
+    WSASetLastError( WSAEOPNOTSUPP );
+    return SOCKET_ERROR;
 }

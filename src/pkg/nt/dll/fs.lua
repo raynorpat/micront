@@ -301,6 +301,15 @@ NTSTATUS __stdcall NtQueryVolumeInformationFile(HANDLE FileHandle,
 NTSTATUS __stdcall NtFlushBuffersFile(HANDLE FileHandle,
                                       IO_STATUS_BLOCK *IoStatusBlock);
 
+/* Cancel pending async I/O on a handle. NtCancelIoFileEx (post-3.5, backs the
+ * Win32 CancelIoEx and mio's per-poll cancel) cancels the single request
+ * identified by its issuing IO_STATUS_BLOCK -- or all of the caller's when
+ * IoRequestToCancel is NULL -- rather than every request like NtCancelIoFile.
+ * Lives in NTOS/IO/MISC.C; returns STATUS_NOT_FOUND when nothing matched. */
+NTSTATUS __stdcall NtCancelIoFileEx(HANDLE FileHandle,
+                                    IO_STATUS_BLOCK *IoRequestToCancel,
+                                    IO_STATUS_BLOCK *IoStatusBlock);
+
 typedef struct _FILE_FS_DEVICE_INFORMATION {
     ULONG DeviceType;
     ULONG Characteristics;

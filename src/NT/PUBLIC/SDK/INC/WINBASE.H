@@ -1743,6 +1743,43 @@ GetQueuedCompletionStatus(
     DWORD dwMilliseconds
     );
 
+typedef struct _OVERLAPPED_ENTRY {
+    ULONG        lpCompletionKey;
+    LPOVERLAPPED lpOverlapped;
+    ULONG        Internal;
+    DWORD        dwNumberOfBytesTransferred;
+} OVERLAPPED_ENTRY, *LPOVERLAPPED_ENTRY;
+
+#define FILE_SKIP_COMPLETION_PORT_ON_SUCCESS  0x1
+#define FILE_SKIP_SET_EVENT_ON_HANDLE         0x2
+
+BOOL
+WINAPI
+PostQueuedCompletionStatus(
+    HANDLE CompletionPort,
+    DWORD dwNumberOfBytesTransferred,
+    DWORD dwCompletionKey,
+    LPOVERLAPPED lpOverlapped
+    );
+
+BOOL
+WINAPI
+GetQueuedCompletionStatusEx(
+    HANDLE CompletionPort,
+    LPOVERLAPPED_ENTRY lpCompletionPortEntries,
+    ULONG ulCount,
+    PULONG ulNumEntriesRemoved,
+    DWORD dwMilliseconds,
+    BOOL fAlertable
+    );
+
+BOOL
+WINAPI
+SetFileCompletionNotificationModes(
+    HANDLE FileHandle,
+    UCHAR Flags
+    );
+
 #define SEM_FAILCRITICALERRORS      0x0001
 #define SEM_NOGPFAULTERRORBOX       0x0002
 #define SEM_NOALIGNMENTFAULTEXCEPT  0x0004

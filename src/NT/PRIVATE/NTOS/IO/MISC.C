@@ -30,6 +30,7 @@ Revision History:
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text(PAGE, NtFlushBuffersFile)
 #pragma alloc_text(PAGE, NtCancelIoFile)
+#pragma alloc_text(PAGE, NtCancelIoFileEx)
 #endif
 
 NTSTATUS
@@ -327,6 +328,180 @@ Return Value:
     return STATUS_SUCCESS;
 }
 
+NTSTATUS
+NtCancelIoFileEx(
+    IN HANDLE FileHandle,
+    IN PIO_STATUS_BLOCK IoRequestToCancel OPTIONAL,
+    OUT PIO_STATUS_BLOCK IoStatusBlock
+    )
+
+/*++
+
+Routine Description:
+
+    Cancels a single pending I/O operation on the file -- the one whose issuing
+    I/O status block is IoRequestToCancel -- rather than every operation the
+    calling thread issued on the handle (NtCancelIoFile). When IoRequestToCancel
+    is NULL it behaves like NtCancelIoFile and cancels all of them. Backs the
+    Win32 CancelIoEx and the per-poll cancel issued by readiness reactors (mio).
+
+    Like NtCancelIoFile this reaches only IRPs on the calling thread's pending
+    list, which covers the single-threaded-reactor case: the poll is submitted
+    and cancelled on the same thread.
+
+Arguments:
+
+    FileHandle - the file whose operation is to be cancelled.
+
+    IoRequestToCancel - identifies the specific request by its UserIosb, or NULL
+        to cancel all of the caller's requests on the file. Used only as an
+        identity (compared to Irp->UserIosb); never dereferenced.
+
+    IoStatusBlock - the caller's I/O status block.
+
+Return Value:
+
+    STATUS_SUCCESS if a matching request was found and cancelled;
+    STATUS_NOT_FOUND if none matched.
+
+--*/
+
+{
+    PIRP irp;
+    NTSTATUS status;
+    PFILE_OBJECT fileObject;
+    KPROCESSOR_MODE requestorMode;
+    PETHREAD thread;
+    BOOLEAN found = FALSE;
+    BOOLEAN cancelledAny = FALSE;
+    PLIST_ENTRY header;
+    PLIST_ENTRY entry;
+    KIRQL irql;
+
+    PAGED_CODE();
+
+    requestorMode = KeGetPreviousMode();
+
+    if (requestorMode != KernelMode) {
+        try {
+            ProbeForWriteIoStatus( IoStatusBlock );
+        } except(EXCEPTION_EXECUTE_HANDLER) {
+            return GetExceptionCode();
+        }
+    }
+
+    //
+    // IoRequestToCancel is only an identity (compared to Irp->UserIosb), so it
+    // is never dereferenced and needs no probe.
+    //
+
+    status = ObReferenceObjectByHandle( FileHandle,
+                                        0,
+                                        IoFileObjectType,
+                                        requestorMode,
+                                        (PVOID *) &fileObject,
+                                        NULL );
+    if (!NT_SUCCESS( status )) {
+        return status;
+    }
+
+    if (fileObject->Flags & FO_SYNCHRONOUS_IO) {
+
+        BOOLEAN interrupted;
+
+        if (!IopAcquireFastLock( fileObject )) {
+            status = IopAcquireFileObjectLock( fileObject,
+                                               requestorMode,
+                                               (BOOLEAN) ((fileObject->Flags & FO_ALERTABLE_IO) != 0),
+                                               &interrupted );
+            if (interrupted) {
+                ObDereferenceObject( fileObject );
+                return status;
+            }
+        }
+    }
+
+    KeClearEvent( &fileObject->Event );
+
+    thread = PsGetCurrentThread();
+    IopUpdateOtherOperationCount();
+
+    //
+    // Cancel the matching pending IRP(s) on this thread's queue. Block APCs so
+    // completions cannot remove packets while we walk.
+    //
+
+    KeRaiseIrql( APC_LEVEL, &irql );
+
+    header = &thread->IrpList;
+    entry = thread->IrpList.Flink;
+    while (header != entry) {
+        irp = CONTAINING_RECORD( entry, IRP, ThreadListEntry );
+        if (irp->Tail.Overlay.OriginalFileObject == fileObject &&
+            (!ARGUMENT_PRESENT( IoRequestToCancel ) ||
+             irp->UserIosb == IoRequestToCancel)) {
+            found = TRUE;
+            cancelledAny = TRUE;
+            IoCancelIrp( irp );
+        }
+        entry = entry->Flink;
+    }
+
+    KeLowerIrql( irql );
+
+    //
+    // Wait for the cancelled request(s) to drain so the kernel is no longer
+    // touching the caller's buffers when we return.
+    //
+
+    while (found) {
+
+        LARGE_INTEGER interval;
+
+        interval.LowPart = (ULONG) (-10 * 1000 * 10);
+        interval.HighPart = -1;
+
+        (VOID) KeDelayExecutionThread( KernelMode, FALSE, &interval );
+
+        found = FALSE;
+
+        KeRaiseIrql( APC_LEVEL, &irql );
+
+        header = &thread->IrpList;
+        entry = thread->IrpList.Flink;
+        while (header != entry) {
+            irp = CONTAINING_RECORD( entry, IRP, ThreadListEntry );
+            if (irp->Tail.Overlay.OriginalFileObject == fileObject &&
+                (!ARGUMENT_PRESENT( IoRequestToCancel ) ||
+                 irp->UserIosb == IoRequestToCancel)) {
+                found = TRUE;
+            }
+            entry = entry->Flink;
+        }
+
+        KeLowerIrql( irql );
+    }
+
+    status = cancelledAny ? STATUS_SUCCESS : STATUS_NOT_FOUND;
+
+    try {
+        IoStatusBlock->Status = status;
+        IoStatusBlock->Information = 0L;
+    } except(EXCEPTION_EXECUTE_HANDLER) {
+        NOTHING;
+    }
+
+    (VOID) KeSetEvent( &fileObject->Event, 0, FALSE );
+
+    if (fileObject->Flags & FO_SYNCHRONOUS_IO) {
+        IopReleaseFileObjectLock( fileObject );
+    }
+
+    ObDereferenceObject( fileObject );
+
+    return status;
+}
+
 NTSTATUS
 NtDeleteFile(
     IN POBJECT_ATTRIBUTES ObjectAttributes

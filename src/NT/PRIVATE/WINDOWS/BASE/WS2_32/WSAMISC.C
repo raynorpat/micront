@@ -634,6 +634,27 @@ Return Value:
         break;
     }
 
+    case SIO_BASE_HANDLE:
+
+        //
+        // Return the base provider socket handle. MicroNT has no layered
+        // service providers, so a socket is its own base handle. Readiness
+        // reactors (mio/wepoll) use this to find the pollable AFD endpoint
+        // they reference in AFD_POLL_INFO.
+        //
+
+        if ( lpvOutBuffer == NULL || cbOutBuffer < sizeof(SOCKET) ) {
+            error = WSAEFAULT;
+            goto exit;
+        }
+
+        *(SOCKET *)lpvOutBuffer = s;
+        if ( ARGUMENT_PRESENT( lpcbBytesReturned ) ) {
+            *lpcbBytesReturned = sizeof(SOCKET);
+        }
+
+        break;
+
     default:
 
         //

@@ -277,22 +277,32 @@ Return Value:
             }
         }
 
-    CompletionInfo.Port = Port;
-    CompletionInfo.Key = CompletionKey;
+    //
+    // Associate the file with the port -- unless the caller passed
+    // INVALID_HANDLE_VALUE, which means "just create a bare port" (the
+    // path mio/Tokio use to build their reactor's IOCP). Associating -1
+    // would fail with STATUS_INVALID_HANDLE.
+    //
 
-    Status = NtSetInformationFile(
-                FileHandle,
-                &IoSb,
-                &CompletionInfo,
-                sizeof(CompletionInfo),
-                FileCompletionInformation
-                );
-    if ( !NT_SUCCESS(Status) ) {
-        BaseSetLastNTError(Status);
-        if ( !ARGUMENT_PRESENT(ExistingCompletionPort) ) {
-            NtClose(Port);
+    if ( FileHandle != INVALID_HANDLE_VALUE ) {
+
+        CompletionInfo.Port = Port;
+        CompletionInfo.Key = CompletionKey;
+
+        Status = NtSetInformationFile(
+                    FileHandle,
+                    &IoSb,
+                    &CompletionInfo,
+                    sizeof(CompletionInfo),
+                    FileCompletionInformation
+                    );
+        if ( !NT_SUCCESS(Status) ) {
+            BaseSetLastNTError(Status);
+            if ( !ARGUMENT_PRESENT(ExistingCompletionPort) ) {
+                NtClose(Port);
+                }
+            return NULL;
             }
-        return NULL;
         }
 
     return Port;
@@ -430,6 +440,132 @@ Return Value:
             }
         }
     return rv;
+}
+
+BOOL
+WINAPI
+PostQueuedCompletionStatus(
+    HANDLE CompletionPort,
+    DWORD dwNumberOfBytesTransferred,
+    DWORD dwCompletionKey,
+    LPOVERLAPPED lpOverlapped
+    )
+
+/*++
+
+Routine Description:
+
+    Posts a completion packet to a completion port. The three caller-
+    supplied values surface verbatim from a subsequent GetQueuedCompletion-
+    Status[Ex], exactly as a real I/O completion would. (dwCompletionKey is
+    ULONG_PTR in Win32; on x86 that is a 32-bit value.)
+
+--*/
+
+{
+    NTSTATUS Status;
+
+    Status = NtSetIoCompletion(
+                CompletionPort,
+                (PVOID)dwCompletionKey,
+                (PVOID)lpOverlapped,
+                STATUS_SUCCESS,
+                dwNumberOfBytesTransferred
+                );
+    if ( !NT_SUCCESS(Status) ) {
+        BaseSetLastNTError(Status);
+        return FALSE;
+        }
+    return TRUE;
+}
+
+BOOL
+WINAPI
+GetQueuedCompletionStatusEx(
+    HANDLE CompletionPort,
+    LPOVERLAPPED_ENTRY lpCompletionPortEntries,
+    ULONG ulCount,
+    PULONG ulNumEntriesRemoved,
+    DWORD dwMilliseconds,
+    BOOL fAlertable
+    )
+
+/*++
+
+Routine Description:
+
+    Dequeues up to ulCount completion packets in one call, blocking (up to
+    dwMilliseconds) only for the first. Unlike GetQueuedCompletionStatus this
+    returns TRUE even when individual packets carry an I/O error -- the per-
+    packet status is in OVERLAPPED_ENTRY.Internal.
+
+    OVERLAPPED_ENTRY and the kernel's FILE_IO_COMPLETION_INFORMATION are
+    layout-identical on x86 (CompletionKey / Overlapped / Internal==Status /
+    dwNumberOfBytesTransferred==Information), so the kernel writes straight
+    into the caller's array.
+
+--*/
+
+{
+    LARGE_INTEGER TimeOut;
+    PLARGE_INTEGER pTimeOut;
+    NTSTATUS Status;
+
+    pTimeOut = BaseFormatTimeOut(&TimeOut,dwMilliseconds);
+    Status = NtRemoveIoCompletionEx(
+                CompletionPort,
+                (PFILE_IO_COMPLETION_INFORMATION)lpCompletionPortEntries,
+                ulCount,
+                ulNumEntriesRemoved,
+                pTimeOut,
+                (BOOLEAN)fAlertable
+                );
+    if ( Status == STATUS_TIMEOUT ) {
+        SetLastError(WAIT_TIMEOUT);
+        return FALSE;
+        }
+    if ( !NT_SUCCESS(Status) ) {
+        BaseSetLastNTError(Status);
+        return FALSE;
+        }
+    return TRUE;
+}
+
+BOOL
+WINAPI
+SetFileCompletionNotificationModes(
+    HANDLE FileHandle,
+    UCHAR Flags
+    )
+
+/*++
+
+Routine Description:
+
+    Sets advisory completion-notification modes on a handle. MicroNT honours
+    FILE_SKIP_SET_EVENT_ON_HANDLE conformantly: declining the optimization
+    (the handle event is still signalled on completion) is permitted, since a
+    caller that sets this flag does not wait on the handle event.
+    FILE_SKIP_COMPLETION_PORT_ON_SUCCESS changes completion *semantics*
+    (synchronous-success ops must not queue a packet); honouring it needs
+    kernel support we do not have yet, and silently ignoring it would yield
+    spurious completions, so it is rejected rather than mis-honoured.
+
+--*/
+
+{
+    UNREFERENCED_PARAMETER( FileHandle );
+
+    if ( Flags & ~(UCHAR)(FILE_SKIP_COMPLETION_PORT_ON_SUCCESS |
+                          FILE_SKIP_SET_EVENT_ON_HANDLE) ) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+        }
+    if ( Flags & FILE_SKIP_COMPLETION_PORT_ON_SUCCESS ) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+        }
+    return TRUE;
 }
 
 BOOL

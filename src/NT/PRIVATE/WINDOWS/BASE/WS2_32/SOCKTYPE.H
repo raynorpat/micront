@@ -52,6 +52,10 @@ struct sockaddr_nb {
 #define SIO_RCVALL                          _WSAIOW(IOC_VENDOR,1)
 #define SIO_KEEPALIVE_VALS                  _WSAIOW(IOC_VENDOR,4)
 #define SIO_GET_EXTENSION_FUNCTION_POINTER  _WSAIORW(IOC_WS2,6)
+// SIO_BASE_HANDLE: unwrap a socket to its base provider handle. MicroNT has no
+// LSPs, so a socket is its own base handle -- readiness reactors (mio/wepoll)
+// use it to find the pollable AFD endpoint.
+#define SIO_BASE_HANDLE                     _WSAIOR(IOC_WS2,34)
 
 //
 // Argument structure for SIO_KEEPALIVE_VALS.  onoff enables/disables

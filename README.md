@@ -29,6 +29,7 @@ Implemented:
 - [x] kernel32 + lifted NT 3.5 cmd.exe (no csrss, no user32) — runs
   unmodified Microsoft NT 3.5 toolchain binaries
 - [x] NTFS boot volume
+- [x] Basic Rust 1.91 support + Tokio (with sockets)
 
 Coming next:
 

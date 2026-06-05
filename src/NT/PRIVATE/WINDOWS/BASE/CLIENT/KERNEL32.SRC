@@ -262,6 +262,9 @@ EXPORTS
     GetOEMCP
     CreateIoCompletionPort
     GetQueuedCompletionStatus
+    PostQueuedCompletionStatus
+    GetQueuedCompletionStatusEx
+    SetFileCompletionNotificationModes
     GetOverlappedResult
     GetPriorityClass
     GetPrivateProfileIntA
@@ -656,6 +659,7 @@ EXPORTS
     GetFileSizeEx
     SetFilePointerEx
     CancelIo
+    CancelIoEx
     SwitchToThread
     GetProcessId
     RtlCaptureContext = NTDLL.RtlCaptureContext

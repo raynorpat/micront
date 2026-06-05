@@ -2367,6 +2367,31 @@ CancelIo(
     }
     return TRUE;
 }
+
+//
+// MicroNT: cancel a specific outstanding I/O on a handle (identified by its
+// OVERLAPPED, whose leading fields are an IO_STATUS_BLOCK), or all of the
+// caller's I/O on the handle when lpOverlapped is NULL.
+//
+BOOL
+WINAPI
+CancelIoEx(
+    HANDLE hFile,
+    LPOVERLAPPED lpOverlapped
+    )
+{
+    NTSTATUS Status;
+    IO_STATUS_BLOCK IoStatusBlock;
+
+    Status = NtCancelIoFileEx( hFile,
+                               (PIO_STATUS_BLOCK)lpOverlapped,
+                               &IoStatusBlock );
+    if ( !NT_SUCCESS(Status) ) {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+    return TRUE;
+}
 
 //
 // MicroNT: file-info-by-handle-class enum (Win32, absent from the NT 3.5 SDK).

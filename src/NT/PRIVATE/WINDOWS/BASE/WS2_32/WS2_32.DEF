@@ -45,6 +45,13 @@ EXPORTS
     WSADuplicateSocketW @25
     WSARecv             @27
     WSASend             @28
+;   Datagram / poll WSA-2 variants -- exported so modern toolchains (mio/tokio,
+;   socket2) link; the TCP path never calls them, so the bodies return
+;   WSAEOPNOTSUPP rather than a quiet downgrade.
+    WSARecvFrom         @29
+    WSASendTo           @30
+    WSASendMsg          @31
+    WSAPoll             @32
 
 ;   --- Resolver stubs (51-57; 54=getprotobynumber not imported) ---
     gethostbyaddr   @51

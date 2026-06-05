@@ -937,6 +937,15 @@ NtCancelIoFile(
 NTSYSAPI
 NTSTATUS
 NTAPI
+NtCancelIoFileEx(
+    IN HANDLE FileHandle,
+    IN PIO_STATUS_BLOCK IoRequestToCancel OPTIONAL,
+    OUT PIO_STATUS_BLOCK IoStatusBlock
+    );
+
+NTSYSAPI
+NTSTATUS
+NTAPI
 NtCreateFile(
     OUT PHANDLE FileHandle,
     IN ACCESS_MASK DesiredAccess,
