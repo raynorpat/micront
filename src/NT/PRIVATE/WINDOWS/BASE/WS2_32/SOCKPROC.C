@@ -155,10 +155,15 @@ Return Value:
         }
 
         //
-        // Remove the socket from the global list of sockets.
+        // Remove the socket from the global list of sockets.  A socket that
+        // never made it onto the list (Flink == NULL -- e.g. an import that
+        // failed before insertion) has nothing to unlink; guard against it,
+        // matching the failure-path cleanup in SockGetHandleContext.
         //
 
-        RemoveEntryList( &Socket->SocketListEntry );
+        if ( Socket->SocketListEntry.Flink != NULL ) {
+            RemoveEntryList( &Socket->SocketListEntry );
+        }
 
         SockReleaseGlobalLock( );
 
@@ -499,6 +504,20 @@ SockGetHandleContext (
     //
 
 
+    //
+    // Place the imported socket on the global list, exactly as socket() does
+    // for a freshly-created socket.  Without this the socket is invisible to
+    // later SockFindAndReferenceSocket lookups -- forcing a fresh import (and a
+    // leaked SOCKET_INFORMATION) on every call against a handle shared from
+    // another thread or process -- and, worse, SockDereferenceSocket would call
+    // RemoveEntryList on an unlinked entry when the reference count reaches
+    // zero.  The global lock acquired on entry is still held here.  The
+    // reference count (2 at allocation, dropped to the baseline of 1 by the
+    // SockDereferenceSocket below) already matches a socket() result.
+    //
+
+    InsertHeadList( &SocketListHead, &newSocket->SocketListEntry );
+
     succeeded = TRUE;
 
 exit:
@@ -587,10 +606,17 @@ SockSetHandleContext (
     INT error;
 
     //
-    // Determine how much space we need for the helper DLL context.
+    // Determine how much space we need for the helper DLL context.  MicroNT has
+    // no WSH helper DLL, so there is no per-helper context and the length is
+    // always zero.  This MUST be initialised: it feeds both the allocation size
+    // and the length word stored in the context blob below.  Left uninitialised
+    // it yields a garbage contextLength -- an intermittent WSAENOBUFS or a bogus
+    // IOCTL_AFD_SET_CONTEXT length -- which made setsockopt/ioctlsocket fail
+    // depending on stale stack contents.
     //
 
-    error = WSAENOPROTOOPT;
+    helperDllContextLength = 0;
+
     //
     // Allocate a buffer to hold all context information.
     //

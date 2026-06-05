@@ -220,6 +220,16 @@ Return Value:
         (VOID)AfdSetKeepAliveOnConnection( connection, TRUE );
     }
 
+    //
+    // Likewise, if nodelay (TCP_NODELAY) was set on the endpoint before it
+    // connected, push it to the connection now.  Also best-effort: a nodelay
+    // failure must not fail the connect.
+    //
+
+    if ( endpoint->NoDelay ) {
+        (VOID)AfdSetNoDelayOnConnection( connection, TRUE );
+    }
+
     tdiRequest = Irp->AssociatedIrp.SystemBuffer;
 
     //

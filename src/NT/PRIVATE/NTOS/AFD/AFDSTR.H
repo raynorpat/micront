@@ -168,6 +168,14 @@ typedef struct _AFD_ENDPOINT {
 
     BOOLEAN KeepAlive;
 
+    //
+    // TRUE if Nagle's algorithm has been disabled (TCP_NODELAY) on this
+    // endpoint.  Remembered here so it can be applied to the connection at
+    // connect time even if it was set before the socket was connected.
+    //
+
+    BOOLEAN NoDelay;
+
     LIST_ENTRY GlobalEndpointListEntry;
     PAFD_TRANSPORT_INFO TransportInfo;
     AFD_ENDPOINT_TYPE EndpointType;

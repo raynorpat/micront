@@ -160,6 +160,7 @@ typedef struct _SOCKET_INFORMATION {
     BOOLEAN NonBlocking;
     BOOLEAN DontUseWildcard;
     BOOLEAN KeepAlive;
+    BOOLEAN NoDelay;
 
     BOOLEAN ConnectInProgress;
 

@@ -423,6 +423,44 @@ Return Value:
 
         break;
 
+    case IPPROTO_TCP:
+
+        switch ( OptionName ) {
+
+        case TCP_NODELAY:
+
+            //
+            // Return the cached nodelay state.  Unlike the SOL_SOCKET options
+            // above, the buffer was not pre-zeroed for this level, so write the
+            // full int and fix up the returned length.
+            //
+
+            *OptionValue = socket->NoDelay;
+            *OptionLength = sizeof(int);
+            break;
+
+        default:
+
+            //
+            // We don't support this option here in the winsock DLL.  Give
+            // it to the helper DLL.
+            //
+
+            error = SockGetTdiHandles( socket );
+            if ( error != NO_ERROR ) {
+                goto exit;
+            }
+
+            error = WSAENOPROTOOPT;
+            if ( error != NO_ERROR ) {
+                goto exit;
+            }
+
+            break;
+        }
+
+        break;
+
     default:
 
         //
@@ -1124,6 +1162,59 @@ Return Value:
         case SO_RCVLOWAT:
         case SO_SNDLOWAT:
         case SO_TYPE:
+        default:
+
+            //
+            // The specified option isn't supported here in the winsock DLL.
+            // Give the request to the helper DLL.
+            //
+
+            error = SockGetTdiHandles( socket );
+            if ( error != NO_ERROR ) {
+                goto exit;
+            }
+
+            error = WSAENOPROTOOPT;
+            if ( error != NO_ERROR ) {
+                goto exit;
+            }
+        }
+
+        break;
+
+    case IPPROTO_TCP:
+
+        switch ( OptionName ) {
+
+        case TCP_NODELAY: {
+
+            BOOLEAN enable;
+
+            //
+            // Enable or disable Nagle's algorithm on the connection.  Hand the
+            // state to AFD, which pushes it to the TCP transport (immediately
+            // if the socket is connected, otherwise when it connects).  A
+            // non-zero option value means TCP_NODELAY on (Nagle disabled).
+            //
+
+            enable = (BOOLEAN)( optionValue != 0 );
+
+            error = SockSetInformation(
+                        socket,
+                        AFD_NODELAY,
+                        &enable,
+                        NULL,
+                        NULL
+                        );
+            if ( error != NO_ERROR ) {
+                goto exit;
+            }
+
+            socket->NoDelay = enable;
+
+            break;
+        }
+
         default:
 
             //

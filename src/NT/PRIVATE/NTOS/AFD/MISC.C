@@ -43,6 +43,7 @@ AfdRestartDeviceControl (
 #pragma alloc_text( PAGE, AfdGetInformation )
 #pragma alloc_text( PAGE, AfdSetInformation )
 #pragma alloc_text( PAGE, AfdSetKeepAliveOnConnection )
+#pragma alloc_text( PAGE, AfdSetNoDelayOnConnection )
 #pragma alloc_text( PAGE, AfdGetContext )
 #pragma alloc_text( PAGE, AfdGetContextLength )
 #pragma alloc_text( PAGE, AfdSetContext )
@@ -864,6 +865,33 @@ Return Value:
         break;
     }
 
+    case AFD_NODELAY: {
+
+        PAFD_CONNECTION connection;
+
+        //
+        // Remember the nodelay (Nagle-disable) state on the endpoint.  It is
+        // applied to the connection when the endpoint connects (see AfdConnect);
+        // if the endpoint is already connected, push it to the transport now.
+        //
+
+        endpoint->NoDelay = afdInfo->Information.Boolean;
+
+        connection = AFD_CONNECTION_FROM_ENDPOINT( endpoint );
+
+        if ( connection != NULL && connection->Handle != NULL ) {
+            status = AfdSetNoDelayOnConnection(
+                         connection,
+                         endpoint->NoDelay
+                         );
+            if ( !NT_SUCCESS(status) ) {
+                return status;
+            }
+        }
+
+        break;
+    }
+
     default:
 
         return STATUS_INVALID_PARAMETER;
@@ -981,6 +1009,113 @@ Return Value:
     return status;
 
 } // AfdSetKeepAliveOnConnection
+
+
+NTSTATUS
+AfdSetNoDelayOnConnection (
+    IN PAFD_CONNECTION Connection,
+    IN BOOLEAN Enable
+    )
+
+/*++
+
+Routine Description:
+
+    Enables or disables Nagle's algorithm (TCP_NODELAY) on the transport
+    connection underlying an AFD connection block, by issuing
+    IOCTL_TCP_SET_INFORMATION_EX with the TCP_SOCKET_NODELAY option on the
+    connection's TDI handle.
+
+Arguments:
+
+    Connection - the connection on which to set nodelay.  Must have an open
+        transport handle.
+
+    Enable - TRUE to disable Nagle (nodelay on), FALSE to enable Nagle.
+
+Return Value:
+
+    NTSTATUS -- Indicates the status of the request.
+
+--*/
+
+{
+    //
+    // The option value lives in the variable-length Buffer[] tail of the
+    // request, so size the storage for the request plus one TCPSocketOption.
+    //
+
+    UCHAR requestBuffer[ sizeof(TCP_REQUEST_SET_INFORMATION_EX) - 1 +
+                             sizeof(TCPSocketOption) ];
+    PTCP_REQUEST_SET_INFORMATION_EX request;
+    TCPSocketOption *option;
+    IO_STATUS_BLOCK ioStatusBlock;
+    NTSTATUS status;
+
+    PAGED_CODE( );
+
+    ASSERT( Connection->Type == AfdBlockTypeConnection );
+    ASSERT( Connection->Handle != NULL );
+
+    //
+    // Build the extended set-information request identifying the
+    // per-connection TCP nodelay option, with the on/off value in the
+    // trailing buffer.  TCP_SOCKET_NODELAY carries the nodelay state directly;
+    // the transport inverts it internally to drive its NAGLING flag.
+    //
+
+    RtlZeroMemory( requestBuffer, sizeof(requestBuffer) );
+
+    request = (PTCP_REQUEST_SET_INFORMATION_EX)requestBuffer;
+    request->ID.toi_entity.tei_entity = CO_TL_ENTITY;
+    request->ID.toi_entity.tei_instance = 0;
+    request->ID.toi_class = INFO_CLASS_PROTOCOL;
+    request->ID.toi_type = INFO_TYPE_CONNECTION;
+    request->ID.toi_id = TCP_SOCKET_NODELAY;
+    request->BufferSize = sizeof(TCPSocketOption);
+
+    option = (TCPSocketOption *)&request->Buffer[0];
+    option->tso_value = Enable ? 1 : 0;
+
+    //
+    // The connection handle was opened in the AFD system process, so attach
+    // to that process before using it (as AfdCreateConnection does).
+    //
+
+    KeAttachProcess( AfdSystemProcess );
+
+    status = ZwDeviceIoControlFile(
+                 Connection->Handle,
+                 NULL,                          // EventHandle
+                 NULL,                          // APC Routine
+                 NULL,                          // APC Context
+                 &ioStatusBlock,
+                 IOCTL_TCP_SET_INFORMATION_EX,
+                 requestBuffer,                 // InputBuffer
+                 sizeof(requestBuffer),         // InputBufferLength
+                 NULL,                          // OutputBuffer
+                 0                              // OutputBufferLength
+                 );
+
+    if ( status == STATUS_PENDING ) {
+        status = ZwWaitForSingleObject( Connection->Handle, TRUE, NULL );
+        if ( NT_SUCCESS(status) ) {
+            status = ioStatusBlock.Status;
+        }
+    }
+
+    KeDetachProcess( );
+
+    IF_DEBUG(CONNECT) {
+        if ( !NT_SUCCESS(status) ) {
+            KdPrint(( "AfdSetNoDelayOnConnection: nodelay=%d on connection "
+                      "%lx failed: %lx\n", Enable, Connection, status ));
+        }
+    }
+
+    return status;
+
+} // AfdSetNoDelayOnConnection
 
 
 

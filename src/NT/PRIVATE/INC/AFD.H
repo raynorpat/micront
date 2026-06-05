@@ -212,6 +212,14 @@ typedef struct _AFD_INFORMATION {
 #define AFD_KEEPALIVE            0x08
 
 //
+// Enable/disable Nagle's algorithm (TCP_NODELAY) on a stream endpoint.  Carried
+// as the Boolean field of AFD_INFORMATION (TRUE => nodelay on, Nagle off); AFD
+// pushes it to the transport via the TCP_SOCKET_NODELAY option.
+//
+
+#define AFD_NODELAY              0x09
+
+//
 // AFD IOCTL code definitions.
 //
 
