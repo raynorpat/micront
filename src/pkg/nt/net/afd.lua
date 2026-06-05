@@ -272,7 +272,7 @@ local IOCTL_AFD_START_LISTEN       = 0x12004
 local IOCTL_AFD_WAIT_FOR_LISTEN    = 0x12008
 local IOCTL_AFD_ACCEPT             = 0x1200C
 local IOCTL_AFD_GET_ADDRESS        = 0x1201A   -- METHOD_OUT_DIRECT (= 2 in low bits)
-local IOCTL_AFD_POLL               = 0x12010   -- _AFD_CONTROL_CODE(4,  METHOD_BUFFERED)
+local IOCTL_AFD_POLL               = 0x12024   -- _AFD_CONTROL_CODE(9,  METHOD_BUFFERED) -- modern AFD ABI (wepoll/mio)
 local IOCTL_AFD_PARTIAL_DISCONNECT = 0x12014   -- _AFD_CONTROL_CODE(5,  METHOD_BUFFERED)
 local IOCTL_AFD_QUERY_RECEIVE_INFO = 0x1201C   -- _AFD_CONTROL_CODE(7,  METHOD_BUFFERED)
 local IOCTL_AFD_QUERY_HANDLES      = 0x12020   -- _AFD_CONTROL_CODE(8,  METHOD_BUFFERED)
@@ -283,7 +283,7 @@ local IOCTL_AFD_SET_CONTEXT        = 0x12030   -- _AFD_CONTROL_CODE(12, METHOD_B
 -- AFD_QUERY_HANDLES input flags.
 local AFD_QUERY_ADDRESS_HANDLE    = 1
 local AFD_QUERY_CONNECTION_HANDLE = 2
-local IOCTL_AFD_SET_INFORMATION    = 0x12024   -- _AFD_CONTROL_CODE(9,  METHOD_BUFFERED)
+local IOCTL_AFD_SET_INFORMATION    = 0x12068   -- _AFD_CONTROL_CODE(26, METHOD_BUFFERED) -- relocated off modern POLL=9
 local IOCTL_AFD_GET_INFORMATION    = 0x12064   -- _AFD_CONTROL_CODE(25, METHOD_BUFFERED)
 
 -- AFD partial-disconnect flags (NTOS/AFD/AFD.H).
@@ -1098,7 +1098,7 @@ local function shutdown(sock, how, timeout_secs)
           timeout_secs)
 end
 
-local function poll(specs, timeout_secs)
+local function poll_impl(target, specs, timeout_secs)
     -- Flatten the table to a deterministic array so we can encode it
     -- into the kernel buffer and later rebuild a key-by-socket result.
     -- Lua iteration order over `specs` is unspecified but we don't
@@ -1152,7 +1152,7 @@ local function poll(specs, timeout_secs)
     -- indefinitely (nil) on the completion event so AfdTimeoutPoll
     -- gets to fire when the kernel-side timer expires; we don't
     -- want our own NtCancelIoFile racing the kernel timer.
-    ioctl(socks[1], IOCTL_AFD_POLL,
+    ioctl(target or socks[1], IOCTL_AFD_POLL,
           buf, total,
           buf, total,
           nil)
@@ -1180,6 +1180,30 @@ local function poll(specs, timeout_secs)
     return out
 end
 
+-- Legacy model: issue IOCTL_AFD_POLL on one of the polled sockets itself.
+local function poll(specs, timeout_secs)
+    return poll_impl(nil, specs, timeout_secs)
+end
+
+-- mio/wepoll model: a bare poll-helper handle, opened with NO EA buffer (AFD's
+-- EA-less CREATE path makes a transport-less endpoint), serves as the
+-- IOCTL_AFD_POLL target while the real sockets ride in the AFD_POLL_INFO Handles
+-- array.  This is exactly how Rust's mio drives \Device\Afd\Mio bound to an IOCP.
+local function open_poll_helper()
+    local noa = oa.path("\\Device\\Afd\\Mio")
+    return (fs.NtCreateFile(SOCK_ACCESS, noa.oa,
+                            nil,                       -- AllocationSize
+                            fs.FILE_ATTRIBUTE_NORMAL,
+                            bit.bor(fs.FILE_SHARE_READ, fs.FILE_SHARE_WRITE),
+                            fs.FILE_OPEN_IF,           -- disposition (AfdCreate ignores it)
+                            SOCK_OPTIONS,
+                            nil, 0))                   -- no EA -> helper endpoint
+end
+
+local function poll_on(helper, specs, timeout_secs)
+    return poll_impl(helper, specs, timeout_secs)
+end
+
 -- ------------------------------------------------------------------
 -- Public surface.
 -- ------------------------------------------------------------------
@@ -1199,6 +1223,8 @@ return {
     get_info    = get_info,
     set_info    = set_info,
     poll        = poll,
+    open_poll_helper = open_poll_helper,
+    poll_on          = poll_on,
     shutdown    = shutdown,
     set_context        = set_context,
     get_context        = get_context,

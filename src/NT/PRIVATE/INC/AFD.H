@@ -231,13 +231,24 @@ typedef struct _AFD_INFORMATION {
 #define IOCTL_AFD_START_LISTEN            _AFD_CONTROL_CODE( 1, METHOD_BUFFERED )
 #define IOCTL_AFD_WAIT_FOR_LISTEN         _AFD_CONTROL_CODE( 2, METHOD_BUFFERED )
 #define IOCTL_AFD_ACCEPT                  _AFD_CONTROL_CODE( 3, METHOD_BUFFERED )
-#define IOCTL_AFD_POLL                    _AFD_CONTROL_CODE( 4, METHOD_BUFFERED )
+//
+// IOCTL_AFD_POLL uses function 9 to match the modern AFD ABI that direct-AFD
+// consumers (wepoll, Rust mio, ...) hardcode: IOCTL_AFD_POLL == 0x00012024.
+// NT 3.5 originally numbered poll as function 4; the function map was reshuffled
+// in later Windows and the external world tracks the newer numbering, which we
+// cannot patch -- so we conform.  (Our own consumers -- ws2_32 and nt.net.afd --
+// reference these symbolically / mirror them, so they move with us.)
+//
+#define IOCTL_AFD_POLL                    _AFD_CONTROL_CODE( 9, METHOD_BUFFERED )
 #define IOCTL_AFD_PARTIAL_DISCONNECT      _AFD_CONTROL_CODE( 5, METHOD_BUFFERED )
 
 #define IOCTL_AFD_GET_ADDRESS             _AFD_CONTROL_CODE( 6, METHOD_OUT_DIRECT )
 #define IOCTL_AFD_QUERY_RECEIVE_INFO      _AFD_CONTROL_CODE( 7, METHOD_BUFFERED )
 #define IOCTL_AFD_QUERY_HANDLES           _AFD_CONTROL_CODE( 8, METHOD_BUFFERED )
-#define IOCTL_AFD_SET_INFORMATION         _AFD_CONTROL_CODE( 9, METHOD_BUFFERED )
+// Function 9 is now IOCTL_AFD_POLL (modern ABI, above).  SET_INFORMATION is a
+// MicroNT-private code (ws2_32 <-> afd only; no external consumer sends it), so
+// it relocates to function 26, pairing with GET_INFORMATION (25).
+#define IOCTL_AFD_SET_INFORMATION         _AFD_CONTROL_CODE( 26, METHOD_BUFFERED )
 #define IOCTL_AFD_GET_CONTEXT_LENGTH      _AFD_CONTROL_CODE( 10, METHOD_BUFFERED )
 #define IOCTL_AFD_GET_CONTEXT             _AFD_CONTROL_CODE( 11, METHOD_BUFFERED )
 #define IOCTL_AFD_SET_CONTEXT             _AFD_CONTROL_CODE( 12, METHOD_BUFFERED )

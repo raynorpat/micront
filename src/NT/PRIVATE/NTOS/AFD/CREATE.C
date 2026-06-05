@@ -68,7 +68,39 @@ Return Value:
     eaBuffer = Irp->AssociatedIrp.SystemBuffer;
 
     if ( eaBuffer == NULL ) {
-        return STATUS_INVALID_PARAMETER;
+
+        //
+        // No open packet (no EAs).  This is a poll-helper handle: modern
+        // direct-AFD reactors (wepoll, Rust mio) open \Device\Afd\<name> with no
+        // EAs to get a handle they associate with an IOCP and drive with
+        // IOCTL_AFD_POLL referencing *other* sockets.  Create a minimal endpoint
+        // with no transport binding -- valid as an IOCTL target and for IOCP
+        // association, but never bound or connected.  It carries the TCP
+        // transport info purely so its teardown is identical to an unbound
+        // stream socket (AfdCloseEndpoint guards on AddressHandle == NULL).
+        //
+
+        UNICODE_STRING helperTransportName;
+
+        RtlInitUnicodeString( &helperTransportName, L"\\Device\\Tcp" );
+
+        endpoint = AfdAllocateEndpoint( &helperTransportName );
+
+        if ( endpoint == NULL ) {
+            return STATUS_NO_MEMORY;
+        }
+
+        IrpSp->FileObject->FsContext = endpoint;
+        endpoint->EndpointType = AfdEndpointTypeStream;
+
+        IF_DEBUG(OPEN_CLOSE) {
+            KdPrint(( "AfdCreate: opened poll-helper file object = %lx, "
+                          "endpoint = %lx\n", IrpSp->FileObject, endpoint ));
+        }
+
+        AfdDereferenceEndpoint( endpoint );
+
+        return STATUS_SUCCESS;
     }
 
     openPacket = (PAFD_OPEN_PACKET)(eaBuffer->EaName +

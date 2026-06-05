@@ -54,6 +54,40 @@ Key clarification the old doc conflated: **AcceptEx/ConnectEx are the Go track**
 the **AFD-poll-over-IOCP reactor is the Tokio track**. They share the IOCP delivery
 path but use different AFD entry points.
 
+## mio (Tokio) — grounded against `stuff/testrust/mio` v1.2.1
+
+Tracing mio's `src/sys/windows/{afd,iocp,net,waker}.rs` against the in-tree
+sources pins the Tokio delta exactly. mio creates sockets with `WSASocketW` +
+`ioctlsocket(FIONBIO)` (both real), opens one AFD **helper handle**, and submits
+`IOCTL_AFD_POLL` readiness requests on it bound to an IOCP. It does **not** use
+overlapped `WSARecv`/`WSASend`, `AcceptEx`/`ConnectEx`, or `SIO_BASE_HANDLE` —
+it polls the socket handle directly (the wepoll base-handle dance is gone in 1.x).
+The actual reads/writes after readiness are ordinary non-blocking `recv`/`send`,
+which already work.
+
+| mio call | lowers to | status |
+|----------|-----------|--------|
+| `WSASocketW` + `ioctlsocket(FIONBIO)` | ws2_32 | ✅ real |
+| `NtCreateFile("\Device\Afd\Mio", EaBuffer=NULL)` | AFD `CREATE.C` | ❌ rejects EA-less open (`CREATE.C:70 → STATUS_INVALID_PARAMETER`); needs a helper-endpoint path (no transport binding, poll-only) |
+| `NtDeviceIoControlFile(IOCTL_AFD_POLL = 0x00012024)` | AFD `POLL.C` | ⚠️ function-number drift: ours is `0x00012010` (req 4); `0x12024` is req **9** = our `IOCTL_AFD_SET_INFORMATION`. Alias `0x12024` → `AfdPoll`. `AFD_POLL_INFO` is **byte-compatible** (28B, `Handles[]`@16; mio `exclusive`=0 lands on our `Unique` byte; event bits identical) |
+| `CreateIoCompletionPort` | kernel32 | ✅ exists (`CLIENT/ERROR.C`) |
+| `GetQueuedCompletionStatusEx` (mio dequeues via `get_many` only) | `NtRemoveIoCompletionEx` | ❌ both absent — only singular `GetQueuedCompletionStatus`/`NtRemoveIoCompletion` exist |
+| `PostQueuedCompletionStatus` (the Waker — Tokio always builds one) | `NtSetIoCompletion` | ❌ both absent; needs the lookaside mini-packet format so `NtRemoveIoCompletion*` can tell posted packets from completed IRPs (gap 2) |
+| `SetFileCompletionNotificationModes(FILE_SKIP_SET_EVENT_ON_HANDLE)` | kernel32 | ❌ absent; `Afd::new` returns `Err` if it fails, so **required** (the flag is `SKIP_SET_EVENT_ON_HANDLE`, *not* `SKIP_COMPLETION_PORT_ON_SUCCESS`) |
+| `NtCancelIoFileEx` (poll cancel on deregister/drop) | ntdll | ❌ absent — we have 2-arg `NtCancelIoFile`; need the 3-arg per-IRP `Ex` |
+
+**Tokio kernel/DLL delta = 6 items:** (1) AFD EA-less helper open, (2) AFD poll
+IOCTL alias `0x12024`, (3) `NtSetIoCompletion` + kernel32 `PostQueuedCompletionStatus`,
+(4) `NtRemoveIoCompletionEx` + kernel32 `GetQueuedCompletionStatusEx`, (5) kernel32
+`SetFileCompletionNotificationModes`, (6) `NtCancelIoFileEx`. First step is the Lua
+poll dry-run (Tier 2) reproducing items 1–2 with no Rust.
+
+Corrections to the older gap list below, from this grounding: `SIO_BASE_HANDLE`
+is **not** needed; the `SetFileCompletionNotificationModes` flag is
+`SKIP_SET_EVENT_ON_HANDLE` (not `SKIP_COMPLETION_PORT_ON_SUCCESS`); and the
+plural `NtRemoveIoCompletionEx`/`GetQueuedCompletionStatusEx` are required (mio
+never uses the singular dequeue).
+
 ## Gap list (priority-ordered, tracked work-items)
 
 1. **ws2_32 overlapped wrappers** — `WSARecv`/`WSASend`/`WSARecvFrom`/`WSASendTo`/
@@ -80,13 +114,22 @@ path but use different AFD entry points.
    (`send.c:1173`) with **no edge to re-arm it**. Blocking sends are fine; a Tokio
    write-interest poll can stick un-ready under sustained backpressure. Needs a
    send-possible re-arm wired into the poll path.
-6. **mio `AFD_POLL` conformance** — 3.50 AFD's poll completes async on readiness
-   (confirmed), but mio's modern `AFD_POLL_INFO` IOCTL code + struct layout may have
-   drifted from 3.50's `IOCTL_AFD_POLL`/`AFD_POLL_INFO` (same generation-drift that
-   sank the msafd port — appendix). Verify byte-compat before assuming Tokio links up.
-7. **`SetFileCompletionNotificationModes`** (`FILE_SKIP_COMPLETION_PORT_ON_SUCCESS`)
-   — newer Go sets it. Decide explicitly: ignore (always queue — safe, caller
-   re-checks) vs honor. Silent mishandling → double-completion or hang.
+6. **mio `AFD_POLL` conformance + EA-less helper open** — CONFIRMED (see mio
+   section above), no longer speculative. mio's `IOCTL_AFD_POLL` is `0x00012024`
+   (function 9) vs our `0x00012010` (function 4); `0x12024` currently maps to our
+   `IOCTL_AFD_SET_INFORMATION`, so alias `0x12024` → `AfdPoll`. `AFD_POLL_INFO` is
+   byte-compatible. Plus: mio opens `\Device\Afd\Mio` with `EaBuffer=NULL`, which
+   `CREATE.C:70` rejects — add a poll-only helper-endpoint open path.
+7. **`SetFileCompletionNotificationModes`** — REQUIRED for mio with
+   `FILE_SKIP_SET_EVENT_ON_HANDLE` (NOT `SKIP_COMPLETION_PORT_ON_SUCCESS` — earlier
+   note was wrong); `Afd::new` returns `Err` if the export is missing. Newer Go
+   additionally sets `SKIP_COMPLETION_PORT_ON_SUCCESS` — decide that one explicitly:
+   ignore (always queue, safe) vs honor; silent mishandling → double-completion/hang.
+9. **`NtRemoveIoCompletionEx` + `NtCancelIoFileEx`** — mio dequeues only via
+   `GetQueuedCompletionStatusEx` (→ `NtRemoveIoCompletionEx`, plural) and cancels a
+   pending poll via `NtCancelIoFileEx` (3-arg, per-IRP). We have only the singular
+   `NtRemoveIoCompletion` and the 2-arg `NtCancelIoFile`. Both are part of the Tokio
+   delta (gap 2 covers the `NtSetIoCompletion` post side).
 8. **`WSAEventSelect`/`WSAEnumNetworkEvents`** — no `IOCTL_AFD_EVENT_SELECT` in 3.50.
    Emulate in userland over `IOCTL_AFD_POLL` (same poll primitive as the Tokio reactor —
    effort compounds).
@@ -140,7 +183,12 @@ Full `ws2_32.src` `.def` preserved (ordinals intact, tail stubs to honest errors
 3. **`AfdSuperAccept` port** from srv03 afdsys (kernel/AFD; gap 3) — biggest piece,
    keep interlocked cancel.
 4. **ConnectEx + connect-cancel audit** (gap 4) — feature + latent-hang fix.
-5. **Tokio poll path** — `SEND_POSSIBLE` re-arm + mio `AFD_POLL` conformance (gaps 5,6).
+5. **Tokio poll path (grounded — see mio section)** — the 6-item delta: AFD EA-less
+   helper open + poll-IOCTL alias `0x12024` (gap 6), `NtSetIoCompletion` /
+   `PostQueuedCompletionStatus` (gap 2), `NtRemoveIoCompletionEx` /
+   `GetQueuedCompletionStatusEx` + `NtCancelIoFileEx` (gap 9),
+   `SetFileCompletionNotificationModes` (gap 7), plus `SEND_POSSIBLE` write re-arm
+   (gap 5). Start with the Tier-2 Lua poll dry-run (reproduces gaps 1–2, no Rust).
 6. **`SetFileCompletionNotificationModes`** decision (gap 7).
 7. **Conformance harness** — wire Go `net` + Rust `mio`/`tokio` test suites once the
    DLL surface ships.
