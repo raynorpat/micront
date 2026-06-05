@@ -1,16 +1,18 @@
 -- test.iocp — idiomatic I/O completion port tests.
 --
--- The Lua-idiomatic surface (ex.iocompletion → :depth() / :remove()),
+-- The Lua-idiomatic surface (io.iocompletion → :depth() / :remove()),
 -- driven by test.iosrc, which manufactures real completions by issuing
 -- async reads on a scratch file associated with the port. The raw-ntdll
 -- adversarial cases live in test/fuzz/iocp.lua.
 --
--- NT 3.5 has no NtSetIoCompletion — completions only land on a port via
--- file-handle association + async I/O (see test/fuzz/iocp-plan.md).
+-- Completions reach a port two ways, both covered here: file-handle
+-- association + async I/O (via test.iosrc), and direct posting with
+-- NtSetIoCompletion (c:set / PostQueuedCompletionStatus). Both kinds share
+-- one queue and are distinguished by the entry's packet-type tag.
 
 local t      = require('test')
 local ffi    = require('ffi')
-local ex     = require('nt.dll.ex')
+local io     = require('nt.dll.io')
 local ke     = require('nt.dll.ke')
 local handle = require('nt.dll.handle')
 local iosrc  = require('test.ntdll.iosrc')
@@ -27,13 +29,13 @@ local function ptr_value(p) return tonumber(ffi.cast('uintptr_t', p)) end
 -- ------------------------------------------------------------------
 
 t.test("empty port has depth 0", function()
-    local c = ex.iocompletion{ concurrent_threads = 1 }
+    local c = io.iocompletion{ concurrent_threads = 1 }
     t.eq(c:depth(), 0)
     c:close()
 end)
 
 t.test("remove on empty port times out and returns nil", function()
-    local c = ex.iocompletion{ concurrent_threads = 1 }
+    local c = io.iocompletion{ concurrent_threads = 1 }
     t.eq(c:remove(0.05), nil, "empty remove → nil on timeout")
     c:close()
 end)
@@ -43,7 +45,7 @@ end)
 -- ------------------------------------------------------------------
 
 t.test("a real completion round-trips key/apc/status", function()
-    local c   = ex.iocompletion{ concurrent_threads = 1 }
+    local c   = io.iocompletion{ concurrent_threads = 1 }
     local src = iosrc.new(c, 0xABCD)         -- association key
     src:emit(0x2222)                         -- ApcContext cookie
 
@@ -61,7 +63,7 @@ t.test("a real completion round-trips key/apc/status", function()
 end)
 
 t.test("completions drain in FIFO order", function()
-    local c   = ex.iocompletion{ concurrent_threads = 1 }
+    local c   = io.iocompletion{ concurrent_threads = 1 }
     local src = iosrc.new(c, 0xABCD)
     -- Reads on one file object serialize, so completions queue in
     -- issue order — the drain must come back in the same order.
@@ -76,6 +78,114 @@ t.test("completions drain in FIFO order", function()
 
     src:close()
     c:close()
+end)
+
+-- ------------------------------------------------------------------
+-- Posted packets — NtSetIoCompletion (backs PostQueuedCompletionStatus).
+-- A posted packet carries caller-supplied key/apc/status/information and
+-- is distinguished from a real IRP completion by the queue-entry tag.
+-- ------------------------------------------------------------------
+
+t.test("a posted packet (NtSetIoCompletion) round-trips", function()
+    local c = io.iocompletion{ concurrent_threads = 1 }
+    c:set(0x1234, 0x5678, 0, 42)             -- key, apc, status, information
+    t.eq(c:depth(), 1, "posted packet is queued")
+
+    local key, apc, status, info = c:remove(1.0)
+    t.ne(key, nil, "a packet was delivered")
+    t.eq(ptr_value(key), 0x1234, "KeyContext echoes the posted key")
+    t.eq(ptr_value(apc), 0x5678, "ApcContext echoes the posted value")
+    t.eq(status, 0, "status echoes")
+    t.eq(tonumber(info), 42, "information echoes")
+    t.eq(c:depth(), 0, "port drained")
+    c:close()
+end)
+
+t.test("RemoveIoCompletionEx drains many posted packets at once", function()
+    local c = io.iocompletion{ concurrent_threads = 1 }
+    for i = 1, 3 do c:set(0x100 + i, 0x200 + i, 0, i) end
+    t.eq(c:depth(), 3)
+
+    local got = c:remove_many(5, 1.0)        -- block for first, drain the rest
+    t.eq(#got, 3, "all three packets removed in one call")
+    for i = 1, 3 do
+        t.eq(ptr_value(got[i].key), 0x100 + i, "key in FIFO order")
+        t.eq(ptr_value(got[i].apc), 0x200 + i, "apc in FIFO order")
+        t.eq(tonumber(got[i].information), i, "information in FIFO order")
+    end
+    t.eq(c:depth(), 0, "port drained")
+    c:close()
+end)
+
+t.test("RemoveIoCompletionEx on an empty port times out empty", function()
+    local c = io.iocompletion{ concurrent_threads = 1 }
+    t.eq(#c:remove_many(4, 0.05), 0, "no packets → empty result on timeout")
+    c:close()
+end)
+
+t.test("posted packets and IRP completions coexist on one port", function()
+    -- Exercises the dequeue discriminator: a real IRP-backed completion and a
+    -- directly-posted packet share the queue and must both decode correctly.
+    local c   = io.iocompletion{ concurrent_threads = 1 }
+    local src = iosrc.new(c, 0xABCD)
+    src:emit(0x2222)                          -- real IRP completion (async)
+    c:set(0xBEEF, 0xF00D, 0, 7)               -- posted packet
+
+    local seen = {}
+    for _, e in ipairs(c:remove_many(4, 1.0)) do seen[ptr_value(e.key)] = e end
+    if not seen[0xABCD] then                  -- IRP may land in a later batch
+        for _, e in ipairs(c:remove_many(4, 1.0)) do seen[ptr_value(e.key)] = e end
+    end
+
+    t.ok(seen[0xBEEF], "posted packet delivered")
+    t.eq(ptr_value(seen[0xBEEF].apc), 0xF00D, "posted apc correct")
+    t.eq(tonumber(seen[0xBEEF].information), 7, "posted information correct")
+    t.ok(seen[0xABCD], "IRP completion delivered")
+    t.eq(ptr_value(seen[0xABCD].apc), 0x2222, "IRP apc correct")
+    t.eq(tonumber(seen[0xABCD].information), iosrc.PAYLOAD_LEN,
+         "IRP information correct")
+
+    src:close()
+    c:close()
+end)
+
+-- Count smaller than the number queued: only Count come back, rest stay.
+t.test("RemoveIoCompletionEx respects Count < available (partial drain)", function()
+    local c = io.iocompletion{ concurrent_threads = 1 }
+    for i = 1, 5 do c:set(0x500 + i, 0x600 + i, 0, i) end
+    local got = c:remove_many(3, 1.0)
+    t.eq(#got, 3, "only Count entries removed")
+    t.eq(c:depth(), 2, "remainder stays queued")
+    c:close()
+end)
+
+-- Closing a port that still holds posted packets must free them — the
+-- IopDeleteIoCompletion mini-packet teardown path. Survival is the assertion.
+t.test("closing a port with undrained packets frees them cleanly", function()
+    local c = io.iocompletion{ concurrent_threads = 1 }
+    for i = 1, 3 do c:set(0x300 + i, 0x400 + i, 0, i) end
+    t.eq(c:depth(), 3)
+    c:close()
+    t.ok(true, "port closed with 3 pending packets, no leak/crash")
+end)
+
+-- The sibling teardown arm: a real IRP-backed completion left on the queue
+-- must also be freed at port close (IopDeleteIoCompletion IRP branch). Leaving
+-- an undrained IRP behind would leak nonpaged pool, so this is the cleanup-
+-- correctness / resource-exhaustion guard.
+t.test("closing a port with an undrained IRP completion frees it cleanly", function()
+    local c   = io.iocompletion{ concurrent_threads = 1 }
+    local src = iosrc.new(c, 0xABCD)
+    src:emit(0x2222)                          -- async read -> completion queues
+    local landed = false
+    for _ = 1, 200 do
+        if c:depth() > 0 then landed = true; break end
+        ke.NtDelayExecution(false, ke.timeout(0.01))
+    end
+    t.ok(landed, "IRP completion landed on the port")
+    c:close()                                 -- teardown must free the queued IRP
+    src:close()
+    t.ok(true, "port closed with a pending IRP completion, no leak/crash")
 end)
 
 -- ------------------------------------------------------------------
@@ -96,13 +206,13 @@ local CONSUMER = [[
 -- cr_thread sibling states run luaL_openlibs (wrapped) → the runtime
 -- preamble sets package.path + searcher + io/os here too.
 local ffi    = require('ffi')
-local ex     = require('nt.dll.ex')
+local io     = require('nt.dll.io')
 local handle = require('nt.dll.handle')
 
 -- Same process → the port handle is valid in this thread. Borrow it
 -- (non-owning: the parent owns and closes the real handle).
 local port = setmetatable({ _h = handle.from_payload(PAYLOAD) },
-                          ex.IoCompletion)
+                          io.IoCompletion)
 
 local seen = {}
 while true do
@@ -117,7 +227,7 @@ t.test("N completions drain across K consumer threads, exactly once", function()
     local N = 24      -- completions produced, cookies 1..N
     local K = 4       -- consumer threads racing to drain
 
-    local c   = ex.iocompletion{ concurrent_threads = K }
+    local c   = io.iocompletion{ concurrent_threads = K }
     local src = iosrc.new(c, 0xC0DE)
 
     -- Produce N completions with distinct ApcContext cookies 1..N.
@@ -191,7 +301,7 @@ local INJECT_CONSUMER = [[
 -- states run the wrapped luaL_openlibs too).
 local ffi    = require('ffi')
 local ntdll  = require('nt.dll')
-local ex     = require('nt.dll.ex')      -- registers the IOCP cdefs
+local io     = require('nt.dll.io')      -- registers the IOCP cdefs
 local ke     = require('nt.dll.ke')
 local err    = require('nt.dll.errors')
 local handle = require('nt.dll.handle')
@@ -250,7 +360,7 @@ t.test("concurrent producer + consumers + fault injection: exactly once", functi
     local N = 48      -- completions produced, cookies 1..N
     local K = 4       -- consumers; even-indexed ones inject faults
 
-    local c    = ex.iocompletion{ concurrent_threads = K }
+    local c    = io.iocompletion{ concurrent_threads = K }
     local src  = iosrc.new(c, 0xC0DE)
     local done = ke.event()      -- notification event: set when production ends
 

@@ -1639,5 +1639,21 @@ SYSSTUBS_ENTRY5  185, YieldExecution, 0
 SYSSTUBS_ENTRY6  185, YieldExecution, 0 
 SYSSTUBS_ENTRY7  185, YieldExecution, 0 
 SYSSTUBS_ENTRY8  185, YieldExecution, 0 
+SYSSTUBS_ENTRY1  186, SetIoCompletion, 5 
+SYSSTUBS_ENTRY2  186, SetIoCompletion, 5 
+SYSSTUBS_ENTRY3  186, SetIoCompletion, 5 
+SYSSTUBS_ENTRY4  186, SetIoCompletion, 5 
+SYSSTUBS_ENTRY5  186, SetIoCompletion, 5 
+SYSSTUBS_ENTRY6  186, SetIoCompletion, 5 
+SYSSTUBS_ENTRY7  186, SetIoCompletion, 5 
+SYSSTUBS_ENTRY8  186, SetIoCompletion, 5 
+SYSSTUBS_ENTRY1  187, RemoveIoCompletionEx, 6 
+SYSSTUBS_ENTRY2  187, RemoveIoCompletionEx, 6 
+SYSSTUBS_ENTRY3  187, RemoveIoCompletionEx, 6 
+SYSSTUBS_ENTRY4  187, RemoveIoCompletionEx, 6 
+SYSSTUBS_ENTRY5  187, RemoveIoCompletionEx, 6 
+SYSSTUBS_ENTRY6  187, RemoveIoCompletionEx, 6 
+SYSSTUBS_ENTRY7  187, RemoveIoCompletionEx, 6 
+SYSSTUBS_ENTRY8  187, RemoveIoCompletionEx, 6 
 
 STUBS_END

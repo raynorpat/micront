@@ -34,6 +34,8 @@ Revision History:
 #pragma alloc_text(PAGE, NtOpenIoCompletion)
 #pragma alloc_text(PAGE, NtQueryIoCompletion)
 #pragma alloc_text(PAGE, NtRemoveIoCompletion)
+#pragma alloc_text(PAGE, NtRemoveIoCompletionEx)
+#pragma alloc_text(PAGE, NtSetIoCompletion)
 #endif
 
 NTSTATUS
@@ -459,6 +461,8 @@ Return Value:
     PLIST_ENTRY Entry;
     PVOID IoCompletion;
     PIRP Irp;
+    PIOP_MINI_COMPLETION_PACKET MiniPacket;
+    BOOLEAN PacketIsIrp;
     KPROCESSOR_MODE PreviousMode;
     NTSTATUS Status;
     LARGE_INTEGER TimeoutValue;
@@ -543,18 +547,37 @@ Return Value:
                 //
 
                 Status = STATUS_SUCCESS;
-                Irp = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
 
-                LocalApcContext = Irp->Overlay.AsynchronousParameters.UserApcContext;
-                LocalKeyContext = (PVOID)Irp->Tail.CompletionKey;
-                LocalIoStatusBlock = Irp->IoStatus;
+                //
+                // The entry is either a completed IRP or a packet posted by
+                // NtSetIoCompletion; the tag in the slot after the LIST_ENTRY
+                // says which.  Capture the completion fields from the right one.
+                //
+
+                PacketIsIrp = (BOOLEAN)
+                    (IopCompletionPacketType(Entry) == IopCompletionPacketIrp);
+
+                if (PacketIsIrp) {
+                    Irp = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
+                    LocalApcContext = Irp->Overlay.AsynchronousParameters.UserApcContext;
+                    LocalKeyContext = (PVOID)Irp->Tail.CompletionKey;
+                    LocalIoStatusBlock = Irp->IoStatus;
+                } else {
+                    MiniPacket = CONTAINING_RECORD(Entry,
+                                                   IOP_MINI_COMPLETION_PACKET,
+                                                   ListEntry);
+                    LocalApcContext = MiniPacket->ApcContext;
+                    LocalKeyContext = MiniPacket->KeyContext;
+                    LocalIoStatusBlock.Status = MiniPacket->IoStatus;
+                    LocalIoStatusBlock.Information = MiniPacket->IoStatusInformation;
+                }
 
                 try {
 
                     //
                     // Deliver the completion to the user buffers before
-                    // releasing the IRP.  If a write faults, the entry has
-                    // not been consumed, so the IRP must stay intact for
+                    // releasing the packet.  If a write faults, the entry has
+                    // not been consumed, so the packet must stay intact for
                     // the exception handler to re-queue it.
                     //
 
@@ -562,13 +585,17 @@ Return Value:
                     *KeyContext = LocalKeyContext;
                     *IoStatusBlock = LocalIoStatusBlock;
 
-                    IoFreeIrp(Irp);
+                    if (PacketIsIrp) {
+                        IoFreeIrp(Irp);
+                    } else {
+                        ExFreePool(MiniPacket);
+                    }
 
                 } except(ExSystemExceptionFilter()) {
 
                     //
                     // A user-buffer write faulted.  Put the completion
-                    // entry back on the queue (its IRP is still valid)
+                    // entry back on the queue (its packet is still valid)
                     // and fail the call, rather than silently dropping
                     // the completion and returning STATUS_SUCCESS.
                     //
@@ -640,11 +667,258 @@ Return Value:
     if (FirstEntry != NULL) {
         NextEntry = FirstEntry;
         do {
-            Irp = CONTAINING_RECORD(NextEntry, IRP, Tail.Overlay.ListEntry);
+            PLIST_ENTRY ThisEntry = NextEntry;
+
+            //
+            // Advance before freeing (the free invalidates the entry); free as
+            // an IRP or a posted mini-packet depending on the entry's tag.
+            //
+
             NextEntry = NextEntry->Flink;
-            IoFreeIrp(Irp);
+            if (IopCompletionPacketType(ThisEntry) == IopCompletionPacketIrp) {
+                Irp = CONTAINING_RECORD(ThisEntry, IRP, Tail.Overlay.ListEntry);
+                IoFreeIrp(Irp);
+            } else {
+                ExFreePool(CONTAINING_RECORD(ThisEntry,
+                                             IOP_MINI_COMPLETION_PACKET,
+                                             ListEntry));
+            }
         } while (FirstEntry != NextEntry);
     }
 
     return;
+}
+
+NTSTATUS
+NtSetIoCompletion (
+    IN HANDLE IoCompletionHandle,
+    IN PVOID KeyContext,
+    IN PVOID ApcContext,
+    IN NTSTATUS IoStatus,
+    IN ULONG IoStatusInformation
+    )
+
+/*++
+
+Routine Description:
+
+    This function posts a completion packet to an I/O completion object.  The
+    packet is delivered to a thread waiting in NtRemoveIoCompletion[Ex] exactly
+    as a completed IRP would be, except that all of the values are supplied by
+    the caller.  This backs the Win32 PostQueuedCompletionStatus API.
+
+Arguments:
+
+    IoCompletionHandle - Supplies a handle to an I/O completion object.
+
+    KeyContext - Supplies the completion key returned to the dequeuer.
+
+    ApcContext - Supplies the (opaque) APC/overlapped context returned to the
+        dequeuer.
+
+    IoStatus - Supplies the completion status returned to the dequeuer.
+
+    IoStatusInformation - Supplies the information value returned to the
+        dequeuer.
+
+Return Value:
+
+    STATUS_SUCCESS, or an error status from the handle reference / allocation.
+
+--*/
+
+{
+    PVOID IoCompletion;
+    NTSTATUS Status;
+    PIOP_MINI_COMPLETION_PACKET MiniPacket;
+
+    //
+    // Every argument is passed by value (the contexts are opaque pointers that
+    // are never dereferenced here), so no probing is required.
+    //
+
+    Status = ObReferenceObjectByHandle(IoCompletionHandle,
+                                       IO_COMPLETION_MODIFY_STATE,
+                                       IoCompletionObjectType,
+                                       KeGetPreviousMode(),
+                                       &IoCompletion,
+                                       NULL);
+    if (!NT_SUCCESS(Status)) {
+        return Status;
+    }
+
+    MiniPacket = ExAllocatePoolWithTag(NonPagedPool,
+                                       sizeof(IOP_MINI_COMPLETION_PACKET),
+                                       'pCoI');
+    if (MiniPacket == NULL) {
+        ObDereferenceObject(IoCompletion);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    MiniPacket->PacketType = IopCompletionPacketMini;
+    MiniPacket->KeyContext = KeyContext;
+    MiniPacket->ApcContext = ApcContext;
+    MiniPacket->IoStatus = IoStatus;
+    MiniPacket->IoStatusInformation = IoStatusInformation;
+
+    KeInsertQueue((PKQUEUE)IoCompletion, &MiniPacket->ListEntry);
+
+    ObDereferenceObject(IoCompletion);
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NtRemoveIoCompletionEx (
+    IN HANDLE IoCompletionHandle,
+    OUT PFILE_IO_COMPLETION_INFORMATION IoCompletionInformation,
+    IN ULONG Count,
+    OUT PULONG NumEntriesRemoved,
+    IN PLARGE_INTEGER Timeout OPTIONAL,
+    IN BOOLEAN Alertable
+    )
+
+/*++
+
+Routine Description:
+
+    This function removes up to Count entries from an I/O completion object,
+    blocking (honouring the optional timeout) only until the first entry is
+    available and then draining any further ready entries without blocking.
+    This backs the Win32 GetQueuedCompletionStatusEx API (the only dequeue
+    path mio uses).
+
+Arguments:
+
+    IoCompletionHandle - Supplies a handle to an I/O completion object.
+
+    IoCompletionInformation - Supplies an array that receives the removed
+        completion entries.
+
+    Count - Supplies the number of elements in the array.
+
+    NumEntriesRemoved - Receives the number of entries actually removed.
+
+    Timeout - Supplies an optional time out for the wait on the first entry.
+
+    Alertable - Supplies whether the wait is alertable (carried by the wait
+        mode below).
+
+Return Value:
+
+    STATUS_SUCCESS if at least one entry was removed; STATUS_TIMEOUT /
+    STATUS_USER_APC if the wait for the first entry did not complete; otherwise
+    an error status.
+
+--*/
+
+{
+    PLARGE_INTEGER CapturedTimeout;
+    LARGE_INTEGER TimeoutValue;
+    LARGE_INTEGER ZeroTimeout;
+    PVOID IoCompletion;
+    KPROCESSOR_MODE PreviousMode;
+    NTSTATUS Status;
+    PLIST_ENTRY Entry;
+    PIRP Irp;
+    PIOP_MINI_COMPLETION_PACKET MiniPacket;
+    ULONG removed;
+
+    UNREFERENCED_PARAMETER( Alertable );
+
+    try {
+
+        CapturedTimeout = NULL;
+        PreviousMode = KeGetPreviousMode();
+
+        //
+        // Guard the array size against count overflow before probing it.
+        //
+
+        if (Count == 0 ||
+            Count > MAXULONG / sizeof(FILE_IO_COMPLETION_INFORMATION)) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (PreviousMode != KernelMode) {
+            ProbeForWrite(IoCompletionInformation,
+                          Count * sizeof(FILE_IO_COMPLETION_INFORMATION),
+                          sizeof(ULONG));
+            ProbeForWrite(NumEntriesRemoved, sizeof(ULONG), sizeof(ULONG));
+            if (ARGUMENT_PRESENT(Timeout)) {
+                CapturedTimeout = &TimeoutValue;
+                TimeoutValue = ProbeAndReadLargeInteger(Timeout);
+            }
+        } else {
+            if (ARGUMENT_PRESENT(Timeout)) {
+                CapturedTimeout = Timeout;
+            }
+        }
+
+        Status = ObReferenceObjectByHandle(IoCompletionHandle,
+                                           IO_COMPLETION_MODIFY_STATE,
+                                           IoCompletionObjectType,
+                                           PreviousMode,
+                                           &IoCompletion,
+                                           NULL);
+        if (!NT_SUCCESS(Status)) {
+            return Status;
+        }
+
+        ZeroTimeout.QuadPart = 0;
+        removed = 0;
+        Status = STATUS_SUCCESS;
+
+        while (removed < Count) {
+
+            //
+            // Block (with the caller's timeout) only for the first entry; drain
+            // further ready entries with a zero timeout.
+            //
+
+            Entry = KeRemoveQueue((PKQUEUE)IoCompletion,
+                                  PreviousMode,
+                                  (removed == 0) ? CapturedTimeout : &ZeroTimeout);
+
+            if (((NTSTATUS)Entry == STATUS_TIMEOUT) ||
+                ((NTSTATUS)Entry == STATUS_USER_APC)) {
+                if (removed == 0) {
+                    Status = (NTSTATUS)Entry;
+                }
+                break;
+            }
+
+            if (IopCompletionPacketType(Entry) == IopCompletionPacketIrp) {
+                Irp = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
+                IoCompletionInformation[removed].ApcContext =
+                    Irp->Overlay.AsynchronousParameters.UserApcContext;
+                IoCompletionInformation[removed].KeyContext =
+                    (PVOID)Irp->Tail.CompletionKey;
+                IoCompletionInformation[removed].IoStatusBlock = Irp->IoStatus;
+                IoFreeIrp(Irp);
+            } else {
+                MiniPacket = CONTAINING_RECORD(Entry,
+                                               IOP_MINI_COMPLETION_PACKET,
+                                               ListEntry);
+                IoCompletionInformation[removed].ApcContext = MiniPacket->ApcContext;
+                IoCompletionInformation[removed].KeyContext = MiniPacket->KeyContext;
+                IoCompletionInformation[removed].IoStatusBlock.Status =
+                    MiniPacket->IoStatus;
+                IoCompletionInformation[removed].IoStatusBlock.Information =
+                    MiniPacket->IoStatusInformation;
+                ExFreePool(MiniPacket);
+            }
+
+            removed += 1;
+        }
+
+        *NumEntriesRemoved = removed;
+
+        ObDereferenceObject(IoCompletion);
+
+    } except(ExSystemExceptionFilter()) {
+        Status = GetExceptionCode();
+    }
+
+    return Status;
 }

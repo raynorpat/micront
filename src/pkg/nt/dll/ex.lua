@@ -60,7 +60,6 @@ NTSTATUS __stdcall NtOpenSection     (HANDLE *h, ULONG Access, OBJECT_ATTRIBUTES
 NTSTATUS __stdcall NtOpenMutant      (HANDLE *h, ULONG Access, OBJECT_ATTRIBUTES *oa);
 NTSTATUS __stdcall NtOpenSemaphore   (HANDLE *h, ULONG Access, OBJECT_ATTRIBUTES *oa);
 NTSTATUS __stdcall NtOpenTimer       (HANDLE *h, ULONG Access, OBJECT_ATTRIBUTES *oa);
-NTSTATUS __stdcall NtOpenIoCompletion(HANDLE *h, ULONG Access, OBJECT_ATTRIBUTES *oa);
 
 NTSTATUS __stdcall NtCreateMutant(HANDLE *h, ULONG Access,
                                   OBJECT_ATTRIBUTES *oa,
@@ -95,25 +94,6 @@ NTSTATUS __stdcall NtWaitHighEventPair      (HANDLE h);
 NTSTATUS __stdcall NtWaitLowEventPair       (HANDLE h);
 NTSTATUS __stdcall NtSetHighWaitLowEventPair(HANDLE h);
 NTSTATUS __stdcall NtSetLowWaitHighEventPair(HANDLE h);
-
-/* IO_COMPLETION_BASIC_INFORMATION — single LONG. Flat, pack-agnostic. */
-typedef struct _IO_COMPLETION_BASIC_INFORMATION {
-    long Depth;
-} IO_COMPLETION_BASIC_INFORMATION;
-
-NTSTATUS __stdcall NtCreateIoCompletion(HANDLE *h, ULONG Access,
-                                        OBJECT_ATTRIBUTES *oa,
-                                        ULONG ConcurrentThreads);
-NTSTATUS __stdcall NtRemoveIoCompletion(HANDLE h,
-                                        void **KeyContext,
-                                        void **ApcContext,
-                                        IO_STATUS_BLOCK *IoStatusBlock,
-                                        LARGE_INTEGER *Timeout);
-NTSTATUS __stdcall NtQueryIoCompletion(HANDLE h,
-                                       int InformationClass,
-                                       void *Information,
-                                       ULONG Length,
-                                       ULONG *ReturnLength);
 
 NTSTATUS __stdcall NtQueryEvent    (HANDLE h, int cls, void *info, ULONG len, ULONG *ret);
 NTSTATUS __stdcall NtQueryMutant   (HANDLE h, int cls, void *info, ULONG len, ULONG *ret);
@@ -245,7 +225,6 @@ M.NtOpenSection      = make_opener('NtOpenSection')
 M.NtOpenMutant       = make_opener('NtOpenMutant')
 M.NtOpenSemaphore    = make_opener('NtOpenSemaphore')
 M.NtOpenTimer        = make_opener('NtOpenTimer')
-M.NtOpenIoCompletion = make_opener('NtOpenIoCompletion')
 
 -- Query wrappers. Each basic-info class has a fixed struct; caller
 -- supplies a pre-allocated cdata of the right type. NT 3.5's queries
@@ -872,81 +851,5 @@ function M.NtSetDefaultLocale(user_profile, lcid)
     local st = ntdll.NtSetDefaultLocale(user_profile and 1 or 0, lcid)
     if err.is_error(st) then err.raise('NtSetDefaultLocale', st) end
 end
-
--- ------------------------------------------------------------------
--- IoCompletion raw wrappers
--- ------------------------------------------------------------------
-
-function M.NtCreateIoCompletion(access, oa, concurrent_threads)
-    local h = ffi.new('HANDLE[1]')
-    local st = ntdll.NtCreateIoCompletion(h, access, oa,
-                                          concurrent_threads or 0)
-    if err.is_error(st) then err.raise('NtCreateIoCompletion', st) end
-    return handle.wrap(h[0])
-end
-
--- Dequeue a completion packet. Returns (key, apc, status, information),
--- or nil on timeout (STATUS_TIMEOUT passes through without raising).
--- `timeout` is a LARGE_INTEGER* (use ke.timeout(seconds) for relative
--- timeouts; nil blocks indefinitely).
-function M.NtRemoveIoCompletion(h, timeout)
-    local key = ffi.new('void *[1]')
-    local apc = ffi.new('void *[1]')
-    local iosb = ffi.new('IO_STATUS_BLOCK')
-    local st = ntdll.NtRemoveIoCompletion(handle.raw(h), key, apc, iosb, timeout)
-    local stu = err.normalize(st)
-    if stu == 0x102 --[[ STATUS_TIMEOUT ]] then return nil end
-    if err.is_error(st) then err.raise('NtRemoveIoCompletion', st) end
-    return key[0], apc[0], iosb.Status, iosb.Information
-end
-
--- Query the depth of the completion queue (pending packets). Only
--- IoCompletionBasicInformation exists on NT 3.5.
-function M.NtQueryIoCompletion(h)
-    local info = ffi.new('IO_COMPLETION_BASIC_INFORMATION')
-    local ret = ffi.new('ULONG[1]')
-    local st = ntdll.NtQueryIoCompletion(handle.raw(h),
-                                         0 --[[ BasicInformation ]],
-                                         info,
-                                         ffi.sizeof('IO_COMPLETION_BASIC_INFORMATION'),
-                                         ret)
-    if err.is_error(st) then err.raise('NtQueryIoCompletion', st) end
-    return info.Depth
-end
-
--- -- IoCompletion object --
--- NT 3.5 can only receive completions via file-handle association
--- (NtSetInformationFile/FileCompletionInformation). The port itself
--- has no NtSetIoCompletion on this version — that's a NT 4.0 addition.
--- So the Lua surface here is Create / Query-depth / Remove-with-timeout.
-
-local IoCompletion = {}
-IoCompletion.__index = IoCompletion
-
--- Returns queue depth (LONG pending-packets count).
-function IoCompletion:depth() return M.NtQueryIoCompletion(self._h) end
-
--- Dequeue one packet (with optional timeout in seconds; nil = infinite).
--- Returns (key, apc_context, status, information) or nil on timeout.
-function IoCompletion:remove(seconds)
-    local ke = require('nt.dll.ke')
-    return M.NtRemoveIoCompletion(self._h, ke.timeout(seconds))
-end
-
-function IoCompletion:handle() return self._h end
-IoCompletion.close = handle.close_h
-
-local IO_COMPLETION_ALL_ACCESS = 0x1F0003
-
-function M.iocompletion(opts)
-    opts = opts or {}
-    local h = M.NtCreateIoCompletion(
-        opts.access or IO_COMPLETION_ALL_ACCESS,
-        opts.oa,
-        opts.concurrent_threads or 0)
-    return setmetatable({ _h = h }, IoCompletion)
-end
-
-M.IoCompletion = IoCompletion
 
 return M

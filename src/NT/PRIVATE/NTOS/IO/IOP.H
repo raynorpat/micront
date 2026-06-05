@@ -137,6 +137,51 @@ extern GENERIC_MAPPING IopCompletionMapping;
 // Define the structures private to the I/O system.
 //
 
+//
+// I/O completion-port queue entries.  A completion port is a KQUEUE; both
+// completed IRPs and packets posted by NtSetIoCompletion are queued to it by
+// their LIST_ENTRY.  To tell them apart on dequeue we tag the ULONG slot that
+// immediately follows the queued LIST_ENTRY: for an IRP that slot is
+// Tail.Overlay.CurrentStackLocation (dead once the IRP is completing); for a
+// posted packet it is IOP_MINI_COMPLETION_PACKET.PacketType.  Both live at the
+// same offset (LIST_ENTRY + sizeof(LIST_ENTRY)), so NtRemoveIoCompletion reads
+// it uniformly.  (This mirrors the srv03 IOP_MINI_COMPLETION_PACKET design,
+// adapted to the NT 3.5 IRP overlay which has no CurrentStackLocation/PacketType
+// union of its own.)
+//
+
+typedef enum _IOP_COMPLETION_PACKET_TYPE {
+    IopCompletionPacketMini = 0,
+    IopCompletionPacketIrp  = 1
+} IOP_COMPLETION_PACKET_TYPE;
+
+typedef struct _IOP_MINI_COMPLETION_PACKET {
+    LIST_ENTRY ListEntry;           // offset 0  -- queued to the port KQUEUE
+    ULONG      PacketType;           // offset 8  -- aliases IRP CurrentStackLocation
+    PVOID      KeyContext;
+    PVOID      ApcContext;
+    NTSTATUS   IoStatus;
+    ULONG      IoStatusInformation;
+} IOP_MINI_COMPLETION_PACKET, *PIOP_MINI_COMPLETION_PACKET;
+
+//
+// Stamp a completing IRP's queue entry as an IRP packet just before it is
+// inserted on a completion port.  Writes the CurrentStackLocation slot (the
+// ULONG after Tail.Overlay.ListEntry), which the IRP no longer needs.
+//
+
+#define IopMarkIrpCompletionPacket(irp) \
+    (*(PULONG)&(irp)->Tail.Overlay.CurrentStackLocation = IopCompletionPacketIrp)
+
+//
+// Read the packet type of a dequeued completion entry (works for both IRP and
+// mini-packet entries -- same slot offset).
+//
+
+#define IopCompletionPacketType(entry) \
+    (((PIOP_MINI_COMPLETION_PACKET) \
+        CONTAINING_RECORD((entry), IOP_MINI_COMPLETION_PACKET, ListEntry))->PacketType)
+
 #define OPEN_PACKET_PATTERN  0xbeaa0251
 
 //

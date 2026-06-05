@@ -1,9 +1,8 @@
 -- test.iosrc — an IOCP completion source for tests.
 --
--- NT 3.5 has no NtSetIoCompletion: a completion packet only reaches a
--- port via real async I/O on a handle associated with the port. This
--- helper manufactures completions deterministically by issuing async
--- reads on a scratch file associated with the port.
+-- Manufactures *IRP-backed* completions deterministically by issuing async
+-- reads on a scratch file associated with the port (the file-association
+-- path -- as opposed to packets posted directly via NtSetIoCompletion).
 --
 -- Mechanism (kernel side, confirmed against NTOS/IO):
 --   * NtSetInformationFile / FileCompletionInformation binds the file
@@ -49,7 +48,7 @@ local Source = {}
 Source.__index = Source
 
 -- new(port, key) — build a completion source bound to `port` (an
--- ex.iocompletion object) carrying association key `key` (default 0).
+-- io.iocompletion object) carrying association key `key` (default 0).
 --
 -- Creates the scratch file and writes PAYLOAD through a synchronous
 -- handle (which is never associated, so it produces no completions),

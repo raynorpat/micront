@@ -1611,6 +1611,35 @@ NtRemoveIoCompletion (
     IN PLARGE_INTEGER Timeout
     );
 
+typedef struct _FILE_IO_COMPLETION_INFORMATION {
+    PVOID KeyContext;
+    PVOID ApcContext;
+    IO_STATUS_BLOCK IoStatusBlock;
+} FILE_IO_COMPLETION_INFORMATION, *PFILE_IO_COMPLETION_INFORMATION;
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+NtSetIoCompletion (
+    IN HANDLE IoCompletionHandle,
+    IN PVOID KeyContext,
+    IN PVOID ApcContext,
+    IN NTSTATUS IoStatus,
+    IN ULONG IoStatusInformation
+    );
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+NtRemoveIoCompletionEx (
+    IN HANDLE IoCompletionHandle,
+    OUT PFILE_IO_COMPLETION_INFORMATION IoCompletionInformation,
+    IN ULONG Count,
+    OUT PULONG NumEntriesRemoved,
+    IN PLARGE_INTEGER Timeout OPTIONAL,
+    IN BOOLEAN Alertable
+    );
+
 
 //
 // Defines that are used to access the registry, but are not registry

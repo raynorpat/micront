@@ -1004,6 +1004,13 @@ Return Value:
 
             irp->Tail.CompletionKey = key;
 
+            //
+            // Tag the entry as an IRP packet so NtRemoveIoCompletion can tell it
+            // from a packet posted by NtSetIoCompletion (which shares this queue).
+            //
+
+            IopMarkIrpCompletionPacket( irp );
+
             KeInsertQueue( (PKQUEUE) port,
                            &irp->Tail.Overlay.ListEntry );
 

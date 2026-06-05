@@ -184,3 +184,5 @@ WriteVirtualMemory,5
 GenerateSecureRandom,2
 QueryFullAttributesFile,2
 YieldExecution,0
+SetIoCompletion,5
+RemoveIoCompletionEx,6
