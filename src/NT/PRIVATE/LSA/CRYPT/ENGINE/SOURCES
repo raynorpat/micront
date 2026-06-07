@@ -31,10 +31,8 @@ TARGETPATH=obj
 TARGETTYPE=LIBRARY
 TARGETLIBS=
 
-#SOURCES=md4c.c des.c cbc.c ecb.c rc4c.c
-SOURCES=md4c.c des.c ecb.c rc4c.c
+SOURCES=md4c.c des.c cbc.c ecb.c rc4c.c
 
 UMTYPE=console
 UMAPPL=
 UMLIBS=
-
