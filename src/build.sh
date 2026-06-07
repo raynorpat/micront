@@ -1468,20 +1468,6 @@ build_efi() {
     make -C "$SCRIPT_DIR/boot-efi" BOOTX64.EFI
 }
 
-# cr — LuaJIT-on-NT runtime. Builds three subsystem-specialised .exes
-# from the same VM source: run.exe (native, Control\InitExe-direct),
-# runc.exe (console, csrss-allocated console), runw.exe (windows GUI,
-# csrss-registered for user32/gdi32 access). All staged at
-# \SystemRoot\lua\ by mkdisk's _lua_tree_files(). gui profile's
-# Winlogon\Shell points at runw.exe (Lua-based shell replacing progman).
-build_cr() {
-    echo ""
-    echo "========================================"
-    echo "Building: cr (LuaJIT runtime + lua/ tree)"
-    echo "========================================"
-    make -C "$SCRIPT_DIR/cr"
-}
-
 build_disk() {
     local profile="${1:-${PROFILE:-headless}}"
     local out_dir="$(dirname "$SCRIPT_DIR")/build/$profile"
@@ -1508,7 +1494,7 @@ build_disk() {
 # then assembles the disk with the matching profile. Disk assembly
 # respects the $PROFILE env var — see boot-efi/Makefile and
 # tools/mkhive.py --profile. A previous `./build.sh gui` + later
-# `PROFILE=micront ./build.sh disk` is a valid flow (compile once,
+# `PROFILE=headless ./build.sh disk` is a valid flow (compile once,
 # assemble many ways), but the top-level targets set PROFILE for you.
 #
 
@@ -1518,7 +1504,6 @@ _compile_micront() {
     build_ntoskrnl
     build_drivers
     build_userland_micront
-    build_cr
 }
 
 _compile_headless() {
@@ -1534,12 +1519,6 @@ _compile_gui() {
 
 # Profile builders — compile everything needed, then assemble the disk
 # with the correct PROFILE. Each is the single entry point users invoke.
-build_micront() {
-    export PROFILE=micront
-    _compile_micront
-    build_disk
-}
-
 build_headless() {
     export PROFILE=headless
     _compile_headless
@@ -1563,7 +1542,6 @@ _dispatch_one() {
         all)               build_all ;;
         gui)               build_gui ;;
         headless)          build_headless ;;
-        micront)           build_micront ;;
         ntoskrnl)          build_ntoskrnl ;;
         drivers)           build_drivers ;;
         drivers-gui)       build_drivers_gui ;;
@@ -1573,14 +1551,13 @@ _dispatch_one() {
         disk)              build_disk ;;
         disk-gui)          build_disk gui ;;
         disk-headless)     build_disk headless ;;
-        disk-micront)      build_disk micront ;;
         *)
             if declare -F "build_$comp" > /dev/null; then
                 "build_$comp"
             else
                 echo "Unknown component: $comp"
                 echo ""
-                echo "Profile targets: all (=gui), gui, headless, micront"
+                echo "Profile targets: all (=gui), gui, headless"
                 echo "Group targets:   ntoskrnl, drivers, drivers-gui,"
                 echo "                 userland-micront, userland, userland-gui, disk"
                 echo ""

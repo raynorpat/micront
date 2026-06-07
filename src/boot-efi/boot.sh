@@ -2,7 +2,7 @@
 #
 # Boot MicroNT UEFI loader under OVMF64 in QEMU.
 # Usage: boot.sh [profile]   (default: headless)
-# Profiles: micront, headless, gui
+# Profiles: headless, gui
 #
 # Runs under the default -machine pc (i440fx + PIIX3); OVMF64 works on
 # both i440fx and q35, and our NT 3.5 atdisk.sys only speaks legacy IDE
@@ -29,7 +29,7 @@ fi
 
 cp /usr/share/OVMF/OVMF_VARS_4M.fd OVMF_VARS_4M.fd
 
-# Guest RAM size. Override via env: MEM=512 boot.sh micront
+# Guest RAM size. Override via env: MEM=512 boot.sh headless
 # Default keeps parity with the old behaviour (qemu-system-i386 default
 # is ~128 MB). The loader's identity map scales with registered ranges,
 # not a blanket constant, so any size UEFI's allocator can place our

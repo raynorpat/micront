@@ -124,7 +124,7 @@ rm -f "$NT_ROOT/PRIVATE/WINDOWS/USER/INC/callback.h" \
       "$NT_ROOT/PRIVATE/WINDOWS/USER/CLIENT/user32p.def" 2>/dev/null
 
 # Profile-specific disk images (under build/)
-for profile in micront headless gui; do
+for profile in headless gui; do
     if [ -d "$(dirname "$SCRIPT_DIR")/build/$profile" ]; then
         rm -rf "$(dirname "$SCRIPT_DIR")/build/$profile"
         echo "  cleaned build/$profile/"

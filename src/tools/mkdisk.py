@@ -440,46 +440,21 @@ def _dir_entry(name11: bytes, attr: int, first_cluster: int,
 # ---------------------------------------------------------------------------
 #
 # Disk file lists per profile. Each profile is a strict superset of the
-# previous: micront ⊂ headless ⊂ gui.
+# previous: headless ⊂ gui.
 #
 # Paths are relative to the repo's `src/` directory.
 
 SRC_ROOT = Path(__file__).resolve().parent.parent    # src/
 NT        = SRC_ROOT / "NT"
 SDK_LIB   = NT / "PUBLIC/SDK/LIB/I386"
-CR_DIR    = SRC_ROOT / "cr"
 
 def OBJ(comp:str):
     return NT / f"PRIVATE/{comp}/obj/i386"
 
-PROFILES = ("micront", "headless", "gui")
+PROFILES = ("headless", "gui")
 
 NLS_DATA = NT / "PRIVATE/WINDOWS/WINNLS/DATA"
 
-
-def _lua_tree_files() -> list[tuple[str, Path]]:
-    """Stage the cr Lua runtime — three subsystem-specialised .exes
-    (run.exe = native, runc.exe = console, runw.exe = windows) and every
-    file under `src/cr/lua/` — at `\\SystemRoot\\lua\\`. Baked into the
-    core so every profile picks them up:
-      - micront uses Control\\Init to boot run.exe straight to Lua.
-      - headless ignores the .exes at boot but they're available for
-        any userland code that wants `nt.thread`-style scripting.
-      - gui's userinit launches runw.exe as the Win32 GUI shell (csrss
-        registers it as a GUI process so chunks can ffi.load user32 /
-        gdi32).
-    Built by `make -C src/cr` (wired into build.sh's compile chain)."""
-    out: list[tuple[str, Path]] = [
-        ("lua/run.exe",  CR_DIR / "run.exe"),
-        ("lua/runc.exe", CR_DIR / "runc.exe"),
-        ("lua/runw.exe", CR_DIR / "runw.exe"),
-    ]
-    lua_root = CR_DIR / "lua"
-    for f in sorted(lua_root.rglob("*")):
-        if f.is_file():
-            rel = f.relative_to(lua_root).as_posix()
-            out.append((f"lua/{rel}", f))
-    return out
 
 # Core files present in every profile.
 #
@@ -582,7 +557,6 @@ def get_disk_files(profile: str, output_dir: Path) -> list[tuple[str, Path]]:
     """Return the file list for *profile*, with the SYSTEM hive path
     pointing into *output_dir*."""
     files = list(_CORE_FILES)
-    files.extend(_lua_tree_files())          # \SystemRoot\lua\* — every profile
     # Insert the profile-specific hives. SOFTWARE is only needed once a
     # Win32 userland is present (winlogon / basesrv / GDI consumers) — the
     # kernel itself reads nothing from it.
@@ -635,7 +609,7 @@ def main() -> None:
                          "If HOST is a directory its contents are copied "
                          "recursively under DEST. Repeatable. "
                          "e.g. -x build/foo.exe:System32/foo.exe, "
-                         "-x src/cr/lua:lua")
+                         "-x extras/tools:System32/tools")
     args = ap.parse_args()
 
     output_dir = args.output_dir or (SRC_ROOT.parent / "build" / args.profile)
@@ -644,9 +618,9 @@ def main() -> None:
     disk_files = get_disk_files(args.profile, output_dir)
 
     # Extras: appended after the profile core so iteration-specific files
-    # (e.g. a fresh hello-native.exe from src/cr) can ride on top without
-    # editing the profile lists. If HOST is a directory, its contents are
-    # staged recursively under DEST (preserving the subtree layout).
+    # can ride on top without editing the profile lists. If HOST is a
+    # directory, its contents are staged recursively under DEST (preserving
+    # the subtree layout).
     for spec in args.extra:
         if ":" not in spec:
             raise SystemExit(f"-x {spec!r}: expected HOST:DEST")
