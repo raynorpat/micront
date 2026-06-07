@@ -331,3 +331,6 @@ src/wibo-tools/
 
 .bash_history
 .python_history
+
+# gnu-efi build tree (fetched + built by src/boot-efi/setup-gnu-efi.sh on macOS)
+/src/boot-efi/.gnu-efi/
