@@ -850,6 +850,13 @@ build_shell32(){
     build_userpri  || return 1
     run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/LIBRARY" "SHELL/LIBRARY - shell32.dll" makedll=1
 }
+build_comdlg32(){
+    # Common dialogs (File Open/Save, Color, Font, Print). progman LoadLibrary's
+    # it at runtime for the Browse button; links kernel32/user32/gdi32/shell32/
+    # advapi32, all built earlier in the gui tier.
+    build_shell32 || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/COMDLG" "SHELL/COMDLG - comdlg32.dll" makedll=1
+}
 build_progman(){
     build_shell32  || return 1
     # SOURCES builds progman.lib first then UMAPPL links to progman.exe —
@@ -1377,6 +1384,8 @@ USERLAND_GUI_TARGETS=(
     # pulls it), userpri (unicrt.obj for shell32), shell32 (ShellExecute/
     # DragAcceptFiles/env helpers used by progman and most classic apps).
     pwin32 userpri shell32
+    # Common dialogs DLL — progman loads it for the Browse file picker.
+    comdlg32
     # Login + shell
     winlogon userinit
     # Program Manager (the default NT 3.5 shell) and cmd.exe.

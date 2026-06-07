@@ -535,6 +535,9 @@ _GUI_FILES: list[tuple[str, Path]] = [
     # DragAcceptFiles, Extract*Icon, About-box, environment helpers).
     # Progman and most classic-NT apps import it.
     ("System32/shell32.dll",         SDK_LIB / "shell32.dll"),
+    # Comdlg32 — common dialogs (File Open/Save, Color, Font, Print).
+    # Progman LoadLibrary's it for the Browse file picker.
+    ("System32/comdlg32.dll",        SDK_LIB / "comdlg32.dll"),
     # Progman — Program Manager. Default NT 3.5 shell (HKLM\...\Winlogon\Shell).
     # Winlogon/userinit execs it after successful logon; groups + icons +
     # Program/File/Options/Window menus.
