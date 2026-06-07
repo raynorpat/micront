@@ -672,10 +672,14 @@ build_cmdstub() {
         "WIBO_PATH=${WIBO_TOOLS}" \
         "$WIBO_BIN" --chdir "$src_dir" \
             "${WIBO_TOOLS}/CL.EXE" -nologo cmd.c \
-            -link -subsystem:console -out:cmd.exe \
+            -link -subsystem:console -out:cmd.exe -nodefaultlib:oldnames \
             "${NT_ROOT_WIN}\\PUBLIC\\SDK\\LIB\\I386\\libc.lib" \
             "${NT_ROOT_WIN}\\PUBLIC\\SDK\\LIB\\I386\\kernel32.lib" \
         || { echo ">>> cmd-stub: FAILED"; return 1; }
+    # -nodefaultlib:oldnames: cmd.c uses the _-prefixed CRT names (_stricmp,
+    # etc.), so it needs no OLDNAMES.lib aliases. The MS SDK's OLDNAMES.lib
+    # isn't part of this tree, and CL emits a -defaultlib:OLDNAMES directive
+    # that would otherwise make LINK fail with LNK1104.
 
     cp "$src_dir/cmd.exe" "$WIBO_TOOLS/cmd.exe"
     echo ">>> cmd-stub: $(ls -l "$WIBO_TOOLS/cmd.exe" | awk '{print $5}') bytes -> wibo-tools/cmd.exe"
