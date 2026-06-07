@@ -9,8 +9,8 @@
 #   component:  ke, rtl, ex, ob, se, ps, mm, cache, config, init, hal, all
 #   If no component specified, builds all
 #
-# Prerequisites: a wibo binary — wibo-macos next to this script on macOS,
-# wibo-x86_64 at the repo root on Linux (chmod +x). The src/wibo-tools/
+# Prerequisites: a wibo binary — wibo-macos on macOS,
+# wibo-x86_64 at the repo root on Linux. The src/wibo-tools/
 # directory (symlinks to PUBLIC/OAK/BIN/I386 + CRTDLL.DLL) is provisioned
 # automatically on first run via setup-wibo-tools.sh.
 #
@@ -21,8 +21,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 NT_ROOT="$SCRIPT_DIR/NT"
 NTOS="$NT_ROOT/PRIVATE/NTOS"
 
-# Pick the right wibo binary for the host OS: wibo-macos (next to this
-# script) on macOS, wibo-x86_64 (at the repo root) on Linux.
+# Pick the right wibo binary for the host OS: wibo-macos on macOS,
+# wibo-x86_64 on Linux.
 case "$(uname -s)" in
     Darwin) WIBO_BIN="$SCRIPT_DIR/wibo-macos" ;;
     *)      WIBO_BIN="$(dirname "$SCRIPT_DIR")/wibo-x86_64" ;;
@@ -1137,6 +1137,30 @@ build_kernel32() {
 
 # --- INIT: links all libs into NTOSKRNL.EXE ---
 
+# gen_def_from_src <abs .SRC path> <abs obj/i386/<name>.def path>
+#
+# Pre-generate a DLL/EXE export .def from its .src via the C preprocessor,
+# at the bash level where the shell owns fd 1. This works around a cmd-stub
+# limitation under macOS wibo: the in-nmake rule `cl386 /EP foo.src > foo.def`
+# has cl386 re-exec cl.exe (a grandchild), and macOS wibo does not route a
+# grandchild's stdout through the cmd-stub's redirected handle — so the .def
+# comes out empty and every .def-driven export silently vanishes from the
+# import lib. Generating it here drops the file where nmake expects it with a
+# fresh mtime, so nmake's inference rule sees it up-to-date and skips its own
+# (broken) generation. Defines match I386MK.INC STD_DEFINES (-D_X86_=1 -Di386=1).
+gen_def_from_src() {
+    local src="$1" out_def="$2"
+    mkdir -p "$(dirname "$out_def")"
+    env -i HOME="$HOME" TERM="${TERM:-dumb}" \
+        "$WIBO_BIN" --chdir "$(dirname "$src")" \
+            "$WIBO_TOOLS/cl386.exe" -nologo /EP -D_X86_=1 -Di386=1 \
+            -Tc "$(basename "$src")" > "$out_def" 2>/dev/null
+    if [ ! -s "$out_def" ]; then
+        echo "ERROR: generated empty .def: $out_def (from $src)" >&2
+        return 1
+    fi
+}
+
 build_hal_stubs() {
     # Build hal.lib + hal.exp from HAL.SRC before INIT so NTOSKRNL.EXE's
     # link can resolve Ke*Irql and other Hal* imports. The stubs-only
@@ -1144,6 +1168,7 @@ build_hal_stubs() {
     # runs lib -def:hal.def obj\i386\*.obj. We invoke just that rule.
     local hal_dir="$NTOS/NTHALS/HAL"
     mkdir -p "$hal_dir/obj/i386"
+    gen_def_from_src "$hal_dir/HAL.SRC" "$hal_dir/obj/i386/hal.def" || return 1
     # Running full nmake here is fine — it'll also compile the HAL objs
     # (needed by lib -def for @N decoration). Link happens later in build_hal.
     run_nmake "$hal_dir" "HAL - stubs lib (for ntoskrnl link)"
@@ -1162,6 +1187,9 @@ build_init() {
     echo "========================================"
 
     mkdir -p "$linux_dir/obj/i386"
+    # NTOSKRNL.EXE's own export .def (kernel API) — same cmd-stub redirect
+    # workaround as the HAL .def; see gen_def_from_src.
+    gen_def_from_src "$NTOS/INIT/NTOSKRNL.SRC" "$linux_dir/obj/i386/ntoskrnl.def" || return 1
     python3 "$SCRIPT_DIR/tools/gen_objects.py" "$linux_dir"
 
     local rel_path="${linux_dir#$NT_ROOT}"
@@ -1189,6 +1217,8 @@ build_hal() {
     local hal_dir="$NTOS/NTHALS/HAL"
 
     # Step 1: Build the HAL as a library (via nmake/MAKEFILE.DEF)
+    mkdir -p "$hal_dir/obj/i386"
+    gen_def_from_src "$hal_dir/HAL.SRC" "$hal_dir/obj/i386/hal.def" || return 1
     run_nmake "$hal_dir" "HAL - MicroNT HAL (lib)"
 
     echo "========================================"
