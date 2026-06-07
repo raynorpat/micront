@@ -313,6 +313,7 @@ src/ntoskrnl.gdb
 # Old HAL (preserved for reference, not built)
 src/NT/PRIVATE/NTOS/NTHALS.old/
 
+# TODO file that is local
 TODO.md
 README-UEFI.md
 
@@ -328,7 +329,7 @@ README-UEFI.md
 /wibo-i686
 src/wibo-tools/
 
-
+# bash and Python history
 .bash_history
 .python_history
 
