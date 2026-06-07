@@ -1043,10 +1043,23 @@ build_rtl_user() {
     run_nmake "$NTOS/RTL/USER" "RTL_USER - user-mode runtime library"
 }
 build_ntdll()  {
+    local day="$NTOS/DLL/DAYTONA"
     # gensrv writes i386/usrstubs.asm into the DAYTONA build dir — create it.
-    mkdir -p "$NTOS/DLL/DAYTONA/i386"
+    mkdir -p "$day/i386" "$day/obj/i386"
+    # ntdll.def is assembled from ntdlldef.src + i386def.src + ntdll.xtr (the
+    # gensrv-extracted Nt* syscall stub list) and preprocessed — see
+    # gen_def_from_src for why the in-nmake redirect produces an empty .def on
+    # macOS. Pre-generate the .xtr (gensrv -f writes the file directly, so it
+    # is unaffected) and then the .def, both with fresh mtimes so nmake skips
+    # its own broken rules.
+    env -i HOME="$HOME" TERM="${TERM:-dumb}" \
+        "$WIBO_BIN" --chdir "$day" \
+            "$WIBO_TOOLS/gensrv.exe" -f ntdll.xtr "${NT_ROOT_WIN}\\PRIVATE\\NTOS\\KE" \
+        || { echo "ERROR: gensrv failed to generate ntdll.xtr" >&2; return 1; }
+    gen_def_from_src "$day/obj/i386/ntdll.def" \
+        "$NTOS/DLL/NTDLLDEF.SRC" "$NTOS/DLL/I386DEF.SRC" "$day/ntdll.xtr" || return 1
     # makedll=1 tells MAKEFILE.DEF to actually link the DLL (not just import lib)
-    run_nmake "$NTOS/DLL/DAYTONA" "NTDLL - user-mode runtime library" makedll=1
+    run_nmake "$day" "NTDLL - user-mode runtime library" makedll=1
 }
 build_urtl()   { run_nmake "$NT_ROOT/PRIVATE/URTL" "URTL - native-app startup library (nt.lib)"; }
 build_smlib()  { run_nmake "$NT_ROOT/PRIVATE/SM/CLIENT" "SM client library"; }
@@ -1151,9 +1164,11 @@ build_kernel32() {
 #
 # Multiple .src args are concatenated first, mirroring the NT makefiles'
 # `copy a.src+b.src` step (e.g. ntoskrnl.src + i386def.src — the arch fragment
-# carries the i386-only Ki*/Ex* kernel<->HAL exports). Defines match
-# I386MK.INC STD_DEFINES (-D_X86_=1 -Di386=1); NT_INST / MEMPRINT stay
-# undefined, matching a stock free build.
+# carries the i386-only Ki*/Ex* kernel<->HAL exports; ntdll adds the gensrv
+# .xtr fragment of Nt* syscall stubs). Defines match I386MK.INC STD_DEFINES
+# (-D_X86_=1 -Di386=1) plus MAKEFILE.DEF's free-build TARGET_DBG_DEFINES
+# (-DDBG=0 -DDEVL=1 — DEVL gates ntdll's Ldr*/Rtl* debug-info exports).
+# NT_INST / MEMPRINT / _CAIRO_ stay undefined, matching a stock free build.
 gen_def_from_src() {
     local out_def="$1"; shift
     local obj_dir; obj_dir="$(dirname "$out_def")"
@@ -1167,7 +1182,7 @@ gen_def_from_src() {
     done
     env -i HOME="$HOME" TERM="${TERM:-dumb}" \
         "$WIBO_BIN" --chdir "$obj_dir" \
-            "$WIBO_TOOLS/cl386.exe" -nologo /EP -D_X86_=1 -Di386=1 \
+            "$WIBO_TOOLS/cl386.exe" -nologo /EP -D_X86_=1 -Di386=1 -DDBG=0 -DDEVL=1 \
             -Tc "$(basename "$pp")" > "$out_def" 2>/dev/null
     rm -f "$pp"
     if [ ! -s "$out_def" ]; then
