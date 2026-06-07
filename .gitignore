@@ -9,6 +9,9 @@
 # IDE
 .vscode/
 
+# macOS
+.DS_Store
+
 # Build artifacts in NT source tree
 **/obj/
 _objects.mac
