@@ -1137,26 +1137,41 @@ build_kernel32() {
 
 # --- INIT: links all libs into NTOSKRNL.EXE ---
 
-# gen_def_from_src <abs .SRC path> <abs obj/i386/<name>.def path>
+# gen_def_from_src <abs out obj/i386/<name>.def> <abs .SRC> [extra .SRC ...]
 #
-# Pre-generate a DLL/EXE export .def from its .src via the C preprocessor,
-# at the bash level where the shell owns fd 1. This works around a cmd-stub
-# limitation under macOS wibo: the in-nmake rule `cl386 /EP foo.src > foo.def`
-# has cl386 re-exec cl.exe (a grandchild), and macOS wibo does not route a
-# grandchild's stdout through the cmd-stub's redirected handle — so the .def
-# comes out empty and every .def-driven export silently vanishes from the
-# import lib. Generating it here drops the file where nmake expects it with a
-# fresh mtime, so nmake's inference rule sees it up-to-date and skips its own
-# (broken) generation. Defines match I386MK.INC STD_DEFINES (-D_X86_=1 -Di386=1).
+# Pre-generate a DLL/EXE export .def from its .src fragment(s) via the C
+# preprocessor, at the bash level where the shell owns fd 1. This works
+# around a cmd-stub limitation under macOS wibo: the in-nmake rule
+# `cl386 /EP foo.src > foo.def` has cl386 re-exec cl.exe (a grandchild), and
+# macOS wibo does not route a grandchild's stdout through the cmd-stub's
+# redirected handle — so the .def comes out empty and every .def-driven
+# export silently vanishes from the import lib. Generating it here drops the
+# file where nmake expects it with a fresh mtime, so nmake sees it up-to-date
+# and skips its own (broken) generation.
+#
+# Multiple .src args are concatenated first, mirroring the NT makefiles'
+# `copy a.src+b.src` step (e.g. ntoskrnl.src + i386def.src — the arch fragment
+# carries the i386-only Ki*/Ex* kernel<->HAL exports). Defines match
+# I386MK.INC STD_DEFINES (-D_X86_=1 -Di386=1); NT_INST / MEMPRINT stay
+# undefined, matching a stock free build.
 gen_def_from_src() {
-    local src="$1" out_def="$2"
-    mkdir -p "$(dirname "$out_def")"
+    local out_def="$1"; shift
+    local obj_dir; obj_dir="$(dirname "$out_def")"
+    mkdir -p "$obj_dir"
+    local pp="$obj_dir/$(basename "$out_def" .def).pp"
+    local f
+    : > "$pp"
+    for f in "$@"; do
+        cat "$f" >> "$pp"
+        printf '\n' >> "$pp"   # guard against a missing trailing newline
+    done
     env -i HOME="$HOME" TERM="${TERM:-dumb}" \
-        "$WIBO_BIN" --chdir "$(dirname "$src")" \
+        "$WIBO_BIN" --chdir "$obj_dir" \
             "$WIBO_TOOLS/cl386.exe" -nologo /EP -D_X86_=1 -Di386=1 \
-            -Tc "$(basename "$src")" > "$out_def" 2>/dev/null
+            -Tc "$(basename "$pp")" > "$out_def" 2>/dev/null
+    rm -f "$pp"
     if [ ! -s "$out_def" ]; then
-        echo "ERROR: generated empty .def: $out_def (from $src)" >&2
+        echo "ERROR: generated empty .def: $out_def (from $*)" >&2
         return 1
     fi
 }
@@ -1168,7 +1183,7 @@ build_hal_stubs() {
     # runs lib -def:hal.def obj\i386\*.obj. We invoke just that rule.
     local hal_dir="$NTOS/NTHALS/HAL"
     mkdir -p "$hal_dir/obj/i386"
-    gen_def_from_src "$hal_dir/HAL.SRC" "$hal_dir/obj/i386/hal.def" || return 1
+    gen_def_from_src "$hal_dir/obj/i386/hal.def" "$hal_dir/HAL.SRC" || return 1
     # Running full nmake here is fine — it'll also compile the HAL objs
     # (needed by lib -def for @N decoration). Link happens later in build_hal.
     run_nmake "$hal_dir" "HAL - stubs lib (for ntoskrnl link)"
@@ -1188,8 +1203,10 @@ build_init() {
 
     mkdir -p "$linux_dir/obj/i386"
     # NTOSKRNL.EXE's own export .def (kernel API) — same cmd-stub redirect
-    # workaround as the HAL .def; see gen_def_from_src.
-    gen_def_from_src "$NTOS/INIT/NTOSKRNL.SRC" "$linux_dir/obj/i386/ntoskrnl.def" || return 1
+    # workaround as the HAL .def; see gen_def_from_src. The i386def.src
+    # fragment supplies the arch-only Ki*/Ex* exports HAL.DLL imports.
+    gen_def_from_src "$linux_dir/obj/i386/ntoskrnl.def" \
+        "$NTOS/INIT/NTOSKRNL.SRC" "$NTOS/INIT/I386DEF.SRC" || return 1
     python3 "$SCRIPT_DIR/tools/gen_objects.py" "$linux_dir"
 
     local rel_path="${linux_dir#$NT_ROOT}"
@@ -1218,7 +1235,7 @@ build_hal() {
 
     # Step 1: Build the HAL as a library (via nmake/MAKEFILE.DEF)
     mkdir -p "$hal_dir/obj/i386"
-    gen_def_from_src "$hal_dir/HAL.SRC" "$hal_dir/obj/i386/hal.def" || return 1
+    gen_def_from_src "$hal_dir/obj/i386/hal.def" "$hal_dir/HAL.SRC" || return 1
     run_nmake "$hal_dir" "HAL - MicroNT HAL (lib)"
 
     echo "========================================"
