@@ -747,6 +747,14 @@ def build_micront_software_hive(profile: str = "headless") -> Hive:
       .set_sz("CurrentType", "Uniprocessor Free") \
       .set_sz("SystemRoot", "C:\\")
 
+    # win.ini [windows] section (reached via the IniFileMapping below).
+    # shell32's IsProgram() reads "programs" through GetProfileString and
+    # treats only these extensions as directly-executable; everything else is
+    # a document needing a file association. Empty list ⇒ even cmd.exe is
+    # "no association", so Program Manager can't launch anything. Seed the
+    # classic NT default.
+    cv["Windows"].set_sz("programs", "com exe bat pif cmd")
+
     # Winlogon configuration — winlogon reads these via GetProfileString
     # (WINLOGON section → IniFileMapping → this registry path).
     wl = cv["Winlogon"]
