@@ -9,8 +9,10 @@
 #   component:  ke, rtl, ex, ob, se, ps, mm, cache, config, init, hal, all
 #   If no component specified, builds all
 #
-# Prerequisites: wibo-x86_64 binary at repo root, src/wibo-tools/ populated
-# with symlinks to PUBLIC/OAK/BIN/I386 + CRTDLL.DLL.
+# Prerequisites: a wibo binary — wibo-macos next to this script on macOS,
+# wibo-x86_64 at the repo root on Linux (chmod +x). The src/wibo-tools/
+# directory (symlinks to PUBLIC/OAK/BIN/I386 + CRTDLL.DLL) is provisioned
+# automatically on first run via setup-wibo-tools.sh.
 #
 
 set -e
@@ -19,7 +21,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 NT_ROOT="$SCRIPT_DIR/NT"
 NTOS="$NT_ROOT/PRIVATE/NTOS"
 
-WIBO_BIN="$(dirname "$SCRIPT_DIR")/wibo-x86_64"
+# Pick the right wibo binary for the host OS: wibo-macos (next to this
+# script) on macOS, wibo-x86_64 (at the repo root) on Linux.
+case "$(uname -s)" in
+    Darwin) WIBO_BIN="$SCRIPT_DIR/wibo-macos" ;;
+    *)      WIBO_BIN="$(dirname "$SCRIPT_DIR")/wibo-x86_64" ;;
+esac
 WIBO_TOOLS="$SCRIPT_DIR/wibo-tools"
 
 if [ ! -x "$WIBO_BIN" ]; then
@@ -35,14 +42,7 @@ fi
 # cmd.exe / MC.EXE we rebuild later (via build_cmdstub / build_mc).
 if [ ! -d "$WIBO_TOOLS" ]; then
     echo ">>> setting up $WIBO_TOOLS (first-time)"
-    mkdir -p "$WIBO_TOOLS"
-    for f in "$NT_ROOT"/PUBLIC/OAK/BIN/I386/*; do
-        ln -srf "$f" "$WIBO_TOOLS/$(basename "$f")"
-    done
-    # CRTDLL.DLL lives in the SDK LIB tree, not in OAK/BIN. NMAKE and most
-    # MSVC-era tools import from it, so wibo needs to find it alongside
-    # the host binaries (via WIBO_PATH or cwd).
-    ln -srf "$NT_ROOT/PUBLIC/SDK/LIB/I386/CRTDLL.DLL" "$WIBO_TOOLS/CRTDLL.DLL"
+    "$SCRIPT_DIR/setup-wibo-tools.sh"
 fi
 
 # Wibo only strips "Z:" and "C:" prefixes — everything is routed through Z: as
@@ -604,7 +604,8 @@ install_host_tool() {
         # Ensure wibo-tools has a symlink — the tool may not have existed
         # when wibo-tools was first provisioned (e.g. MC.EXE, midl, gensrv
         # are built from source and only appear after their build step).
-        ln -srf "$NT_ROOT/PUBLIC/OAK/BIN/I386/$name" "$WIBO_TOOLS/$name"
+        # Relative target (../NT/...) since `ln -r` is GNU-only (no macOS).
+        ln -sf "../NT/PUBLIC/OAK/BIN/I386/$name" "$WIBO_TOOLS/$name"
         echo ">>> installed $name"
     else
         echo "!!! $name: expected output $built not found" >&2
@@ -631,8 +632,7 @@ build_link() {
     run_nmake "$link_dir/DISASM68"  "link/disasm68.lib"     || return 1
     run_nmake "$link_dir/COFF"      "link/coff (link.exe)"  || return 1
     install_host_tool "$link_dir/COFF/obj/i386/link.exe" "LINK.EXE"
-    # Refresh wibo-tools symlink.
-    ln -srf "$NT_ROOT/PUBLIC/OAK/BIN/I386/LINK.EXE" "$WIBO_TOOLS/LINK.EXE"
+    # install_host_tool already refreshed the wibo-tools/LINK.EXE symlink.
     echo ">>> LINK.EXE rebuilt with error message resources"
 }
 

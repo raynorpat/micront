@@ -319,6 +319,7 @@ README-UEFI.md
 
 # wibo PE runner (downloaded binary + source checkout + auto-provisioned tools)
 /wibo/
+/src/wibo-macos
 /wibo-x86_64
 /wibo-x86_64.stock
 /wibo-i686
