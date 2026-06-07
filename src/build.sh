@@ -981,7 +981,7 @@ build_gui_import_stubs() {
     # NT generates user32p.def from USER32.DEF via `cl -EP -DPRIVATE=`,
     # stripping the PRIVATE keyword so those exports become normal import
     # stubs. Without this, `lib -def:` skips PRIVATE exports entirely.
-    sed 's/  *PRIVATE\b//' "$USER/CLIENT/USER32.DEF" > "$USER/CLIENT/user32p.def"
+    sed -E 's/[[:space:]]+PRIVATE([[:space:]]|$)/\1/' "$USER/CLIENT/USER32.DEF" > "$USER/CLIENT/user32p.def"
     _lib_from_def user32p.lib "$USER/CLIENT/user32p.def" "$user_obj" || return 1
     _lib_from_def gdi32p.lib "$GDI/CLIENT/gdi32p.def"  "$gdi_obj"  || return 1
 }
