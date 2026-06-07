@@ -747,13 +747,9 @@ def build_micront_software_hive(profile: str = "headless") -> Hive:
       .set_sz("CurrentType", "Uniprocessor Free") \
       .set_sz("SystemRoot", "C:\\")
 
-    # win.ini [windows] section (reached via the IniFileMapping below).
-    # shell32's IsProgram() reads "programs" through GetProfileString and
-    # treats only these extensions as directly-executable; everything else is
-    # a document needing a file association. Empty list ⇒ even cmd.exe is
-    # "no association", so Program Manager can't launch anything. Seed the
-    # classic NT default.
-    cv["Windows"].set_sz("programs", "com exe bat pif cmd")
+    # NOTE: the win.ini [windows] "programs" value lives in the per-user
+    # DEFAULT hive (HKCU), NOT here — its IniFileMapping prefix is USR:.
+    # See build_micront_default_hive().
 
     # Winlogon configuration — winlogon reads these via GetProfileString
     # (WINLOGON section → IniFileMapping → this registry path).
@@ -811,11 +807,13 @@ def build_micront_software_hive(profile: str = "headless") -> Hive:
 
     # IniFileMapping — BaseSrvInitializeIniFileMappings reads this tree
     # to map GetProfileString("section","key") calls to registry paths.
-    # Format: value "" (default) = "SYS:registrypath" maps the whole
-    # section. SYS: = HKLM, USR: = HKCU.
+    # Format: value "" (default) = "<prefix>:registrypath" maps the whole
+    # section. SYS: = HKLM, USR: = HKCU. The prefixes/paths match NT 3.5's
+    # PUBLIC/OAK/BIN/SOFTWARE.INI: the [windows] section is per-user (USR:),
+    # but [WINLOGON] is machine-wide (SYS:).
     ifm = h["Microsoft\\Windows NT\\CurrentVersion\\IniFileMapping\\win.ini"]
     ifm["windows"] \
-        .set_sz("", "SYS:Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows")
+        .set_sz("", "USR:Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows")
     ifm["WINLOGON"] \
         .set_sz("", "SYS:Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon")
 
@@ -865,6 +863,16 @@ def build_micront_default_hive(profile: str = "headless") -> Hive:
         # Only GUI profile needs these — headless never touches
         # PMAP_COLORS / PMAP_DESKTOP and so never mounts .Default.
         return h
+
+    # ---- win.ini [windows] programs (per-user; USR: prefix) ----
+    # shell32 IsProgram() reads this via GetProfileString("windows","programs")
+    # → IniFileMapping → USR:Software\Microsoft\Windows NT\CurrentVersion\Windows.
+    # It's the whitelist of extensions Program Manager treats as directly
+    # executable; an empty list makes even cmd.exe "no association". This is the
+    # HKCU half — before logon HKCU == .Default, and our standalone Administrator
+    # keeps .Default as its profile, so it's live for progman too.
+    h["Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows"] \
+        .set_sz("programs", "com exe bat pif cmd")
 
     # ---- Control Panel\Colors ----
     # Classic Windows 3.1 / NT 3.5 "Windows Default" scheme. Values are
