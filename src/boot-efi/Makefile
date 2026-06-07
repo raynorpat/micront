@@ -81,9 +81,14 @@ $(EFI_CRT0):
 	./setup-gnu-efi.sh
 endif
 
+# NOTE: -j .rodata is required with gnu-efi's stock linker script, which emits
+# .rodata as its own output section. Without it, string literals and other
+# read-only data are dropped from the PE, the firmware never loads them, and
+# rip-relative reads hit unmapped memory (garbage). Debian's gnu-efi lds folds
+# .rodata into .data so its omission goes unnoticed there — keep it explicit.
 BOOTX64.EFI: loader.so
 	$(OBJCOPY) \
-	    -j .text -j .sdata -j .data -j .dynamic -j .dynsym -j .rel \
+	    -j .text -j .sdata -j .data -j .rodata -j .dynamic -j .dynsym -j .rel \
 	    -j .rela -j .reloc \
 	    $(EFI_OBJCOPY_FMT) $< $@
 
