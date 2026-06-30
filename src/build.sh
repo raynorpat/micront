@@ -4,8 +4,10 @@
 # Builds NT 3.5 kernel components using the original Microsoft toolchain
 # under wibo (a minimal Win32 PE runner).
 #
-# Usage: ./build.sh [--debug] [component]
+# Usage: ./build.sh [--debug] [--syms] [component]
 #   --debug:    enable WIBO_DEBUG tracing
+#   --syms:     build kernel + drivers (NTOS) with CodeView and emit
+#               <name>.DBG + <name>.dwf gdb sidecars (off by default)
 #   component:  ke, rtl, ex, ob, se, ps, mm, cache, config, init, hal, all
 #   If no component specified, builds all
 #
@@ -50,6 +52,25 @@ fi
 path_to_win() { printf 'Z:%s' "$(echo "$1" | sed 's|/|\\|g')"; }
 NT_ROOT_WIN="$(path_to_win "$NT_ROOT")"
 WIBO_TOOLS_WIN="$(path_to_win "$WIBO_TOOLS")"
+
+# --syms: opt-in CodeView build that emits .DBG/.dwf gdb sidecars.
+# Sets NTDEBUG=ntsd + NTDEBUGTYPE=windbg, which MAKEFILE.DEF/I386MK.INC turn
+# into /Z7 compiles + -debug:full -debugtype:cv links (LINK auto-runs cvpack).
+# splitsym then extracts each PE's CV blob to a <name>.DBG sidecar and
+# dbg2dwf converts it to a <name>.dwf ELF gdb loads. Off by default; the
+# shipped .sys/.dll are retail-identical bar a 28-byte debug-dir entry.
+# Toggling the mode wipes obj/i386 (/Z7 objs can't link with non-/Z7 ones).
+SYMS=0
+_BUILD_ARGS=()
+for _a in "$@"; do
+    case "$_a" in
+        --syms)    SYMS=1 ;;
+        --no-syms) SYMS=0 ;;
+        *)         _BUILD_ARGS+=("$_a") ;;
+    esac
+done
+set -- "${_BUILD_ARGS[@]}"
+
 # _NTROOT is the path component under the drive, e.g. "\home\user\...\NT".
 # NT makefiles concatenate $(_NTDRIVE)$(_NTROOT) to re-form the absolute path.
 _NTROOT_WIN="$(echo "$NT_ROOT" | sed 's|/|\\|g')"
@@ -184,8 +205,18 @@ run_nmake() {
         umappl_override=""
     fi
 
+    # --syms: build kernel + drivers (PRIVATE/NTOS) with CodeView so we can
+    # emit .dwf gdb sidecars. NTDEBUG/NTDEBUGTYPE here override the empty
+    # NT_ENV_ARR entries (env: last assignment wins). Scoped to NTOS so host
+    # tools (SDKTOOLS/RPC) and the Win32 userland keep their retail/coff
+    # build — cvpack only needs to exist for the NTOS links.
+    local syms_env=()
+    if [ "$SYMS" = "1" ] && [[ "$linux_dir" == *"/PRIVATE/NTOS/"* ]]; then
+        syms_env=("NTDEBUG=ntsdnodbg" "NTDEBUGTYPE=windbg")
+    fi
+
     env -i HOME="$HOME" TERM="${TERM:-dumb}" ${WIBO_DEBUG:+"WIBO_DEBUG=$WIBO_DEBUG"} \
-        "${NT_ENV_ARR[@]}" "MAKEDIR=${makedir_win}" \
+        "${NT_ENV_ARR[@]}" "${syms_env[@]}" "MAKEDIR=${makedir_win}" \
         "$WIBO_BIN" --chdir "$linux_dir" \
             "${WIBO_TOOLS}/NMAKE.EXE" /NOLOGO NTTEST= UMTEST= \
             ${umappl_override:+"$umappl_override"} "${extra_args[@]}"
@@ -732,6 +763,59 @@ build_debugtools() {
     build_cvpack   || return $?
 }
 
+# --syms guard: /Z7 objs and non-/Z7 objs can't be linked together, so a
+# mode toggle must start from clean obj trees. Stamp the last mode and wipe
+# every component obj/i386 when it changes.
+_syms_guard() {
+    local stamp; stamp="$(dirname "$SCRIPT_DIR")/build/.syms-mode"
+    local prev=""; [ -f "$stamp" ] && prev="$(cat "$stamp")"
+    if [ "$prev" != "$SYMS" ]; then
+        echo ">>> --syms toggled (${prev:-unset} -> $SYMS); wiping NTOS obj/i386 trees"
+        find "$NTOS" -type d -path '*/obj/i386' -prune -exec rm -rf {} + 2>/dev/null
+        mkdir -p "$(dirname "$stamp")"; echo "$SYMS" > "$stamp"
+    fi
+}
+
+# splitsym a PE into <name>.DBG, then dbg2dwf into <name>.dwf gdb sidecar.
+# Skips up-to-date outputs and PEs with no CV debug directory.
+_dwf_one() {
+    local img="$1"; [ -f "$img" ] || return 0
+    local stem="${img%.*}" dbg="${img%.*}.DBG" dwf="${img%.*}.dwf"
+    [ -f "$dwf" ] && [ "$dwf" -nt "$img" ] && return 0
+    run_wibo_tool "$WIBO_TOOLS" SPLITSYM.EXE -a "$(path_to_win "$img")" >/dev/null 2>&1 || true
+    if [ ! -f "$dbg" ]; then echo "    skip $(basename "$img"): no CV debug dir"; return 0; fi
+    # dbg2dwf rejects retail (coff) .DBGs — expected for any non-CodeView
+    # image (e.g. a driver built before --syms), so skip rather than abort.
+    if ! run_wibo_tool "$WIBO_TOOLS" DBG2DWF.EXE "$(path_to_win "$dbg")" "$(path_to_win "$dwf")" >/dev/null 2>&1; then
+        echo "    skip $(basename "$img"): no CodeView (retail build?)"
+        return 0
+    fi
+    echo ">>> dwf: ${dwf#$NT_ROOT/}"
+}
+_dwf_sweep_dir() {
+    local d="$1"; [ -d "$d" ] || return 0
+    local f
+    for f in "$d"/*.sys "$d"/*.dll "$d"/*.exe; do [ -f "$f" ] && { _dwf_one "$f" || return 1; }; done
+}
+# Generate .DBG/.dwf for every built kernel/driver image (post-build pass).
+_dwf_generate() {
+    echo "========================================"
+    echo "Generating .DBG/.dwf gdb sidecars"
+    echo "========================================"
+    _dwf_sweep_dir "$NT_ROOT/PUBLIC/SDK/LIB/I386" || return 1   # drivers + DLLs land here
+    _dwf_one "$NTOS/INIT/UP/obj/i386/ntoskrnl.exe" || return 1  # gdb's primary target
+    _dwf_one "$NTOS/NTHALS/HAL/obj/i386/hal.dll"   || return 1
+}
+# Standalone: build the host tools then emit sidecars for whatever's built.
+build_dwf() {
+    if [ "$SYMS" != "1" ]; then
+        echo "build_dwf: pass --syms (CodeView build) first — nothing to convert."
+        return 0
+    fi
+    build_debugtools || return 1
+    _dwf_generate
+}
+
 # MC (message compiler). Two patches live in our source tree relative to
 # stock NT 3.5 mc.c:
 #   - MC.C drops user32!CharToOem (wibo has no stub; safe for ASCII .mc).
@@ -1274,8 +1358,13 @@ build_init() {
     local rel_path="${linux_dir#$NT_ROOT}"
     local makedir_win="${NT_ROOT_WIN}$(echo "$rel_path" | sed 's|/|\\|g')"
 
+    # --syms: build the kernel EXE with CodeView (MAKEFILE.DEF -> /Z7 +
+    # -debugtype:cv + cvpack) so splitsym/dbg2dwf can emit ntoskrnl.dwf.
+    local syms_env=()
+    [ "$SYMS" = "1" ] && syms_env=("NTDEBUG=ntsdnodbg" "NTDEBUGTYPE=windbg")
+
     env -i HOME="$HOME" TERM="${TERM:-dumb}" ${WIBO_DEBUG:+"WIBO_DEBUG=$WIBO_DEBUG"} \
-        "${NT_ENV_ARR[@]}" "MAKEDIR=${makedir_win}" \
+        "${NT_ENV_ARR[@]}" "${syms_env[@]}" "MAKEDIR=${makedir_win}" \
         "$WIBO_BIN" --chdir "$linux_dir" \
             "${WIBO_TOOLS}/NMAKE.EXE" /NOLOGO UMTEST= UMAPPL=
 
@@ -1304,11 +1393,16 @@ build_hal() {
 
     mkdir -p "$hal_dir/obj/i386"
 
+    # --syms: link with CodeView (objs are already /Z7 from the nmake lib
+    # step above); LINK auto-runs cvpack. Retail otherwise.
+    local hal_dbg=(-DEBUG:MINIMAL -DEBUGTYPE:COFF)
+    [ "$SYMS" = "1" ] && hal_dbg=(-DEBUG:FULL -DEBUGTYPE:CV)
+
     # Link HAL.DLL (no RC file — no version resources needed)
     run_wibo_tool "$hal_dir" link \
         -OUT:obj\\i386\\hal.dll -DLL -MACHINE:i386 -BASE:0x80400000 \
         -SUBSYSTEM:NATIVE -ENTRY:HalInitSystem@8 -NODEFAULTLIB \
-        -RELEASE -DEBUG:MINIMAL -DEBUGTYPE:COFF -OPT:REF \
+        -RELEASE "${hal_dbg[@]}" -OPT:REF \
         obj\\i386\\*.obj \
         "${NT_ROOT_WIN}\\PUBLIC\\SDK\\LIB\\I386\\ntoskrnl.lib" \
         "${NT_ROOT_WIN}\\PUBLIC\\SDK\\LIB\\I386\\libcntpr.lib" \
@@ -1624,6 +1718,8 @@ _dispatch_one() {
                 echo "Group targets:   ntoskrnl, drivers, drivers-gui,"
                 echo "                 userland-micront, userland, userland-gui, disk"
                 echo "Debug toolchain: debugtools (imagehlp+splitsym, dbg2dwf, cvdump, cvpack)"
+                echo "Flags:           --syms  build NTOS with CodeView + emit .DBG/.dwf gdb"
+                echo "                         sidecars (e.g. ./build.sh --syms ntoskrnl); --no-syms"
                 echo ""
                 echo "Individual components (in build order):"
                 echo "  ntoskrnl:          ${NTOSKRNL_TARGETS[*]}"
@@ -1638,10 +1734,22 @@ _dispatch_one() {
     esac
 }
 
+# --syms: wipe NTOS objs on mode toggle, and build the debug host tools up
+# front so cvpack.exe is on PATH when the CodeView kernel/driver links run.
+if [ "$SYMS" = "1" ]; then
+    _syms_guard
+    build_debugtools || exit 1
+fi
+
 if [ $# -eq 0 ]; then
     _dispatch_one all
 else
     for comp in "$@"; do
         _dispatch_one "$comp"
     done
+fi
+
+# --syms: convert every freshly-built CodeView image to a .DBG/.dwf sidecar.
+if [ "$SYMS" = "1" ]; then
+    _dwf_generate || exit 1
 fi
