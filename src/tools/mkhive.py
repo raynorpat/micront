@@ -857,6 +857,18 @@ def build_micront_software_hive(profile: str = "headless") -> Hive:
       .set_sz("CurrentType", "Uniprocessor Free") \
       .set_sz("SystemRoot", "C:\\")
 
+    # Product identity — read by winver, app About boxes, GetVersionEx
+    # consumers, and SETUPDLL. NT setup writes these (RegisteredOwner/Org
+    # are user-supplied at install; ProductId is generated). ProductName
+    # is the canonical "Windows NT" (NT 3.5 setup UNAME_SYSNAME). PathName
+    # mirrors the install root; SoftwareType=SYSTEM marks the OS product.
+    cv.set_sz("ProductName", "Windows NT") \
+      .set_sz("PathName", "C:\\") \
+      .set_sz("SoftwareType", "SYSTEM") \
+      .set_sz("RegisteredOrganization", "MicroNT") \
+      .set_sz("RegisteredOwner", "MicroNT") \
+      .set_sz("ProductId", "00000-000-0000000-00000")
+
     # NOTE: the win.ini [windows] "programs" value lives in the per-user
     # DEFAULT hive (HKCU), NOT here — its IniFileMapping prefix is USR:.
     # See build_micront_default_hive().
