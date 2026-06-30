@@ -768,9 +768,9 @@ build_debugtools() {
 # every component obj/i386 when it changes.
 _syms_guard() {
     local stamp; stamp="$(dirname "$SCRIPT_DIR")/build/.syms-mode"
-    local prev=""; [ -f "$stamp" ] && prev="$(cat "$stamp")"
+    local prev="0"; [ -f "$stamp" ] && prev="$(cat "$stamp")"
     if [ "$prev" != "$SYMS" ]; then
-        echo ">>> --syms toggled (${prev:-unset} -> $SYMS); wiping NTOS obj/i386 trees"
+        echo ">>> --syms toggled ($prev -> $SYMS); wiping NTOS obj/i386 trees"
         find "$NTOS" -type d -path '*/obj/i386' -prune -exec rm -rf {} + 2>/dev/null
         mkdir -p "$(dirname "$stamp")"; echo "$SYMS" > "$stamp"
     fi
@@ -1734,10 +1734,11 @@ _dispatch_one() {
     esac
 }
 
-# --syms: wipe NTOS objs on mode toggle, and build the debug host tools up
-# front so cvpack.exe is on PATH when the CodeView kernel/driver links run.
+# Always run the guard so a mode change in EITHER direction (retail<->syms)
+# wipes the now-incompatible NTOS objs. Then, for --syms, build the debug
+# host tools up front so cvpack.exe is on PATH when the CodeView links run.
+_syms_guard
 if [ "$SYMS" = "1" ]; then
-    _syms_guard
     build_debugtools || exit 1
 fi
 
