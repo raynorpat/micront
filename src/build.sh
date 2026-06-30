@@ -188,7 +188,7 @@ run_nmake() {
                     [ -f "$_src" ] || continue
                     if [ -n "$_oldest_obj" ] && [ "$_src" -nt "$_oldest_obj" ]; then
                         echo "  header changed: $(basename "$_src") (newer than $(basename "$_oldest_obj")) — nuking $_obj_dir/*.obj"
-                        rm -f "$_obj_dir"/*.obj
+                        rm -f "$_obj_dir"/*.obj "$_obj_dir"/*.pch
                         _nuked=1
                         break 2
                     fi
@@ -871,6 +871,56 @@ _crt_variant() {
     echo "Building: $desc - roll-up"
     echo "========================================"
     run_wibo_tool "$root" NMAKE.EXE /NOLOGO "CRTLIBTYPE=$variant" "386=1"
+}
+
+# TYPES — regenerate the composite OLE public headers (objbase.h, ole2.h)
+# from BASE/TYPES the way NT's types project does: MIDL the .idl component
+# files (wtypes/unknwn/com, ole2x) then concatenate the .X prologue + the
+# generated component headers (with their __xxx_h__ guards intact) + the .Y
+# epilogue of API prototypes. The embedded-with-guard wtypes block is what
+# makes objbase.h self-suppress against the standalone wtypes.h that iface.h
+# pulls in — the source of the old duplicate-definition collisions.
+_types_midl() {
+    # _types_midl <subdir> <import_dirs_win> <idl> [<idl>...]
+    local sub="$1" imp="$2"; shift 2
+    local inc="${NT_ROOT_WIN}\\PRIVATE\\BASE\\CINC;${NT_ROOT_WIN}\\PUBLIC\\SDK\\INC;${NT_ROOT_WIN}\\PUBLIC\\OAK\\INC"
+    [ -n "$imp" ] && inc="$imp;$inc"
+    mkdir -p "$sub/gen"
+    local idl
+    for idl in "$@"; do
+        run_wibo_tool "$sub" midl "$idl.idl" -header "gen\\$idl.h" \
+            -Zp8 -I"$inc" -Oi -no_warn -char unsigned -error allocation -mode c_port -DMIDL_PASS \
+            -cpp_cmd "$(wibo_tool_path cl)" -cpp_opt "-nologo -DMIDL_PASS -I$inc -E -Tc" \
+            || { echo "!!! types: midl $idl failed"; return 1; }
+    done
+}
+build_types() {
+    echo "========================================"
+    echo "Building: TYPES — regenerate objbase.h / ole2.h public headers"
+    echo "========================================"
+    local TY="$BASE_D/TYPES" inc="$NT_ROOT/PUBLIC/SDK/INC"
+    local compobj_win="${NT_ROOT_WIN}\\PRIVATE\\BASE\\TYPES\\COMPOBJ"
+    _types_midl "$TY/COMPOBJ" "" wtypes unknwn com || return 1
+    _types_midl "$TY/NEW_OLE" "$compobj_win" ole2x   || return 1
+    python3 "$SCRIPT_DIR/tools/assemble_ole_header.py" objbase "$TY/COMPOBJ" "$TY/COMPOBJ/gen" "$inc/OBJBASE.H" || return 1
+    python3 "$SCRIPT_DIR/tools/assemble_ole_header.py" ole2    "$TY/NEW_OLE" "$TY/NEW_OLE/gen"   "$inc/OLE2.H"    || return 1
+    # The standalone wtypes/unknwn/com public headers come from the same MIDL
+    # run — keep them in lockstep with what objbase.h embeds. Normalize MIDL's
+    # "generated ... at <date>" stamp so regeneration stays byte-deterministic.
+    python3 - "$TY/COMPOBJ/gen" "$inc" <<'PY' || return 1
+import re, sys
+gen, inc = sys.argv[1], sys.argv[2]
+ts = re.compile(r'^(\s*\*?\s*at )\w{3} \w{3} .* \d{4}\s*$')
+for lo, up in (("wtypes.h","WTYPES.H"),("unknwn.h","UNKNWN.H"),("com.h","COM.H")):
+    src = open(f"{gen}/{lo}", encoding="latin-1").read().splitlines()
+    open(f"{inc}/{up}","w",encoding="latin-1",newline="").write(   # CRLF to match tree
+        "\r\n".join(ts.sub(r'\1<generated>', l) for l in src) + "\r\n")
+PY
+    # objbase.h/ole2.h feed CAIROLE's precompiled header (com2int.pch); a stale
+    # PCH baked from old headers silently overrides these, so drop it.
+    rm -f "$BASE_D/CAIROLE/COM/INC/DAYTONA/obj/i386/com2int.pch" \
+          "$BASE_D/CAIROLE/COM/INC/DAYTONA/obj/i386/com2int.obj"
+    echo ">>> TYPES: OK"
 }
 
 # CAIROLE (OLE2/COM) — built incrementally from source under BASE/CAIROLE.

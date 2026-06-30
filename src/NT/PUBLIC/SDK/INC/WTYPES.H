@@ -18,7 +18,7 @@ void __RPC_USER MIDL_user_free( void __RPC_FAR * );
 
 /****************************************
  * Generated header for interface: IWinTypes
- * at Sun Aug 14 13:21:34 1994
+ * at <generated>
  * using MIDL 2.00.71
  ****************************************/
 /* [auto_handle][unique][version][uuid] */ 

@@ -10,13 +10,21 @@
 //  History:    02-7-94   terryru           Created.
 //
 //----------------------------------------------------------------------------
+
+//
+// TerryRu
+// Include rpc.h, and rpcndr.h to define basic midl types, like byte, and boolean.
+// Try to rework it so that we don't need to include all of rpc when DCOM is not needed.
+//
+
+#include <rpc.h>
+#include <rpcndr.h>
+
 #if !defined( _OBJBASE_H_ )
 #define _OBJBASE_H_
 
 // Set packing to 8 for ISV, and Chicago support (terryru)
-#ifndef RC_INVOKED
-#pragma pack(8)
-#endif //RC_INVOKED
+#include "pshpack8.h"
 
 // Component Object Model defines, and macros
 
@@ -46,6 +54,7 @@
 
 #endif
 
+
 #define STDAPI                  EXTERN_C HRESULT STDAPICALLTYPE
 #define STDAPI_(type)           EXTERN_C type STDAPICALLTYPE
 
@@ -60,8 +69,13 @@
 #define STDMETHODIMPV           HRESULT STDMETHODVCALLTYPE
 #define STDMETHODIMPV_(type)    type STDMETHODVCALLTYPE
 
-
-
+#ifdef _OLE32_
+#define WINOLEAPI        STDAPI
+#define WINOLEAPI_(type) STDAPI_(type)
+#else
+#define WINOLEAPI        EXTERN_C DECLSPEC_IMPORT HRESULT STDAPICALLTYPE
+#define WINOLEAPI_(type) EXTERN_C DECLSPEC_IMPORT type STDAPICALLTYPE
+#endif
 
 /****** Interface Declaration ***********************************************/
 
@@ -180,12 +194,14 @@
 #define THIS_                   INTERFACE FAR* This,
 #define THIS                    INTERFACE FAR* This
 #ifdef CONST_VTABLE
+#define CONST_VTBL const
 #define DECLARE_INTERFACE(iface)    typedef interface iface { \
                                     const struct iface##Vtbl FAR* lpVtbl; \
                                 } iface; \
                                 typedef const struct iface##Vtbl iface##Vtbl; \
                                 const struct iface##Vtbl
 #else
+#define CONST_VTBL
 #define DECLARE_INTERFACE(iface)    typedef interface iface { \
                                     struct iface##Vtbl FAR* lpVtbl; \
                                 } iface; \
@@ -196,94 +212,6 @@
 
 #endif
 
-// macros to define byte pattern for a GUID.
-//      Example: DEFINE_GUID(GUID_XXX, a, b, c, ...);
-//
-// Each dll/exe must initialize the GUIDs once.  This is done in one of
-// two ways.  If you are not using precompiled headers for the file(s) which
-// initializes the GUIDs, define INITGUID before including objbase.h.  This
-// is how OLE builds the initialized versions of the GUIDs which are included
-// in ole2.lib.  The GUIDs in ole2.lib are all defined in the same text
-// segment GUID_TEXT.
-//
-// The alternative (which some versions of the compiler don't handle properly;
-// they wind up with the initialized GUIDs in a data, not a text segment),
-// is to use a precompiled version of objbase.h and then include initguid.h
-// after objbase.h followed by one or more of the guid defintion files.
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-#ifndef GUID_DEFINED
-#define GUID_DEFINED
-typedef struct _GUID
-{
-    unsigned long Data1;
-    unsigned short Data2;
-    unsigned short Data3;
-    unsigned char Data4[8];
-} GUID;
-#endif /* GUID_DEFINED */
-
-#ifndef INITGUID
-#define DEFINE_GUID(name, l, w1, w2, b1, b2, b3, b4, b5, b6, b7, b8) \
-    EXTERN_C const GUID CDECL FAR name
-#else
-
-#define DEFINE_GUID(name, l, w1, w2, b1, b2, b3, b4, b5, b6, b7, b8) \
-        EXTERN_C const GUID CDECL name \
-                = { l, w1, w2, { b1, b2,  b3,  b4,  b5,  b6,  b7,  b8 } }
-#endif // INITGUID
-
-#define DEFINE_OLEGUID(name, l, w1, w2) \
-    DEFINE_GUID(name, l, w1, w2, 0xC0,0,0,0,0,0,0,0x46)
-
-#define IsEqualIID(riid1, riid2) IsEqualGUID(riid1, riid2)
-#define IsEqualCLSID(rclsid1, rclsid2) IsEqualGUID(rclsid1, rclsid2)
-
-#ifdef __cplusplus
-
-// because GUID is defined elsewhere in WIN32 land, the operator == and !=
-// are moved outside the class to global scope.
-
-inline BOOL operator==(const GUID& guidOne, const GUID& guidOther)
-{
-#ifdef WIN32
-    return !memcmp(&guidOne,&guidOther,sizeof(GUID));
-#else
-    return !_fmemcmp(&guidOne,&guidOther,sizeof(GUID)); }
-#endif
-}
-
-inline BOOL operator!=(const GUID& guidOne, const GUID& guidOther)
-{
-    return !(guidOne == guidOther);
-}
-
-#endif // __cpluscplus
-
-
-
-
-/****** OLE character defines ******************************************/
-
-#if defined(WIN32) && !defined(OLE2ANSI)
-
-#define OLESTR(str)     L##str
-
-#else  //Win32
-
-#define OLESTR(str)     str
-
-#endif //!WIN32
 
 
 
@@ -313,14 +241,6 @@ inline BOOL operator!=(const GUID& guidOne, const GUID& guidOther)
 
 #define LISet32(li, v) ((li).HighPart = (v) < 0 ? -1 : 0, (li).LowPart = (v))
 
-
-#if !defined(_WINNT_) && !defined(_NTDEF_)
-typedef struct _ULARGE_INTEGER {
-        DWORD LowPart;
-        DWORD HighPart;
-} ULARGE_INTEGER, *PULARGE_INTEGER;
-#endif // _WINNT_
-
 #define ULISet32(li, v) ((li).HighPart = 0, (li).LowPart = (v))
 
 
@@ -346,14 +266,6 @@ typedef enum tagREGCLS
     REGCLS_MULTI_SEPARATE = 2   // multiple use, but separate control over each
                                 // context.
 } REGCLS;
-
-// COM initialization flags; passed to CoInitialize.
-typedef enum tagCOINIT
-{
-  COINIT_MULTITHREADED = 0,      // OLE calls objects on any thread.
-  COINIT_SINGLETHREADED = 1,       // OLE calls objects on single thread.
-  COINIT_APARTMENTTHREADED = 2     // Apartment model (used by CAIROLE COM).
-} COINIT;
 
 // interface marshaling definitions
 #define MARSHALINTERFACE_MIN 500 // minimum number of bytes for interface marshl
@@ -388,102 +300,84 @@ typedef enum tagCOINIT
 #define STGM_CONVERT            0x00020000L
 #define STGM_FAILIFTHERE        0x00000000L
 
-//
-// TerryRu
-// Include rpc.h, and rpcndr.h to define basic midl types, like byte, and boolean.
-// Try to rework it so that we don't need to include all of rpc when DCOM is not needed.
-//
 
-
-#include <rpc.h>
-#include <rpcndr.h>
-
-#ifndef __WTYPES_H__
-#define __WTYPES_H__
+#ifndef __wtypes_h__
+#define __wtypes_h__
 
 #ifdef __cplusplus
-extern "C" {
-#endif
+extern "C"{
+#endif 
 
-#define small char
+/* Forward Declarations */ 
+
+void __RPC_FAR * __RPC_USER MIDL_user_allocate(size_t);
+void __RPC_USER MIDL_user_free( void __RPC_FAR * ); 
+
+#ifndef __IWinTypes_INTERFACE_DEFINED__
+#define __IWinTypes_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IWinTypes
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [auto_handle][unique][version][uuid] */ 
 
 
+			/* size is 8 */
+typedef struct  tagRemHGLOBAL
+    {
+    long fNullHGlobal;
+    unsigned long cbData;
+    /* [size_is] */ byte data[ 1 ];
+    }	RemHGLOBAL;
 
+			/* size is 16 */
+typedef struct  tagRemHMETAFILEPICT
+    {
+    long mm;
+    long xExt;
+    long yExt;
+    unsigned long cbData;
+    /* [size_is] */ byte data[ 1 ];
+    }	RemHMETAFILEPICT;
 
-extern RPC_IF_HANDLE IWinTypes_ServerIfHandle;
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HMETAFILEPICT;
 
-extern RPC_IF_HANDLE IWinTypes_ClientIfHandle;
+			/* size is 4 */
+typedef struct  tagRemHENHMETAFILE
+    {
+    unsigned long cbData;
+    /* [size_is] */ byte data[ 1 ];
+    }	RemHENHMETAFILE;
 
-#ifndef _SIZE_T_DEFINED
-typedef unsigned int size_t;
-#define _SIZE_T_DEFINED
-#endif
+			/* size is 4 */
+typedef struct  tagRemHBITMAP
+    {
+    unsigned long cbData;
+    /* [size_is] */ byte data[ 1 ];
+    }	RemHBITMAP;
 
-#ifndef TRUE
-#define TRUE 1
-#endif
+			/* size is 4 */
+typedef struct  tagRemHPALETTE
+    {
+    unsigned long cbData;
+    /* [size_is] */ byte data[ 1 ];
+    }	RemHPALETTE;
 
-#ifndef FALSE
-#define FALSE 0
-#endif
+			/* size is 4 */
+typedef struct  tagRemBRUSH
+    {
+    unsigned long cbData;
+    /* [size_is] */ byte data[ 1 ];
+    }	RemHBRUSH;
 
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-typedef struct tagRemHGLOBAL
-  {
-  unsigned long cbData;
-  byte data[1];
-  }
-RemHGLOBAL;
-
-typedef struct tagRemHMETAFILEPICT
-  {
-  long mm;
-  long xExt;
-  long yExt;
-  unsigned long cbData;
-  byte data[1];
-  }
-RemHMETAFILEPICT;
-
-typedef void *HMETAFILEPICT;
-void __RPC_API HMETAFILEPICT_to_xmit (HMETAFILEPICT __RPC_FAR *, RemHMETAFILEPICT __RPC_FAR * __RPC_FAR *);
-void __RPC_API HMETAFILEPICT_from_xmit (RemHMETAFILEPICT __RPC_FAR *, HMETAFILEPICT __RPC_FAR *);
-void __RPC_API HMETAFILEPICT_free_inst (HMETAFILEPICT __RPC_FAR *);
-void __RPC_API HMETAFILEPICT_free_xmit (RemHMETAFILEPICT __RPC_FAR *);
-
-typedef struct tagRemHBITMAP
-  {
-  unsigned long cbData;
-  byte data[1];
-  }
-RemHBITMAP;
-
-typedef struct tagRemBRUSH
-  {
-  unsigned long cbData;
-  byte data[1];
-  }
-RemHBRUSH;
-
+#ifndef WIN32           // The following code is for Win16 only
 #ifndef WINAPI          // If not included with 3.1 headers... 
-#ifdef WIN32
-#define FAR
-#define PASCAL          __stdcall
-#define CDECL
-#else // !WIN32
 #define FAR             _far
 #define PASCAL          _pascal
 #define CDECL           _cdecl
-#endif // !WIN32
 #define VOID            void
 #define WINAPI      FAR PASCAL
 #define CALLBACK    FAR PASCAL
@@ -493,339 +387,296 @@ RemHBRUSH;
 #endif // !FALSE
 #ifndef _BYTE_DEFINED
 #define _BYTE_DEFINED
+			/* size is 1 */
 typedef unsigned char BYTE;
 
 #endif // !_BYTE_DEFINED
 #ifndef _WORD_DEFINED
 #define _WORD_DEFINED
+			/* size is 2 */
 typedef unsigned short WORD;
 
 #endif // !_WORD_DEFINED
-typedef unsigned int UINT;
-void __RPC_API UINT_to_xmit (UINT __RPC_FAR *, unsigned long __RPC_FAR * __RPC_FAR *);
-void __RPC_API UINT_from_xmit (unsigned long __RPC_FAR *, UINT __RPC_FAR *);
-void __RPC_API UINT_free_inst (UINT __RPC_FAR *);
-void __RPC_API UINT_free_xmit (unsigned long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ unsigned int UINT;
 
-typedef int INT;
-void __RPC_API INT_to_xmit (INT __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API INT_from_xmit (long __RPC_FAR *, INT __RPC_FAR *);
-void __RPC_API INT_free_inst (INT __RPC_FAR *);
-void __RPC_API INT_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ int INT;
 
+			/* size is 4 */
 typedef long BOOL;
 
 #ifndef _LONG_DEFINED
 #define _LONG_DEFINED
+			/* size is 4 */
 typedef long LONG;
 
 #endif // !_LONG_DEFINED
 #ifndef _WPARAM_DEFINED
 #define _WPARAM_DEFINED
+			/* size is 4 */
 typedef UINT WPARAM;
 
 #endif // _WPARAM_DEFINED
 #ifndef _DWORD_DEFINED
 #define _DWORD_DEFINED
+			/* size is 4 */
 typedef unsigned long DWORD;
 
 #endif // !_DWORD_DEFINED
 #ifndef _LPARAM_DEFINED
 #define _LPARAM_DEFINED
+			/* size is 4 */
 typedef LONG LPARAM;
 
 #endif // !_LPARAM_DEFINED
 #ifndef _LRESULT_DEFINED
 #define _LRESULT_DEFINED
+			/* size is 4 */
 typedef LONG LRESULT;
 
 #endif // !_LRESULT_DEFINED
-typedef void *HANDLE;
-void __RPC_API HANDLE_to_xmit (HANDLE __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HANDLE_from_xmit (long __RPC_FAR *, HANDLE __RPC_FAR *);
-void __RPC_API HANDLE_free_inst (HANDLE __RPC_FAR *);
-void __RPC_API HANDLE_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HANDLE;
 
-typedef void *HMODULE;
-void __RPC_API HMODULE_to_xmit (HMODULE __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HMODULE_from_xmit (long __RPC_FAR *, HMODULE __RPC_FAR *);
-void __RPC_API HMODULE_free_inst (HMODULE __RPC_FAR *);
-void __RPC_API HMODULE_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HMODULE;
 
-typedef void *HINSTANCE;
-void __RPC_API HINSTANCE_to_xmit (HINSTANCE __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HINSTANCE_from_xmit (long __RPC_FAR *, HINSTANCE __RPC_FAR *);
-void __RPC_API HINSTANCE_free_inst (HINSTANCE __RPC_FAR *);
-void __RPC_API HINSTANCE_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HINSTANCE;
 
-typedef void *HICON;
-void __RPC_API HICON_to_xmit (HICON __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HICON_from_xmit (long __RPC_FAR *, HICON __RPC_FAR *);
-void __RPC_API HICON_free_inst (HICON __RPC_FAR *);
-void __RPC_API HICON_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HICON;
 
-typedef void *HFONT;
-void __RPC_API HFONT_to_xmit (HFONT __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HFONT_from_xmit (long __RPC_FAR *, HFONT __RPC_FAR *);
-void __RPC_API HFONT_free_inst (HFONT __RPC_FAR *);
-void __RPC_API HFONT_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HFONT;
 
-typedef void *HGLOBAL;
-void __RPC_API HGLOBAL_to_xmit (HGLOBAL __RPC_FAR *, RemHGLOBAL __RPC_FAR * __RPC_FAR *);
-void __RPC_API HGLOBAL_from_xmit (RemHGLOBAL __RPC_FAR *, HGLOBAL __RPC_FAR *);
-void __RPC_API HGLOBAL_free_inst (HGLOBAL __RPC_FAR *);
-void __RPC_API HGLOBAL_free_xmit (RemHGLOBAL __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HGLOBAL;
 
+			/* size is 4 */
 typedef HGLOBAL HLOCAL;
 
-typedef void *HBITMAP;
-void __RPC_API HBITMAP_to_xmit (HBITMAP __RPC_FAR *, RemHBITMAP __RPC_FAR * __RPC_FAR *);
-void __RPC_API HBITMAP_from_xmit (RemHBITMAP __RPC_FAR *, HBITMAP __RPC_FAR *);
-void __RPC_API HBITMAP_free_inst (HBITMAP __RPC_FAR *);
-void __RPC_API HBITMAP_free_xmit (RemHBITMAP __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HBITMAP;
 
-typedef void *HBRUSH;
-void __RPC_API HBRUSH_to_xmit (HBRUSH __RPC_FAR *, RemHBRUSH __RPC_FAR * __RPC_FAR *);
-void __RPC_API HBRUSH_from_xmit (RemHBRUSH __RPC_FAR *, HBRUSH __RPC_FAR *);
-void __RPC_API HBRUSH_free_inst (HBRUSH __RPC_FAR *);
-void __RPC_API HBRUSH_free_xmit (RemHBRUSH __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HPALETTE;
 
-typedef void *HDC;
-void __RPC_API HDC_to_xmit (HDC __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HDC_from_xmit (long __RPC_FAR *, HDC __RPC_FAR *);
-void __RPC_API HDC_free_inst (HDC __RPC_FAR *);
-void __RPC_API HDC_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HBRUSH;
 
-typedef void *HRGN;
-void __RPC_API HRGN_to_xmit (HRGN __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HRGN_from_xmit (long __RPC_FAR *, HRGN __RPC_FAR *);
-void __RPC_API HRGN_free_inst (HRGN __RPC_FAR *);
-void __RPC_API HRGN_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HENHMETAFILE;
 
-typedef void *HWND;
-void __RPC_API HWND_to_xmit (HWND __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HWND_from_xmit (long __RPC_FAR *, HWND __RPC_FAR *);
-void __RPC_API HWND_free_inst (HWND __RPC_FAR *);
-void __RPC_API HWND_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HDC;
 
-typedef void *HMENU;
-void __RPC_API HMENU_to_xmit (HMENU __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HMENU_from_xmit (long __RPC_FAR *, HMENU __RPC_FAR *);
-void __RPC_API HMENU_free_inst (HMENU __RPC_FAR *);
-void __RPC_API HMENU_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HRGN;
 
-typedef void *HACCEL;
-void __RPC_API HACCEL_to_xmit (HACCEL __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HACCEL_from_xmit (long __RPC_FAR *, HACCEL __RPC_FAR *);
-void __RPC_API HACCEL_free_inst (HACCEL __RPC_FAR *);
-void __RPC_API HACCEL_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HWND;
 
-typedef void *HTASK;
-void __RPC_API HTASK_to_xmit (HTASK __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HTASK_from_xmit (long __RPC_FAR *, HTASK __RPC_FAR *);
-void __RPC_API HTASK_free_inst (HTASK __RPC_FAR *);
-void __RPC_API HTASK_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HMENU;
 
-typedef void *HKEY;
-void __RPC_API HKEY_to_xmit (HKEY __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HKEY_from_xmit (long __RPC_FAR *, HKEY __RPC_FAR *);
-void __RPC_API HKEY_free_inst (HKEY __RPC_FAR *);
-void __RPC_API HKEY_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HACCEL;
 
-typedef void *HDESK;
-void __RPC_API HDESK_to_xmit (HDESK __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HDESK_from_xmit (long __RPC_FAR *, HDESK __RPC_FAR *);
-void __RPC_API HDESK_free_inst (HDESK __RPC_FAR *);
-void __RPC_API HDESK_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HTASK;
 
-typedef void *HENHMETAFILE;
-void __RPC_API HENHMETAFILE_to_xmit (HENHMETAFILE __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HENHMETAFILE_from_xmit (long __RPC_FAR *, HENHMETAFILE __RPC_FAR *);
-void __RPC_API HENHMETAFILE_free_inst (HENHMETAFILE __RPC_FAR *);
-void __RPC_API HENHMETAFILE_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HKEY;
 
-typedef void *HMF;
-void __RPC_API HMF_to_xmit (HMF __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HMF_from_xmit (long __RPC_FAR *, HMF __RPC_FAR *);
-void __RPC_API HMF_free_inst (HMF __RPC_FAR *);
-void __RPC_API HMF_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HDESK;
 
-typedef void *HEMF;
-void __RPC_API HEMF_to_xmit (HEMF __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HEMF_from_xmit (long __RPC_FAR *, HEMF __RPC_FAR *);
-void __RPC_API HEMF_free_inst (HEMF __RPC_FAR *);
-void __RPC_API HEMF_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HMF;
 
-typedef void *HMETAFILE;
-void __RPC_API HMETAFILE_to_xmit (HMETAFILE __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HMETAFILE_from_xmit (long __RPC_FAR *, HMETAFILE __RPC_FAR *);
-void __RPC_API HMETAFILE_free_inst (HMETAFILE __RPC_FAR *);
-void __RPC_API HMETAFILE_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HEMF;
 
-typedef void *HPALETTE;
-void __RPC_API HPALETTE_to_xmit (HPALETTE __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HPALETTE_from_xmit (long __RPC_FAR *, HPALETTE __RPC_FAR *);
-void __RPC_API HPALETTE_free_inst (HPALETTE __RPC_FAR *);
-void __RPC_API HPALETTE_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HMETAFILE;
 
-typedef void *HPEN;
-void __RPC_API HPEN_to_xmit (HPEN __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HPEN_from_xmit (long __RPC_FAR *, HPEN __RPC_FAR *);
-void __RPC_API HPEN_free_inst (HPEN __RPC_FAR *);
-void __RPC_API HPEN_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HPEN;
 
-typedef void *HRSRC;
-void __RPC_API HRSRC_to_xmit (HRSRC __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HRSRC_from_xmit (long __RPC_FAR *, HRSRC __RPC_FAR *);
-void __RPC_API HRSRC_free_inst (HRSRC __RPC_FAR *);
-void __RPC_API HRSRC_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HRSRC;
 
-typedef void *HSTR;
-void __RPC_API HSTR_to_xmit (HSTR __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HSTR_from_xmit (long __RPC_FAR *, HSTR __RPC_FAR *);
-void __RPC_API HSTR_free_inst (HSTR __RPC_FAR *);
-void __RPC_API HSTR_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HSTR;
 
-typedef void *HWINSTA;
-void __RPC_API HWINSTA_to_xmit (HWINSTA __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HWINSTA_from_xmit (long __RPC_FAR *, HWINSTA __RPC_FAR *);
-void __RPC_API HWINSTA_free_inst (HWINSTA __RPC_FAR *);
-void __RPC_API HWINSTA_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HWINSTA;
 
-typedef void *HKL;
-void __RPC_API HKL_to_xmit (HKL __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HKL_from_xmit (long __RPC_FAR *, HKL __RPC_FAR *);
-void __RPC_API HKL_free_inst (HKL __RPC_FAR *);
-void __RPC_API HKL_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HKL;
 
-typedef void *HGDIOBJ;
-void __RPC_API HGDIOBJ_to_xmit (HGDIOBJ __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API HGDIOBJ_from_xmit (long __RPC_FAR *, HGDIOBJ __RPC_FAR *);
-void __RPC_API HGDIOBJ_free_inst (HGDIOBJ __RPC_FAR *);
-void __RPC_API HGDIOBJ_free_xmit (long __RPC_FAR *);
+			/* size is 4 */
+typedef /* [transmit] */ void __RPC_FAR *HGDIOBJ;
 
+			/* size is 4 */
 typedef HANDLE HDWP;
 
 #ifndef _HFILE_DEFINED
 #define _HFILE_DEFINED
+			/* size is 4 */
 typedef INT HFILE;
 
 #endif // !_HFILE_DEFINED
 #ifndef _HCURSOR_DEFINED
 #define _HCURSOR_DEFINED
+			/* size is 4 */
 typedef HICON HCURSOR;
 
 #endif // !_HCURSOR_DEFINED
 #ifndef _LPWORD_DEFINED
 #define _LPWORD_DEFINED
-typedef WORD *LPWORD;
+			/* size is 4 */
+typedef WORD __RPC_FAR *LPWORD;
 
 #endif // !_LPWORD_DEFINED
 #ifndef _LPDWORD_DEFINED
 #define _LPDWORD_DEFINED
-typedef DWORD *LPDWORD;
+			/* size is 4 */
+typedef DWORD __RPC_FAR *LPDWORD;
 
 #endif // !_LPDWORD_DEFINED
-typedef char *LPSTR;
+			/* size is 4 */
+typedef /* [string] */ char __RPC_FAR *LPSTR;
 
-typedef const char *LPCSTR;
+			/* size is 4 */
+typedef /* [string] */ const char __RPC_FAR *LPCSTR;
 
 #ifndef _WCHAR_DEFINED
 #define _WCHAR_DEFINED
+			/* size is 2 */
 typedef wchar_t WCHAR;
 
+			/* size is 2 */
 typedef WCHAR TCHAR;
 
 #endif // !_WCHAR_DEFINED
-typedef WCHAR *LPWSTR;
+			/* size is 4 */
+typedef /* [string] */ WCHAR __RPC_FAR *LPWSTR;
 
-typedef TCHAR *LPTSTR;
+			/* size is 4 */
+typedef /* [string] */ TCHAR __RPC_FAR *LPTSTR;
 
-typedef const WCHAR *LPCWSTR;
+			/* size is 4 */
+typedef /* [string] */ const WCHAR __RPC_FAR *LPCWSTR;
 
-typedef const TCHAR *LPCTSTR;
+			/* size is 4 */
+typedef /* [string] */ const TCHAR __RPC_FAR *LPCTSTR;
 
-typedef struct tagPALETTEENTRY
-  {
-  BYTE peRed;
-  BYTE peGreen;
-  BYTE peBlue;
-  BYTE peFlags;
-  }
-PALETTEENTRY;
+			/* size is 4 */
+typedef struct  tagPALETTEENTRY
+    {
+    BYTE peRed;
+    BYTE peGreen;
+    BYTE peBlue;
+    BYTE peFlags;
+    }	PALETTEENTRY;
 
-typedef struct tagPALETTEENTRY *PPALETTEENTRY;
+			/* size is 4 */
+typedef struct tagPALETTEENTRY __RPC_FAR *PPALETTEENTRY;
 
-typedef struct tagPALETTEENTRY *LPPALETTEENTRY;
+			/* size is 4 */
+typedef struct tagPALETTEENTRY __RPC_FAR *LPPALETTEENTRY;
 
-typedef struct tagLOGPALETTE
-  {
-  WORD palVersion;
-  WORD palNumEntries;
-  PALETTEENTRY palPalEntry[1];
-  }
-LOGPALETTE;
+#if 0
+			/* size is 4 */
+typedef struct  tagLOGPALETTE
+    {
+    WORD palVersion;
+    WORD palNumEntries;
+    /* [size_is] */ PALETTEENTRY palPalEntry[ 1 ];
+    }	LOGPALETTE;
 
-typedef struct tagLOGPALETTE *PLOGPALETTE;
+			/* size is 4 */
+typedef struct tagLOGPALETTE __RPC_FAR *PLOGPALETTE;
 
-typedef struct tagLOGPALETTE *LPLOGPALETTE;
+			/* size is 4 */
+typedef struct tagLOGPALETTE __RPC_FAR *LPLOGPALETTE;
 
+#else
+typedef struct tagLOGPALETTE {
+    WORD        palVersion;
+    WORD        palNumEntries;
+    PALETTEENTRY        palPalEntry[1];
+} LOGPALETTE, *PLOGPALETTE, *LPLOGPALETTE;
+#endif
 #ifndef _COLORREF_DEFINED
 #define _COLORREF_DEFINED
+			/* size is 4 */
 typedef DWORD COLORREF;
 
 #endif // !_COLORREF_DEFINED
 #ifndef _LPCOLORREF_DEFINED
 #define _LPCOLORREF_DEFINED
-typedef DWORD *LPCOLORREF;
+			/* size is 4 */
+typedef DWORD __RPC_FAR *LPCOLORREF;
 
 #endif // !_LPCOLORREF_DEFINED
-typedef HANDLE *LPHANDLE;
+			/* size is 4 */
+typedef HANDLE __RPC_FAR *LPHANDLE;
 
-typedef struct _RECTL
-  {
-  LONG left;
-  LONG top;
-  LONG right;
-  LONG bottom;
-  }
-RECTL;
+			/* size is 16 */
+typedef struct  _RECTL
+    {
+    LONG left;
+    LONG top;
+    LONG right;
+    LONG bottom;
+    }	RECTL;
 
-typedef struct _RECTL *PRECTL;
+			/* size is 4 */
+typedef struct _RECTL __RPC_FAR *PRECTL;
 
-typedef struct _RECTL *LPRECTL;
+			/* size is 4 */
+typedef struct _RECTL __RPC_FAR *LPRECTL;
 
-typedef struct tagPOINT
-  {
-  LONG x;
-  LONG y;
-  }
-POINT;
+			/* size is 8 */
+typedef struct  tagPOINT
+    {
+    LONG x;
+    LONG y;
+    }	POINT;
 
-typedef struct tagPOINT *PPOINT;
+			/* size is 4 */
+typedef struct tagPOINT __RPC_FAR *PPOINT;
 
-typedef struct tagPOINT *LPPOINT;
+			/* size is 4 */
+typedef struct tagPOINT __RPC_FAR *LPPOINT;
 
-typedef struct _POINTL
-  {
-  LONG x;
-  LONG y;
-  }
-POINTL;
+			/* size is 8 */
+typedef struct  _POINTL
+    {
+    LONG x;
+    LONG y;
+    }	POINTL;
 
-typedef struct _POINTL *PPOINTL;
+			/* size is 4 */
+typedef struct _POINTL __RPC_FAR *PPOINTL;
 
 #ifndef WIN16
-typedef struct tagSIZE
-  {
-  LONG cx;
-  LONG cy;
-  }
-SIZE;
+			/* size is 8 */
+typedef struct  tagSIZE
+    {
+    LONG cx;
+    LONG cy;
+    }	SIZE;
 
-typedef struct tagSIZE *PSIZE;
+			/* size is 4 */
+typedef struct tagSIZE __RPC_FAR *PSIZE;
 
-typedef struct tagSIZE *LPSIZE;
+			/* size is 4 */
+typedef struct tagSIZE __RPC_FAR *LPSIZE;
 
 #else // WIN16
 typedef struct tagSIZE
@@ -834,41 +685,50 @@ typedef struct tagSIZE
     INT cy;
 } SIZE, *PSIZE, *LPSIZE;
 #endif // WIN16
-typedef struct tagMSG
-  {
-  HWND hwnd;
-  UINT message;
-  WPARAM wParam;
-  LPARAM lParam;
-  DWORD time;
-  POINT pt;
-  }
-MSG;
+			/* size is 28 */
+typedef struct  tagMSG
+    {
+    HWND hwnd;
+    UINT message;
+    WPARAM wParam;
+    LPARAM lParam;
+    DWORD time;
+    POINT pt;
+    }	MSG;
 
-typedef struct tagMSG *PMSG;
+			/* size is 4 */
+typedef struct tagMSG __RPC_FAR *PMSG;
 
-typedef struct tagMSG *NPMSG;
+			/* size is 4 */
+typedef struct tagMSG __RPC_FAR *NPMSG;
 
-typedef struct tagMSG *LPMSG;
+			/* size is 4 */
+typedef struct tagMSG __RPC_FAR *LPMSG;
 
-typedef struct tagSIZEL
-  {
-  LONG cx;
-  LONG cy;
-  }
-SIZEL;
+			/* size is 8 */
+typedef struct  tagSIZEL
+    {
+    LONG cx;
+    LONG cy;
+    }	SIZEL;
 
-typedef struct tagSIZEL *PSIZEL;
+			/* size is 4 */
+typedef struct tagSIZEL __RPC_FAR *PSIZEL;
 
-typedef struct tagSIZEL *LPSIZEL;
+			/* size is 4 */
+typedef struct tagSIZEL __RPC_FAR *LPSIZEL;
 
 #endif  //WINAPI
+#endif  //!WIN32
 #if defined(WIN32) && !defined(OLE2ANSI)
+			/* size is 2 */
 typedef WCHAR OLECHAR;
 
-typedef OLECHAR *LPOLESTR;
+			/* size is 4 */
+typedef /* [string] */ OLECHAR __RPC_FAR *LPOLESTR;
 
-typedef const OLECHAR *LPCOLESTR;
+			/* size is 4 */
+typedef /* [string] */ const OLECHAR __RPC_FAR *LPCOLESTR;
 
 #define OLESTR(str) L##str
 #else
@@ -877,194 +737,234 @@ typedef LPSTR     LPOLESTR;
 typedef LPCSTR    LPCOLESTR;
 #define OLESTR(str) str
 #endif
-typedef const RECTL *LPCRECTL;
+			/* size is 4 */
+typedef const RECTL __RPC_FAR *LPCRECTL;
 
 #ifndef _WINDEF_
-typedef void *PVOID;
+			/* size is 4 */
+typedef void __RPC_FAR *PVOID;
 
-typedef void *LPVOID;
+			/* size is 4 */
+typedef void __RPC_FAR *LPVOID;
 
-typedef struct tagRECT
-  {
-  LONG left;
-  LONG top;
-  LONG right;
-  LONG bottom;
-  }
-RECT;
+			/* size is 16 */
+typedef struct  tagRECT
+    {
+    LONG left;
+    LONG top;
+    LONG right;
+    LONG bottom;
+    }	RECT;
 
-typedef struct tagRECT *PRECT;
+			/* size is 4 */
+typedef struct tagRECT __RPC_FAR *PRECT;
 
-typedef struct tagRECT *LPRECT;
+			/* size is 4 */
+typedef struct tagRECT __RPC_FAR *LPRECT;
 
 #endif  //_WINDEF_
+			/* size is 1 */
 typedef unsigned char UCHAR;
 
+			/* size is 2 */
 typedef short SHORT;
 
+			/* size is 2 */
 typedef unsigned short USHORT;
 
+			/* size is 4 */
 typedef DWORD ULONG;
 
-#if !defined(_WINNT_) && !defined (_NTDEF_)
-typedef struct _LARGE_INTEGER
-  {
-  DWORD LowPart;
-  LONG HighPart;
-  }
-LARGE_INTEGER;
+#if 0
+			/* size is 8 */
+typedef hyper LONGLONG;
 
-typedef struct _LARGE_INTEGER *PLARGE_INTEGER;
+			/* size is 8 */
+typedef unsigned hyper ULONGLONG;
 
-typedef struct _ULARGE_INTEGER
-  {
-  DWORD LowPart;
-  DWORD HighPart;
-  }
-ULARGE_INTEGER;
+			/* size is 4 */
+typedef LONGLONG __RPC_FAR *PLONGLONG;
 
-typedef struct _ULARGE_INTEGER *PULARGE_INTEGER;
+			/* size is 4 */
+typedef ULONGLONG __RPC_FAR *PULONGLONG;
 
-#endif // !defined(_WINNT_) && !defined (_NTDEF_)
+			/* size is 8 */
+typedef struct  _LARGE_INTEGER
+    {
+    LONGLONG QuadPart;
+    }	LARGE_INTEGER;
+
+			/* size is 4 */
+typedef LARGE_INTEGER __RPC_FAR *PLARGE_INTEGER;
+
+			/* size is 8 */
+typedef struct  _ULARGE_INTEGER
+    {
+    ULONGLONG QuadPart;
+    }	ULARGE_INTEGER;
+
+#endif // 
 #ifndef _WINBASE_
 #ifndef _FILETIME_
 #define _FILETIME_
-typedef struct _FILETIME
-  {
-  DWORD dwLowDateTime;
-  DWORD dwHighDateTime;
-  }
-FILETIME;
+			/* size is 8 */
+typedef struct  _FILETIME
+    {
+    DWORD dwLowDateTime;
+    DWORD dwHighDateTime;
+    }	FILETIME;
 
-typedef struct _FILETIME *PFILETIME;
+			/* size is 4 */
+typedef struct _FILETIME __RPC_FAR *PFILETIME;
 
-typedef struct _FILETIME *LPFILETIME;
+			/* size is 4 */
+typedef struct _FILETIME __RPC_FAR *LPFILETIME;
 
 #endif // !_FILETIME
 #ifndef _SYSTEMTIME_
 #define _SYSTEMTIME_
-typedef struct _SYSTEMTIME
-  {
-  WORD wYear;
-  WORD wMonth;
-  WORD wDayOfWeek;
-  WORD wDay;
-  WORD wHour;
-  WORD wMinute;
-  WORD wSecond;
-  WORD wMilliseconds;
-  }
-SYSTEMTIME;
+			/* size is 16 */
+typedef struct  _SYSTEMTIME
+    {
+    WORD wYear;
+    WORD wMonth;
+    WORD wDayOfWeek;
+    WORD wDay;
+    WORD wHour;
+    WORD wMinute;
+    WORD wSecond;
+    WORD wMilliseconds;
+    }	SYSTEMTIME;
 
-typedef struct _SYSTEMTIME *PSYSTEMTIME;
+			/* size is 4 */
+typedef struct _SYSTEMTIME __RPC_FAR *PSYSTEMTIME;
 
-typedef struct _SYSTEMTIME *LPSYSTEMTIME;
+			/* size is 4 */
+typedef struct _SYSTEMTIME __RPC_FAR *LPSYSTEMTIME;
 
 #endif // !_SYSTEMTIME
 #ifndef _SECURITY_ATTRIBUTES_
 #define _SECURITY_ATTRIBUTES_
-typedef struct _SECURITY_ATTRIBUTES
-  {
-  DWORD nLength;
-  LPVOID lpSecurityDescriptor;
-  BOOL bInheritHandle;
-  }
-SECURITY_ATTRIBUTES;
+			/* size is 12 */
+typedef struct  _SECURITY_ATTRIBUTES
+    {
+    DWORD nLength;
+    /* [size_is] */ LPVOID lpSecurityDescriptor;
+    BOOL bInheritHandle;
+    }	SECURITY_ATTRIBUTES;
 
-typedef struct _SECURITY_ATTRIBUTES *PSECURITY_ATTRIBUTES;
+			/* size is 4 */
+typedef struct _SECURITY_ATTRIBUTES __RPC_FAR *PSECURITY_ATTRIBUTES;
 
-typedef struct _SECURITY_ATTRIBUTES *LPSECURITY_ATTRIBUTES;
+			/* size is 4 */
+typedef struct _SECURITY_ATTRIBUTES __RPC_FAR *LPSECURITY_ATTRIBUTES;
 
 #endif // !_SECURITY_ATTRIBUTES_
 #ifndef SECURITY_DESCRIPTOR_REVISION
+			/* size is 2 */
 typedef USHORT SECURITY_DESCRIPTOR_CONTROL;
 
-typedef USHORT *PSECURITY_DESCRIPTOR_CONTROL;
+			/* size is 4 */
+typedef USHORT __RPC_FAR *PSECURITY_DESCRIPTOR_CONTROL;
 
+			/* size is 4 */
 typedef PVOID PSID;
 
-typedef struct _ACL
-  {
-  UCHAR AclRevision;
-  UCHAR Sbz1;
-  USHORT AclSize;
-  USHORT AceCount;
-  USHORT Sbz2;
-  }
-ACL;
+			/* size is 8 */
+typedef struct  _ACL
+    {
+    UCHAR AclRevision;
+    UCHAR Sbz1;
+    USHORT AclSize;
+    USHORT AceCount;
+    USHORT Sbz2;
+    }	ACL;
 
-typedef ACL *PACL;
+			/* size is 4 */
+typedef ACL __RPC_FAR *PACL;
 
-typedef struct _SECURITY_DESCRIPTOR
-  {
-  UCHAR Revision;
-  UCHAR Sbz1;
-  SECURITY_DESCRIPTOR_CONTROL Control;
-  PSID Owner;
-  PSID Group;
-  PACL Sacl;
-  PACL Dacl;
-  }
-SECURITY_DESCRIPTOR;
+			/* size is 20 */
+typedef struct  _SECURITY_DESCRIPTOR
+    {
+    UCHAR Revision;
+    UCHAR Sbz1;
+    SECURITY_DESCRIPTOR_CONTROL Control;
+    PSID Owner;
+    PSID Group;
+    PACL Sacl;
+    PACL Dacl;
+    }	SECURITY_DESCRIPTOR;
 
-typedef struct _SECURITY_DESCRIPTOR *PISECURITY_DESCRIPTOR;
+			/* size is 4 */
+typedef struct _SECURITY_DESCRIPTOR __RPC_FAR *PISECURITY_DESCRIPTOR;
 
 #endif // !SECURITY_DESCRIPTOR_REVISION
 #endif //_WINBASE_
+			/* size is 4 */
 typedef LONG SCODE;
 
+			/* size is 4 */
 typedef LONG HRESULT;
 
-typedef SCODE *PSCODE;
+			/* size is 4 */
+typedef SCODE __RPC_FAR *PSCODE;
 
 #ifndef GUID_DEFINED
 #define GUID_DEFINED
-typedef struct _GUID
-  {
-  DWORD Data1;
-  WORD Data2;
-  WORD Data3;
-  BYTE Data4[8];
-  }
-GUID;
+			/* size is 16 */
+typedef struct  _GUID
+    {
+    DWORD Data1;
+    WORD Data2;
+    WORD Data3;
+    BYTE Data4[ 8 ];
+    }	GUID;
 
 #endif // !GUID_DEFINED
 #if !defined( __LPGUID_DEFINED__ )
 #define __LPGUID_DEFINED__
-typedef GUID *LPGUID;
+			/* size is 4 */
+typedef GUID __RPC_FAR *LPGUID;
 
 #endif // !__LPGUID_DEFINED__
 #ifndef __OBJECTID_DEFINED
 #define __OBJECTID_DEFINED
 #define _OBJECTID_DEFINED
-typedef struct _OBJECTID
-  {
-  GUID Lineage;
-  unsigned long Uniquifier;
-  }
-OBJECTID;
+			/* size is 20 */
+typedef struct  _OBJECTID
+    {
+    GUID Lineage;
+    unsigned long Uniquifier;
+    }	OBJECTID;
 
 #endif // !_OBJECTID_DEFINED
 #if !defined( __IID_DEFINED__ )
 #define __IID_DEFINED__
+			/* size is 16 */
 typedef GUID IID;
 
-typedef IID *LPIID;
+			/* size is 4 */
+typedef IID __RPC_FAR *LPIID;
 
 #define IID_NULL            GUID_NULL
 #define IsEqualIID(riid1, riid2) IsEqualGUID(riid1, riid2)
+			/* size is 16 */
 typedef GUID CLSID;
 
-typedef CLSID *LPCLSID;
+			/* size is 4 */
+typedef CLSID __RPC_FAR *LPCLSID;
 
 #define CLSID_NULL          GUID_NULL
 #define IsEqualCLSID(rclsid1, rclsid2) IsEqualGUID(rclsid1, rclsid2)
 #if 0
-typedef GUID REFGUID;
+			/* size is 4 */
+typedef GUID __RPC_FAR *REFGUID;
 
-typedef IID REFIID;
+			/* size is 4 */
+typedef IID __RPC_FAR *REFIID;
 
-typedef CLSID REFCLSID;
+			/* size is 4 */
+typedef CLSID __RPC_FAR *REFCLSID;
 
 #endif // 0
 #if defined(__cplusplus)
@@ -1095,32 +995,89 @@ typedef CLSID REFCLSID;
 #endif // !_REFCLSID_DEFINED
 #endif // !__cplusplus
 #endif // !__IID_DEFINED__
-typedef void *HCONTEXT;
-void __RPC_USER HCONTEXT_rundown (HCONTEXT);
+			/* size is 2 */
+typedef 
+enum tagMEMCTX
+    {	MEMCTX_TASK	= 1,
+	MEMCTX_SHARED	= 2,
+	MEMCTX_MACSYSTEM	= 3,
+	MEMCTX_UNKNOWN	= -1,
+	MEMCTX_SAME	= -2
+    }	MEMCTX;
+
+#ifndef _ROTFLAGS_DEFINED
+#define _ROTFLAGS_DEFINED
+#define ROTFLAGS_REGISTRATIONKEEPSALIVE 1
+#endif // !_ROTFLAGS_DEFINED
+			/* size is 2 */
+typedef 
+enum tagCLSCTX
+    {	CLSCTX_INPROC_SERVER	= 1,
+	CLSCTX_INPROC_HANDLER	= 2,
+	CLSCTX_LOCAL_SERVER	= 4,
+	CLSCTX_INPROC_SERVER16	= 8
+    }	CLSCTX;
+
+			/* size is 2 */
+typedef 
+enum tagMSHLFLAGS
+    {	MSHLFLAGS_NORMAL	= 0,
+	MSHLFLAGS_TABLESTRONG	= 1,
+	MSHLFLAGS_TABLEWEAK	= 2
+    }	MSHLFLAGS;
+
+			/* size is 2 */
+typedef 
+enum tagMSHCTX
+    {	MSHCTX_LOCAL	= 0,
+	MSHCTX_NOSHAREDMEM	= 1,
+	MSHCTX_DIFFERENTMACHINE	= 2
+    }	MSHCTX;
+
+			/* size is 2 */
+typedef 
+enum tagDVASPECT
+    {	DVASPECT_CONTENT	= 1,
+	DVASPECT_THUMBNAIL	= 2,
+	DVASPECT_ICON	= 4,
+	DVASPECT_DOCPRINT	= 8
+    }	DVASPECT;
+
+			/* size is 2 */
+typedef 
+enum tagSTGC
+    {	STGC_DEFAULT	= 0,
+	STGC_OVERWRITE	= 1,
+	STGC_ONLYIFCURRENT	= 2,
+	STGC_DANGEROUSLYCOMMITMERELYTODISKCACHE	= 4
+    }	STGC;
+
+			/* size is 2 */
+typedef 
+enum tagSTGMOVE
+    {	STGMOVE_MOVE	= 0,
+	STGMOVE_COPY	= 1
+    }	STGMOVE;
+
+			/* size is 2 */
+typedef 
+enum tagSTATFLAG
+    {	STATFLAG_DEFAULT	= 0,
+	STATFLAG_NONAME	= 1
+    }	STATFLAG;
+
+			/* size is 4 */
+typedef /* [context_handle] */ void __RPC_FAR *HCONTEXT;
 
 #ifndef _LCID_DEFINED
 #define _LCID_DEFINED
+			/* size is 4 */
 typedef DWORD LCID;
 
 #endif // !_LCID_DEFINED
-typedef const RECT *LPCRECT;
+			/* size is 4 */
+typedef const RECT __RPC_FAR *LPCRECT;
 
-#define HANDLE_to_xmit(pHandle, ppLong) { *(ppLong) = (long *) MIDL_user_allocate(sizeof(long)); **ppLong = (long ) *(pHandle); }
-#define HANDLE_from_xmit(pLong, pHandle) *(pHandle) = (HANDLE) *(pLong)
-#define HANDLE_free_inst(pHandle) 
-#define HANDLE_free_xmit(pLong) MIDL_user_free(pLong)
-#define HMODULE_to_xmit(pHandle, ppLong) { *(ppLong) = (long *) MIDL_user_allocate(sizeof(long)); **ppLong = (long ) *(pHandle); }
-#define HMODULE_from_xmit(pLong, pHandle) *(pHandle) = (HMODULE) *(pLong)
-#define HMODULE_free_inst(pHandle) 
-#define HMODULE_free_xmit(pLong) MIDL_user_free(pLong)
-#define HINSTANCE_to_xmit(pHandle, ppLong) { *(ppLong) = (long *) MIDL_user_allocate(sizeof(long)); **ppLong = (long ) *(pHandle); }
-#define HINSTANCE_from_xmit(pLong, pHandle) *(pHandle) = (HINSTANCE) *(pLong)
-#define HINSTANCE_free_inst(pHandle) 
-#define HINSTANCE_free_xmit(pLong) MIDL_user_free(pLong)
-#define HICON_to_xmit(pHandle, ppLong) { *(ppLong) = (long *) MIDL_user_allocate(sizeof(long)); **ppLong = (long ) *(pHandle); }
-#define HICON_from_xmit(pLong, pHandle) *(pHandle) = (HICON) *(pLong)
-#define HICON_free_inst(pHandle) 
-#define HICON_free_xmit(pLong) MIDL_user_free(pLong)
 void __RPC_API HGLOBAL_to_xmit (HGLOBAL __RPC_FAR *, RemHGLOBAL __RPC_FAR * __RPC_FAR *);
 void __RPC_API HGLOBAL_from_xmit (RemHGLOBAL __RPC_FAR *, HGLOBAL __RPC_FAR *);
 void __RPC_API HGLOBAL_free_inst (HGLOBAL __RPC_FAR *);
@@ -1129,6 +1086,10 @@ void __RPC_API HBITMAP_to_xmit (HBITMAP __RPC_FAR *, RemHBITMAP __RPC_FAR * __RP
 void __RPC_API HBITMAP_from_xmit (RemHBITMAP __RPC_FAR *, HBITMAP __RPC_FAR *);
 void __RPC_API HBITMAP_free_inst (HBITMAP __RPC_FAR *);
 void __RPC_API HBITMAP_free_xmit (RemHBITMAP __RPC_FAR *);
+void __RPC_API HPALETTE_to_xmit (HPALETTE __RPC_FAR *, RemHPALETTE __RPC_FAR * __RPC_FAR *);
+void __RPC_API HPALETTE_from_xmit (RemHPALETTE __RPC_FAR *, HPALETTE __RPC_FAR *);
+void __RPC_API HPALETTE_free_inst (HPALETTE __RPC_FAR *);
+void __RPC_API HPALETTE_free_xmit (RemHPALETTE __RPC_FAR *);
 void __RPC_API HBRUSH_to_xmit (HBRUSH __RPC_FAR *, RemHBRUSH __RPC_FAR * __RPC_FAR *);
 void __RPC_API HBRUSH_from_xmit (RemHBRUSH __RPC_FAR *, HBRUSH __RPC_FAR *);
 void __RPC_API HBRUSH_free_inst (HBRUSH __RPC_FAR *);
@@ -1137,177 +1098,55 @@ void __RPC_API HMETAFILEPICT_to_xmit (HMETAFILEPICT __RPC_FAR *, RemHMETAFILEPIC
 void __RPC_API HMETAFILEPICT_from_xmit (RemHMETAFILEPICT __RPC_FAR *, HMETAFILEPICT __RPC_FAR *);
 void __RPC_API HMETAFILEPICT_free_inst (HMETAFILEPICT __RPC_FAR *);
 void __RPC_API HMETAFILEPICT_free_xmit (RemHMETAFILEPICT __RPC_FAR *);
-#define HDC_to_xmit(pHandle, ppLong) { *(ppLong) = (long *) MIDL_user_allocate(sizeof(long)); **ppLong = (long ) *(pHandle); }
-#define HDC_from_xmit(pLong, pHandle) *(pHandle) = (HDC) *(pLong)
-#define HDC_free_inst(pHandle) 
-#define HDC_free_xmit(pLong) MIDL_user_free(pLong)
-#define HRGN_to_xmit(pHandle, ppLong) { *(ppLong) = (long *) MIDL_user_allocate(sizeof(long)); **ppLong = (long ) *(pHandle); }
-#define HRGN_from_xmit(pLong, pHandle) *(pHandle) = (HRGN) *(pLong)
-#define HRGN_free_inst(pHandle) 
-#define HRGN_free_xmit(pLong) MIDL_user_free(pLong)
-#define HWND_to_xmit(pHandle, ppLong) { *(ppLong) = (long *) MIDL_user_allocate(sizeof(long)); **ppLong = (long ) *(pHandle); }
-#define HWND_from_xmit(pLong, pHandle) *(pHandle) = (HWND) *(pLong)
-#define HWND_free_inst(pHandle) 
-#define HWND_free_xmit(pLong) MIDL_user_free(pLong)
-#define HMENU_to_xmit(pHandle, ppLong) { *(ppLong) = (long *) MIDL_user_allocate(sizeof(long)); **ppLong = (long ) *(pHandle); }
-#define HMENU_from_xmit(pLong, pHandle) *(pHandle) = (HMENU) *(pLong)
-#define HMENU_free_inst(pHandle) 
-#define HMENU_free_xmit(pLong) MIDL_user_free(pLong)
-#define HACCEL_to_xmit(pHandle, ppLong) { *(ppLong) = (long *) MIDL_user_allocate(sizeof(long)); **ppLong = (long ) *(pHandle); }
-#define HACCEL_from_xmit(pLong, pHandle) *(pHandle) = (HACCEL) *(pLong)
-#define HACCEL_free_inst(pHandle) 
-#define HACCEL_free_xmit(pLong) MIDL_user_free(pLong)
-#define HTASK_to_xmit(pHandle, ppLong) { *(ppLong) = (long *) MIDL_user_allocate(sizeof(long)); **ppLong = (long ) *(pHandle); }
-#define HTASK_from_xmit(pLong, pHandle) *(pHandle) = (HTASK) *(pLong)
-#define HTASK_free_inst(pHandle) 
-#define HTASK_free_xmit(pLong) MIDL_user_free(pLong)
-#define HKEY_to_xmit(pHandle, ppLong) { *(ppLong) = (long *) MIDL_user_allocate(sizeof(long)); **ppLong = (long ) *(pHandle); }
-#define HKEY_from_xmit(pLong, pHandle) *(pHandle) = (HKEY) *(pLong)
-#define HKEY_free_inst(pHandle) 
-#define HKEY_free_xmit(pLong) MIDL_user_free(pLong)
-#define UINT_to_xmit(pHandle, ppLong) { *(ppLong) = (unsigned long *) MIDL_user_allocate(sizeof(unsigned long)); **ppLong = (unsigned long ) *(pHandle); }
-#define UINT_from_xmit(pLong, pUINT) *(pUINT) = (UINT) *(pLong)
-#define UINT_free_inst(pUINT) 
-#define UINT_free_xmit(pLong) MIDL_user_free(pLong)
-#define INT_to_xmit(pHandle, ppLong) { *(ppLong) = (long *) MIDL_user_allocate(sizeof(long)); **ppLong = (long ) *(pHandle); }
-#define INT_from_xmit(pLong, pINT) *(pINT) = (INT) *(pLong)
-#define INT_free_inst(pINT) 
-#define INT_free_xmit(pLong) MIDL_user_free(pLong)
+void __RPC_API HENHMETAFILE_to_xmit (HENHMETAFILE __RPC_FAR *, RemHENHMETAFILE __RPC_FAR * __RPC_FAR *);
+void __RPC_API HENHMETAFILE_from_xmit (RemHENHMETAFILE __RPC_FAR *, HENHMETAFILE __RPC_FAR *);
+void __RPC_API HENHMETAFILE_free_inst (HENHMETAFILE __RPC_FAR *);
+void __RPC_API HENHMETAFILE_free_xmit (RemHENHMETAFILE __RPC_FAR *);
 
-#if !defined(IMPORT_USED_MULTIPLE) && !defined(IMPORT_USED_SINGLE)
 
-/* routine that sizes node for struct tagRemHGLOBAL */
-void _sns_tagRemHGLOBAL (RemHGLOBAL  *, PRPC_MESSAGE);
+extern RPC_IF_HANDLE IWinTypes_v0_1_c_ifspec;
+extern RPC_IF_HANDLE IWinTypes_v0_1_s_ifspec;
+#endif /* __IWinTypes_INTERFACE_DEFINED__ */
 
-/* routine that puts node for struct tagRemHGLOBAL */
-void _pns_tagRemHGLOBAL (RemHGLOBAL  *, PRPC_MESSAGE);
+/* Additional Prototypes for ALL interfaces */
 
-/* routine that gets node for struct tagRemHGLOBAL */
-void _gns_tagRemHGLOBAL (RemHGLOBAL  *, PRPC_MESSAGE, unsigned long);
+/* end of Additional Prototypes */
 
-/* routine that gets graph for struct tagRemHGLOBAL */
-void _ggs_tagRemHGLOBAL (RemHGLOBAL  *, unsigned char **, PRPC_MESSAGE);
-
-/* routine that allocates node for struct tagRemHGLOBAL */
-void _ans_tagRemHGLOBAL(PRPC_MESSAGE, unsigned long);
-
-/* routine that allocates graph for struct tagRemHGLOBAL */
-void _ags_tagRemHGLOBAL(unsigned char **, PRPC_MESSAGE, unsigned long);
-
-/* routine that sizes node for struct tagRemHMETAFILEPICT */
-void _sns_tagRemHMETAFILEPICT (RemHMETAFILEPICT  *, PRPC_MESSAGE);
-
-/* routine that puts node for struct tagRemHMETAFILEPICT */
-void _pns_tagRemHMETAFILEPICT (RemHMETAFILEPICT  *, PRPC_MESSAGE);
-
-/* routine that gets node for struct tagRemHMETAFILEPICT */
-void _gns_tagRemHMETAFILEPICT (RemHMETAFILEPICT  *, PRPC_MESSAGE, unsigned long);
-
-/* routine that gets graph for struct tagRemHMETAFILEPICT */
-void _ggs_tagRemHMETAFILEPICT (RemHMETAFILEPICT  *, unsigned char **, PRPC_MESSAGE);
-
-/* routine that allocates node for struct tagRemHMETAFILEPICT */
-void _ans_tagRemHMETAFILEPICT(PRPC_MESSAGE, unsigned long);
-
-/* routine that allocates graph for struct tagRemHMETAFILEPICT */
-void _ags_tagRemHMETAFILEPICT(unsigned char **, PRPC_MESSAGE, unsigned long);
-
-/* routine that sizes node for struct tagRemHBITMAP */
-void _sns_tagRemHBITMAP (RemHBITMAP  *, PRPC_MESSAGE);
-
-/* routine that puts node for struct tagRemHBITMAP */
-void _pns_tagRemHBITMAP (RemHBITMAP  *, PRPC_MESSAGE);
-
-/* routine that gets node for struct tagRemHBITMAP */
-void _gns_tagRemHBITMAP (RemHBITMAP  *, PRPC_MESSAGE, unsigned long);
-
-/* routine that gets graph for struct tagRemHBITMAP */
-void _ggs_tagRemHBITMAP (RemHBITMAP  *, unsigned char **, PRPC_MESSAGE);
-
-/* routine that allocates node for struct tagRemHBITMAP */
-void _ans_tagRemHBITMAP(PRPC_MESSAGE, unsigned long);
-
-/* routine that allocates graph for struct tagRemHBITMAP */
-void _ags_tagRemHBITMAP(unsigned char **, PRPC_MESSAGE, unsigned long);
-
-/* routine that sizes node for struct tagRemBRUSH */
-void _sns_tagRemBRUSH (RemHBRUSH  *, PRPC_MESSAGE);
-
-/* routine that puts node for struct tagRemBRUSH */
-void _pns_tagRemBRUSH (RemHBRUSH  *, PRPC_MESSAGE);
-
-/* routine that gets node for struct tagRemBRUSH */
-void _gns_tagRemBRUSH (RemHBRUSH  *, PRPC_MESSAGE, unsigned long);
-
-/* routine that gets graph for struct tagRemBRUSH */
-void _ggs_tagRemBRUSH (RemHBRUSH  *, unsigned char **, PRPC_MESSAGE);
-
-/* routine that allocates node for struct tagRemBRUSH */
-void _ans_tagRemBRUSH(PRPC_MESSAGE, unsigned long);
-
-/* routine that allocates graph for struct tagRemBRUSH */
-void _ags_tagRemBRUSH(unsigned char **, PRPC_MESSAGE, unsigned long);
-
-/* routine that sizes node for struct tagLOGPALETTE */
-void _sns_tagLOGPALETTE (LOGPALETTE  *, PRPC_MESSAGE);
-
-/* routine that puts node for struct tagLOGPALETTE */
-void _pns_tagLOGPALETTE (LOGPALETTE  *, PRPC_MESSAGE);
-
-/* routine that gets node for struct tagLOGPALETTE */
-void _gns_tagLOGPALETTE (LOGPALETTE  *, PRPC_MESSAGE, unsigned long);
-
-/* routine that gets graph for struct tagLOGPALETTE */
-void _ggs_tagLOGPALETTE (LOGPALETTE  *, unsigned char **, PRPC_MESSAGE);
-
-/* routine that allocates node for struct tagLOGPALETTE */
-void _ans_tagLOGPALETTE(PRPC_MESSAGE, unsigned long);
-
-/* routine that allocates graph for struct tagLOGPALETTE */
-void _ags_tagLOGPALETTE(unsigned char **, PRPC_MESSAGE, unsigned long);
-
-/* routine that sizes node for struct tagMSG */
-void _sns_tagMSG (MSG  *, PRPC_MESSAGE);
-
-/* routine that puts node for struct tagMSG */
-void _pns_tagMSG (MSG  *, PRPC_MESSAGE);
-
-/* routine that gets node for struct tagMSG */
-void _gns_tagMSG (MSG  *, PRPC_MESSAGE);
-
-/* routine that frees graph for struct tagMSG */
-void _fgs_tagMSG (MSG  *);
-
-/* routine that sizes graph for struct _SECURITY_ATTRIBUTES */
-void _sgs__SECURITY_ATTRIBUTES (SECURITY_ATTRIBUTES  *, PRPC_MESSAGE);
-
-/* routine that puts graph for struct _SECURITY_ATTRIBUTES */
-void _pgs__SECURITY_ATTRIBUTES (SECURITY_ATTRIBUTES  *, PRPC_MESSAGE);
-
-/* routine that gets graph for struct _SECURITY_ATTRIBUTES */
-void _ggs__SECURITY_ATTRIBUTES (SECURITY_ATTRIBUTES  *, unsigned char **, PRPC_MESSAGE);
-
-/* routine that allocates graph for struct _SECURITY_ATTRIBUTES */
-void _ags__SECURITY_ATTRIBUTES(unsigned char **, PRPC_MESSAGE);
-
-/* routine that frees graph for struct _SECURITY_ATTRIBUTES */
-void _fgs__SECURITY_ATTRIBUTES (SECURITY_ATTRIBUTES  *);
-
-/* routine that gets node for struct _GUID */
-void _gns__GUID (GUID  *, PRPC_MESSAGE);
-
-/* routine that gets node for struct _OBJECTID */
-void _gns__OBJECTID (OBJECTID  *, PRPC_MESSAGE);
-
-#endif /*!defined(IMPORT_USED_MULTIPLE) && !defined(IMPORT_USED_SINGLE)*/
-
-void __RPC_FAR * __RPC_API MIDL_user_allocate(size_t);
-void __RPC_API MIDL_user_free(void __RPC_FAR *);
-#ifndef __MIDL_USER_DEFINED
-#define midl_user_allocate MIDL_user_allocate
-#define midl_user_free     MIDL_user_free
-#define __MIDL_USER_DEFINED
+#ifdef __cplusplus
+}
 #endif
+
+#endif
+
+#ifndef __unknwn_h__
+#define __unknwn_h__
+
+#ifdef __cplusplus
+extern "C"{
+#endif 
+
+/* Forward Declarations */ 
+
+void __RPC_FAR * __RPC_USER MIDL_user_allocate(size_t);
+void __RPC_USER MIDL_user_free( void __RPC_FAR * ); 
+
+/****************************************
+ * Generated header for interface: __MIDL__intf_0000
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [auto_handle][local] */ 
+
+
+// dummy file redirecting to com.idl/com.h
+
+
+extern RPC_IF_HANDLE __MIDL__intf_0000_v0_0_c_ifspec;
+extern RPC_IF_HANDLE __MIDL__intf_0000_v0_0_s_ifspec;
+
+/* Additional Prototypes for ALL interfaces */
+
+/* end of Additional Prototypes */
 
 #ifdef __cplusplus
 }
@@ -1316,5561 +1155,7793 @@ void __RPC_API MIDL_user_free(void __RPC_FAR *);
 #endif
 
 // Forward declarations for typedefs in this file
+
+#ifndef __com_h__
+#define __com_h__
+
+#ifdef __cplusplus
+extern "C"{
+#endif 
+
+/* Forward Declarations */ 
+
+#ifndef __IUnknown_FWD_DEFINED__
+#define __IUnknown_FWD_DEFINED__
 typedef interface IUnknown IUnknown;
+#endif 	/* __IUnknown_FWD_DEFINED__ */
+
+
+#ifndef __IClassFactory_FWD_DEFINED__
+#define __IClassFactory_FWD_DEFINED__
 typedef interface IClassFactory IClassFactory;
-typedef interface IEnumFORMATETC IEnumFORMATETC;
-typedef interface IEnumString IEnumString;
-typedef interface IEnumUnknown IEnumUnknown;
-typedef interface IPersist IPersist;
-typedef interface IRootStorage IRootStorage;
-typedef interface IBindCtx IBindCtx;
-typedef interface IRunnableObject IRunnableObject;
-typedef interface IStream IStream;
-typedef interface IMalloc IMalloc;
-typedef interface IStdMarshalInfo IStdMarshalInfo;
-typedef interface IMessageFilter IMessageFilter;
-typedef interface IEnumSTATSTG IEnumSTATSTG;
+#endif 	/* __IClassFactory_FWD_DEFINED__ */
+
+
+#ifndef __IMarshal_FWD_DEFINED__
+#define __IMarshal_FWD_DEFINED__
 typedef interface IMarshal IMarshal;
-typedef interface IPersistFile IPersistFile;
-typedef interface IRpcChannelBuffer IRpcChannelBuffer;
-typedef interface ILockBytes ILockBytes;
-typedef interface IRpcProxyBuffer IRpcProxyBuffer;
-typedef interface IPersistStream IPersistStream;
-typedef interface IStorage IStorage;
-typedef interface IRpcStubBuffer IRpcStubBuffer;
-typedef interface IPSFactoryBuffer IPSFactoryBuffer;
-typedef interface IPersistStorage IPersistStorage;
-typedef interface IAdviseSink IAdviseSink;
-typedef interface IEnumMoniker IEnumMoniker;
-typedef interface IEnumSTATDATA IEnumSTATDATA;
-typedef interface IMoniker IMoniker;
-typedef interface IRunningObjectTable IRunningObjectTable;
-typedef interface IAdviseSink2 IAdviseSink2;
-typedef interface IDataObject IDataObject;
-typedef interface IDataAdviseHolder IDataAdviseHolder;
+#endif 	/* __IMarshal_FWD_DEFINED__ */
+
+
+#ifndef __IMalloc_FWD_DEFINED__
+#define __IMalloc_FWD_DEFINED__
+typedef interface IMalloc IMalloc;
+#endif 	/* __IMalloc_FWD_DEFINED__ */
+
+
+#ifndef __IStdMarshalInfo_FWD_DEFINED__
+#define __IStdMarshalInfo_FWD_DEFINED__
+typedef interface IStdMarshalInfo IStdMarshalInfo;
+#endif 	/* __IStdMarshalInfo_FWD_DEFINED__ */
+
+
+#ifndef __IExternalConnection_FWD_DEFINED__
+#define __IExternalConnection_FWD_DEFINED__
 typedef interface IExternalConnection IExternalConnection;
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IUnknown
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IUnknown__
-#define __IUnknown__
-
-/* Forward declaration */
-typedef interface IUnknown IUnknown;
+#endif 	/* __IExternalConnection_FWD_DEFINED__ */
 
 
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
+#ifndef __IWeakRef_FWD_DEFINED__
+#define __IWeakRef_FWD_DEFINED__
+typedef interface IWeakRef IWeakRef;
+#endif 	/* __IWeakRef_FWD_DEFINED__ */
 
 
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
+#ifndef __IEnumUnknown_FWD_DEFINED__
+#define __IEnumUnknown_FWD_DEFINED__
+typedef interface IEnumUnknown IEnumUnknown;
+#endif 	/* __IEnumUnknown_FWD_DEFINED__ */
 
 
-typedef IUnknown *LPUNKNOWN;
+#ifndef __IBindCtx_FWD_DEFINED__
+#define __IBindCtx_FWD_DEFINED__
+typedef interface IBindCtx IBindCtx;
+#endif 	/* __IBindCtx_FWD_DEFINED__ */
 
 
-#if defined(__cplusplus) && !defined(CINTERFACE)
+#ifndef __IParseDisplayName_FWD_DEFINED__
+#define __IParseDisplayName_FWD_DEFINED__
+typedef interface IParseDisplayName IParseDisplayName;
+#endif 	/* __IParseDisplayName_FWD_DEFINED__ */
 
-extern "C" {
 
-#endif
+#ifndef __IEnumMoniker_FWD_DEFINED__
+#define __IEnumMoniker_FWD_DEFINED__
+typedef interface IEnumMoniker IEnumMoniker;
+#endif 	/* __IEnumMoniker_FWD_DEFINED__ */
 
-void STDAPICALLTYPE MIDL_GetMarshalSizeMax(RPC_MESSAGE *pMessage, REFIID riid, IUnknown *punk);
 
-void STDAPICALLTYPE MIDL_MarshalInterface(RPC_MESSAGE *pMessage, REFIID riid, void *pv);
+#ifndef __IRunnableObject_FWD_DEFINED__
+#define __IRunnableObject_FWD_DEFINED__
+typedef interface IRunnableObject IRunnableObject;
+#endif 	/* __IRunnableObject_FWD_DEFINED__ */
 
-void STDAPICALLTYPE MIDL_UnmarshalInterface(RPC_MESSAGE *pMessage, REFIID riid, void **ppv);
 
-#if defined(__cplusplus) && !defined(CINTERFACE)
+#ifndef __IRunningObjectTable_FWD_DEFINED__
+#define __IRunningObjectTable_FWD_DEFINED__
+typedef interface IRunningObjectTable IRunningObjectTable;
+#endif 	/* __IRunningObjectTable_FWD_DEFINED__ */
 
-}
 
-#endif
+#ifndef __IPersist_FWD_DEFINED__
+#define __IPersist_FWD_DEFINED__
+typedef interface IPersist IPersist;
+#endif 	/* __IPersist_FWD_DEFINED__ */
+
+
+#ifndef __IPersistStream_FWD_DEFINED__
+#define __IPersistStream_FWD_DEFINED__
+typedef interface IPersistStream IPersistStream;
+#endif 	/* __IPersistStream_FWD_DEFINED__ */
+
+
+#ifndef __IMoniker_FWD_DEFINED__
+#define __IMoniker_FWD_DEFINED__
+typedef interface IMoniker IMoniker;
+#endif 	/* __IMoniker_FWD_DEFINED__ */
+
+
+#ifndef __IEnumString_FWD_DEFINED__
+#define __IEnumString_FWD_DEFINED__
+typedef interface IEnumString IEnumString;
+#endif 	/* __IEnumString_FWD_DEFINED__ */
+
+
+#ifndef __IStream_FWD_DEFINED__
+#define __IStream_FWD_DEFINED__
+typedef interface IStream IStream;
+#endif 	/* __IStream_FWD_DEFINED__ */
+
+
+#ifndef __IEnumSTATSTG_FWD_DEFINED__
+#define __IEnumSTATSTG_FWD_DEFINED__
+typedef interface IEnumSTATSTG IEnumSTATSTG;
+#endif 	/* __IEnumSTATSTG_FWD_DEFINED__ */
+
+
+#ifndef __IStorage_FWD_DEFINED__
+#define __IStorage_FWD_DEFINED__
+typedef interface IStorage IStorage;
+#endif 	/* __IStorage_FWD_DEFINED__ */
+
+
+#ifndef __IPersistFile_FWD_DEFINED__
+#define __IPersistFile_FWD_DEFINED__
+typedef interface IPersistFile IPersistFile;
+#endif 	/* __IPersistFile_FWD_DEFINED__ */
+
+
+#ifndef __IPersistStorage_FWD_DEFINED__
+#define __IPersistStorage_FWD_DEFINED__
+typedef interface IPersistStorage IPersistStorage;
+#endif 	/* __IPersistStorage_FWD_DEFINED__ */
+
+
+#ifndef __ILockBytes_FWD_DEFINED__
+#define __ILockBytes_FWD_DEFINED__
+typedef interface ILockBytes ILockBytes;
+#endif 	/* __ILockBytes_FWD_DEFINED__ */
+
+
+#ifndef __IEnumFORMATETC_FWD_DEFINED__
+#define __IEnumFORMATETC_FWD_DEFINED__
+typedef interface IEnumFORMATETC IEnumFORMATETC;
+#endif 	/* __IEnumFORMATETC_FWD_DEFINED__ */
+
+
+#ifndef __IEnumSTATDATA_FWD_DEFINED__
+#define __IEnumSTATDATA_FWD_DEFINED__
+typedef interface IEnumSTATDATA IEnumSTATDATA;
+#endif 	/* __IEnumSTATDATA_FWD_DEFINED__ */
+
+
+#ifndef __IRootStorage_FWD_DEFINED__
+#define __IRootStorage_FWD_DEFINED__
+typedef interface IRootStorage IRootStorage;
+#endif 	/* __IRootStorage_FWD_DEFINED__ */
+
+
+#ifndef __IAdviseSink_FWD_DEFINED__
+#define __IAdviseSink_FWD_DEFINED__
+typedef interface IAdviseSink IAdviseSink;
+#endif 	/* __IAdviseSink_FWD_DEFINED__ */
+
+
+#ifndef __IAdviseSink2_FWD_DEFINED__
+#define __IAdviseSink2_FWD_DEFINED__
+typedef interface IAdviseSink2 IAdviseSink2;
+#endif 	/* __IAdviseSink2_FWD_DEFINED__ */
+
+
+#ifndef __IDataObject_FWD_DEFINED__
+#define __IDataObject_FWD_DEFINED__
+typedef interface IDataObject IDataObject;
+#endif 	/* __IDataObject_FWD_DEFINED__ */
+
+
+#ifndef __IDataAdviseHolder_FWD_DEFINED__
+#define __IDataAdviseHolder_FWD_DEFINED__
+typedef interface IDataAdviseHolder IDataAdviseHolder;
+#endif 	/* __IDataAdviseHolder_FWD_DEFINED__ */
+
+
+#ifndef __IMessageFilter_FWD_DEFINED__
+#define __IMessageFilter_FWD_DEFINED__
+typedef interface IMessageFilter IMessageFilter;
+#endif 	/* __IMessageFilter_FWD_DEFINED__ */
+
+
+#ifndef __IRpcChannelBuffer_FWD_DEFINED__
+#define __IRpcChannelBuffer_FWD_DEFINED__
+typedef interface IRpcChannelBuffer IRpcChannelBuffer;
+#endif 	/* __IRpcChannelBuffer_FWD_DEFINED__ */
+
+
+#ifndef __IRpcProxyBuffer_FWD_DEFINED__
+#define __IRpcProxyBuffer_FWD_DEFINED__
+typedef interface IRpcProxyBuffer IRpcProxyBuffer;
+#endif 	/* __IRpcProxyBuffer_FWD_DEFINED__ */
+
+
+#ifndef __IRpcStubBuffer_FWD_DEFINED__
+#define __IRpcStubBuffer_FWD_DEFINED__
+typedef interface IRpcStubBuffer IRpcStubBuffer;
+#endif 	/* __IRpcStubBuffer_FWD_DEFINED__ */
+
+
+#ifndef __IPSFactoryBuffer_FWD_DEFINED__
+#define __IPSFactoryBuffer_FWD_DEFINED__
+typedef interface IPSFactoryBuffer IPSFactoryBuffer;
+#endif 	/* __IPSFactoryBuffer_FWD_DEFINED__ */
+
+
+void __RPC_FAR * __RPC_USER MIDL_user_allocate(size_t);
+void __RPC_USER MIDL_user_free( void __RPC_FAR * ); 
+
+/****************************************
+ * Generated header for interface: __MIDL__intf_0000
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [auto_handle][local] */ 
+
+
+			/* size is 0 */
+
+			/* size is 0 */
+
+			/* size is 0 */
+
+			/* size is 0 */
+
+			/* size is 0 */
+
+			/* size is 0 */
+
+			/* size is 0 */
+
+			/* size is 0 */
+
+			/* size is 0 */
+
+			/* size is 0 */
+
+
+
+extern RPC_IF_HANDLE __MIDL__intf_0000_v0_0_c_ifspec;
+extern RPC_IF_HANDLE __MIDL__intf_0000_v0_0_s_ifspec;
+
+#ifndef __IUnknown_INTERFACE_DEFINED__
+#define __IUnknown_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IUnknown
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object][local] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IUnknown __RPC_FAR *LPUNKNOWN;
+
 
 EXTERN_C const IID IID_IUnknown;
+
 #if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE QueryInterface
-    (
-	REFIID riid,
-	void **ppvObject
-    ) = 0;
     
-    virtual ULONG STDMETHODCALLTYPE AddRef
-    (
-        void
-    ) = 0;
+    interface IUnknown
+    {
+    public:
+        virtual HRESULT __stdcall QueryInterface( 
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject) = 0;
+        
+        virtual ULONG __stdcall AddRef( void) = 0;
+        
+        virtual ULONG __stdcall Release( void) = 0;
+        
+    };
     
-    virtual ULONG STDMETHODCALLTYPE Release
-    (
-        void
-    ) = 0;
+#else 	/* C style interface */
     
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IUnknownVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IUnknown FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
+    typedef struct IUnknownVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IUnknown __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IUnknown __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IUnknown __RPC_FAR * This);
+        
+    } IUnknownVtbl;
     
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IUnknown FAR * This
-    );
+    interface IUnknown
+    {
+        CONST_VTBL struct IUnknownVtbl __RPC_FAR *lpVtbl;
+    };
     
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IUnknown FAR * This
-    );
     
-} IUnknownVtbl;
 
-interface IUnknown
-{
-    IUnknownVtbl FAR *lpVtbl;
-} ;
+#ifdef COBJMACROS
 
 
-#endif
+#define IUnknown_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
 
-#endif /*__IUnknown__*/
+#define IUnknown_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
 
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IClassFactory
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
+#define IUnknown_Release(This)	\
+    (This)->lpVtbl -> Release(This)
 
-#ifndef __IClassFactory__
-#define __IClassFactory__
-
-/* Forward declaration */
-typedef interface IClassFactory IClassFactory;
+#endif /* COBJMACROS */
 
 
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
+#endif 	/* C style interface */
 
 
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
+
+HRESULT __stdcall IUnknown_QueryInterface_Proxy( 
+    IUnknown __RPC_FAR * This,
+    /* [in] */ REFIID riid,
+    /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
 
 
-#ifndef _LPCLASSFACTORY_DEFINED
+void __RPC_STUB IUnknown_QueryInterface_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
 
-#define _LPCLASSFACTORY_DEFINED
 
-typedef IClassFactory *LPCLASSFACTORY;
+ULONG __stdcall IUnknown_AddRef_Proxy( 
+    IUnknown __RPC_FAR * This);
 
 
-#endif
+void __RPC_STUB IUnknown_AddRef_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+ULONG __stdcall IUnknown_Release_Proxy( 
+    IUnknown __RPC_FAR * This);
+
+
+void __RPC_STUB IUnknown_Release_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IUnknown_INTERFACE_DEFINED__ */
+
+
+#ifndef __IClassFactory_INTERFACE_DEFINED__
+#define __IClassFactory_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IClassFactory
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IClassFactory __RPC_FAR *LPCLASSFACTORY;
+
 
 EXTERN_C const IID IID_IClassFactory;
+
 #if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IClassFactory : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE CreateInstance
-    (
-	IUnknown *pUnkOuter,
-	REFIID riid,
-	void **ppvObject
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE LockServer
-    (
-	BOOL fLock
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IClassFactoryVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IClassFactory FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IClassFactory FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IClassFactory FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *CreateInstance)
-    (
-        IClassFactory FAR * This,
-	IUnknown *pUnkOuter,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *LockServer)
-    (
-        IClassFactory FAR * This,
-	BOOL fLock
-    );
-    
-} IClassFactoryVtbl;
-
-interface IClassFactory
-{
-    IClassFactoryVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IClassFactory__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IEnumFORMATETC
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IEnumFORMATETC__
-#define __IEnumFORMATETC__
-
-/* Forward declaration */
-typedef interface IEnumFORMATETC IEnumFORMATETC;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPENUMFORMATETC_DEFINED
-
-#define _LPENUMFORMATETC_DEFINED
-
-typedef IEnumFORMATETC *LPENUMFORMATETC;
-
-
-#endif
-
-#ifndef _tagDVTARGETDEVICE_DEFINED
-
-typedef struct tagDVTARGETDEVICE
-  {
-  DWORD tdSize;
-  WORD tdDeviceNameOffset;
-  WORD tdDriverNameOffset;
-  WORD tdPortNameOffset;
-  WORD tdExtDevmodeOffset;
-  BYTE tdData[1];
-  }
-DVTARGETDEVICE;
-
-
-#define _tagDVTARGETDEVICE_DEFINED
-
-#define _DVTARGETDEVICE_DEFINED
-
-#endif
-
-#ifndef _CLIPFORMAT_DEFINED
-
-#define _CLIPFORMAT_DEFINED
-
-typedef WORD CLIPFORMAT;
-
-
-typedef CLIPFORMAT *LPCLIPFORMAT;
-
-
-#endif
-
-#ifndef _tagFORMATETC_DEFINED
-
-typedef struct tagFORMATETC
-  {
-  CLIPFORMAT cfFormat;
-  DVTARGETDEVICE *ptd;
-  DWORD dwAspect;
-  LONG lindex;
-  DWORD tymed;
-  }
-FORMATETC;
-
-
-typedef struct tagFORMATETC *LPFORMATETC;
-
-
-#define _tagFORMATETC_DEFINED
-
-#define _FORMATETC_FORMATETCDEFINED
-
-#endif
-
-EXTERN_C const IID IID_IEnumFORMATETC;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IEnumFORMATETC : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE Next
-    (
-	ULONG celt,
-	FORMATETC *rgelt,
-	ULONG *pceltFetched
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Skip
-    (
-	ULONG celt
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Reset
-    (
-        void
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Clone
-    (
-	IEnumFORMATETC **ppenum
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IEnumFORMATETCVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IEnumFORMATETC FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IEnumFORMATETC FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IEnumFORMATETC FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Next)
-    (
-        IEnumFORMATETC FAR * This,
-	ULONG celt,
-	FORMATETC *rgelt,
-	ULONG *pceltFetched
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Skip)
-    (
-        IEnumFORMATETC FAR * This,
-	ULONG celt
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Reset)
-    (
-        IEnumFORMATETC FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Clone)
-    (
-        IEnumFORMATETC FAR * This,
-	IEnumFORMATETC **ppenum
-    );
-    
-} IEnumFORMATETCVtbl;
-
-interface IEnumFORMATETC
-{
-    IEnumFORMATETCVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IEnumFORMATETC__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IEnumString
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IEnumString__
-#define __IEnumString__
-
-/* Forward declaration */
-typedef interface IEnumString IEnumString;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-typedef IEnumString *LPENUMSTRING;
-
-
-EXTERN_C const IID IID_IEnumString;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IEnumString : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE Next
-    (
-	ULONG celt,
-	LPOLESTR *rgelt,
-	ULONG *pceltFetched
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Skip
-    (
-	ULONG celt
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Reset
-    (
-        void
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Clone
-    (
-	IEnumString **ppenum
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IEnumStringVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IEnumString FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IEnumString FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IEnumString FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Next)
-    (
-        IEnumString FAR * This,
-	ULONG celt,
-	LPOLESTR *rgelt,
-	ULONG *pceltFetched
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Skip)
-    (
-        IEnumString FAR * This,
-	ULONG celt
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Reset)
-    (
-        IEnumString FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Clone)
-    (
-        IEnumString FAR * This,
-	IEnumString **ppenum
-    );
-    
-} IEnumStringVtbl;
-
-interface IEnumString
-{
-    IEnumStringVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IEnumString__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IEnumUnknown
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IEnumUnknown__
-#define __IEnumUnknown__
-
-/* Forward declaration */
-typedef interface IEnumUnknown IEnumUnknown;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPENUMUNKNOWN_DEFINED
-
-#define _LPENUMUNKNOWN_DEFINED
-
-typedef IEnumUnknown *LPENUMUNKNOWN;
-
-
-#endif
-
-EXTERN_C const IID IID_IEnumUnknown;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IEnumUnknown : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE Next
-    (
-	ULONG celt,
-	IUnknown **rgelt,
-	ULONG *pceltFetched
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Skip
-    (
-	ULONG celt
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Reset
-    (
-        void
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Clone
-    (
-	IEnumUnknown **ppenum
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IEnumUnknownVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IEnumUnknown FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IEnumUnknown FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IEnumUnknown FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Next)
-    (
-        IEnumUnknown FAR * This,
-	ULONG celt,
-	IUnknown **rgelt,
-	ULONG *pceltFetched
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Skip)
-    (
-        IEnumUnknown FAR * This,
-	ULONG celt
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Reset)
-    (
-        IEnumUnknown FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Clone)
-    (
-        IEnumUnknown FAR * This,
-	IEnumUnknown **ppenum
-    );
-    
-} IEnumUnknownVtbl;
-
-interface IEnumUnknown
-{
-    IEnumUnknownVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IEnumUnknown__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IPersist
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IPersist__
-#define __IPersist__
-
-/* Forward declaration */
-typedef interface IPersist IPersist;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPPERSIST_DEFINED
-
-#define _LPPERSIST_DEFINED
-
-typedef IPersist *LPPERSIST;
-
-
-#endif
-
-EXTERN_C const IID IID_IPersist;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IPersist : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE GetClassID
-    (
-	CLSID *pClassID
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IPersistVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IPersist FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IPersist FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IPersist FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetClassID)
-    (
-        IPersist FAR * This,
-	CLSID *pClassID
-    );
-    
-} IPersistVtbl;
-
-interface IPersist
-{
-    IPersistVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IPersist__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IRootStorage
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IRootStorage__
-#define __IRootStorage__
-
-/* Forward declaration */
-typedef interface IRootStorage IRootStorage;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPROOTSTORAGE_DEFINED
-
-#define _LPROOTSTORAGE_DEFINED
-
-typedef IRootStorage *LPROOTSTORAGE;
-
-
-#endif
-
-EXTERN_C const IID IID_IRootStorage;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IRootStorage : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE SwitchToFile
-    (
-	LPOLESTR pszFile
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IRootStorageVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IRootStorage FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IRootStorage FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IRootStorage FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *SwitchToFile)
-    (
-        IRootStorage FAR * This,
-	LPOLESTR pszFile
-    );
-    
-} IRootStorageVtbl;
-
-interface IRootStorage
-{
-    IRootStorageVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IRootStorage__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IBindCtx
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IBindCtx__
-#define __IBindCtx__
-
-/* Forward declaration */
-typedef interface IBindCtx IBindCtx;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPBC_DEFINED
-
-#define _LPBC_DEFINED
-
-typedef IBindCtx *LPBC;
-
-
-#endif
-
-#ifndef _LPBINDCTX_DEFINED
-
-#define _LPBBINDCTX_DEFINED
-
-typedef IBindCtx *LPBINDCTX;
-
-
-#endif
-
-#ifndef _tagBIND_OPTS_DEFINED
-
-typedef struct tagBIND_OPTS
-  {
-  DWORD cbStruct;
-  DWORD grfFlags;
-  DWORD grfMode;
-  DWORD dwTickCountDeadline;
-  }
-BIND_OPTS;
-
-
-typedef struct tagBIND_OPTS *LPBIND_OPTS;
-
-
-#define _tagBIND_OPTS_DEFINED
-
-#define _BIND_OPTS_DEFINED
-
-#define _LPBIND_OPTS_DEFINED
-
-#endif
-
-#ifndef _tagBIND_FLAGS_DEFINED
-
-typedef enum tagBIND_FLAGS
-  {
-	BIND_MAYBOTHERUSER = 1,
-	BIND_JUSTTESTEXISTENCE = 2
-  }
-BIND_FLAGS;
-
-
-#define _tagBIND_FLAGS_DEFINED
-
-#define _BIND_FLAGS_DEFINED
-
-#endif
-
-EXTERN_C const IID IID_IBindCtx;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IBindCtx : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE RegisterObjectBound
-    (
-	IUnknown *punk
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE RevokeObjectBound
-    (
-	IUnknown *punk
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE ReleaseBoundObjects
-    (
-        void
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE SetBindOptions
-    (
-	BIND_OPTS *pbindopts
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE GetBindOptions
-    (
-	BIND_OPTS *pbindopts
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE GetRunningObjectTable
-    (
-	IRunningObjectTable **pprot
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE RegisterObjectParam
-    (
-	LPOLESTR pszKey,
-	IUnknown *punk
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE GetObjectParam
-    (
-	LPOLESTR pszKey,
-	IUnknown **ppunk
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE EnumObjectParam
-    (
-	IEnumString **ppenum
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE RevokeObjectParam
-    (
-	LPOLESTR pszKey
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IBindCtxVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IBindCtx FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IBindCtx FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IBindCtx FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *RegisterObjectBound)
-    (
-        IBindCtx FAR * This,
-	IUnknown *punk
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *RevokeObjectBound)
-    (
-        IBindCtx FAR * This,
-	IUnknown *punk
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *ReleaseBoundObjects)
-    (
-        IBindCtx FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *SetBindOptions)
-    (
-        IBindCtx FAR * This,
-	BIND_OPTS *pbindopts
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetBindOptions)
-    (
-        IBindCtx FAR * This,
-	BIND_OPTS *pbindopts
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetRunningObjectTable)
-    (
-        IBindCtx FAR * This,
-	IRunningObjectTable **pprot
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *RegisterObjectParam)
-    (
-        IBindCtx FAR * This,
-	LPOLESTR pszKey,
-	IUnknown *punk
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetObjectParam)
-    (
-        IBindCtx FAR * This,
-	LPOLESTR pszKey,
-	IUnknown **ppunk
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *EnumObjectParam)
-    (
-        IBindCtx FAR * This,
-	IEnumString **ppenum
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *RevokeObjectParam)
-    (
-        IBindCtx FAR * This,
-	LPOLESTR pszKey
-    );
-    
-} IBindCtxVtbl;
-
-interface IBindCtx
-{
-    IBindCtxVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IBindCtx__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IRunnableObject
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IRunnableObject__
-#define __IRunnableObject__
-
-/* Forward declaration */
-typedef interface IRunnableObject IRunnableObject;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPRUNNABLEOBJECT_DEFINED
-
-#define _LPRUNNABLEOBJECT_DEFINED
-
-typedef IRunnableObject *LPRUNNABLEOBJECT;
-
-
-#endif
-
-EXTERN_C const IID IID_IRunnableObject;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IRunnableObject : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE GetRunningClass
-    (
-	LPCLSID lpClsid
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Run
-    (
-	LPBINDCTX pbc
-    ) = 0;
-    
-    virtual BOOL STDMETHODCALLTYPE IsRunning
-    (
-        void
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE LockRunning
-    (
-	BOOL fLock,
-	BOOL fLastUnlockCloses
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE SetContainedObject
-    (
-	BOOL fContained
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IRunnableObjectVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IRunnableObject FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IRunnableObject FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IRunnableObject FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetRunningClass)
-    (
-        IRunnableObject FAR * This,
-	LPCLSID lpClsid
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Run)
-    (
-        IRunnableObject FAR * This,
-	LPBINDCTX pbc
-    );
-    
-    BOOL (STDMETHODCALLTYPE FAR *IsRunning)
-    (
-        IRunnableObject FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *LockRunning)
-    (
-        IRunnableObject FAR * This,
-	BOOL fLock,
-	BOOL fLastUnlockCloses
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *SetContainedObject)
-    (
-        IRunnableObject FAR * This,
-	BOOL fContained
-    );
-    
-} IRunnableObjectVtbl;
-
-interface IRunnableObject
-{
-    IRunnableObjectVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IRunnableObject__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IStream
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IStream__
-#define __IStream__
-
-/* Forward declaration */
-typedef interface IStream IStream;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPSTREAM_DEFINED
-
-#define _LPSTREAM_DEFINED
-
-typedef IStream *LPSTREAM;
-
-
-#endif
-
-#ifndef _tagSTATSTG_DEFINED
-
-typedef struct tagSTATSTG
-  {
-  LPOLESTR pwcsName;
-  DWORD type;
-  ULARGE_INTEGER cbSize;
-  FILETIME mtime;
-  FILETIME ctime;
-  FILETIME atime;
-  DWORD grfMode;
-  DWORD grfLocksSupported;
-  CLSID clsid;
-  DWORD grfStateBits;
-  DWORD reserved;
-  }
-STATSTG;
-
-
-#define _tagSTATSTG_DEFINED
-
-#define _STATSTG_DEFINED
-
-#endif
-
-#ifndef _tagSTGTY_DEFINED
-
-typedef enum tagSTGTY
-  {
-	STGTY_STORAGE = 1,
-	STGTY_STREAM = 2,
-	STGTY_LOCKBYTES = 3,
-	STGTY_PROPERTY = 4
-  }
-STGTY;
-
-
-#define _tagSTGTY_DEFINED
-
-#define _STGTY_DEFINED
-
-#endif
-
-#ifndef _tagSTREAM_SEEK_DEFINED
-
-typedef enum tagSTREAM_SEEK
-  {
-	STREAM_SEEK_SET = 0,
-	STREAM_SEEK_CUR = 1,
-	STREAM_SEEK_END = 2
-  }
-STREAM_SEEK;
-
-
-#define _tagSTREAM_SEEK_DEFINED
-
-#define _STREAM_SEEK_DEFINED
-
-#endif
-
-#ifndef _tagLOCKTYPE_DEFINED
-
-typedef enum tagLOCKTYPE
-  {
-	LOCK_WRITE = 1,
-	LOCK_EXCLUSIVE = 2,
-	LOCK_ONLYONCE = 4
-  }
-LOCKTYPE;
-
-
-#define _tagLOCKTYPE_DEFINED
-
-#define _LOCKTYPE_DEFINED
-
-#endif
-
-EXTERN_C const IID IID_IStream;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IStream : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE Read
-    (
-	void *pv,
-	ULONG cb,
-	ULONG *pcbRead
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Write
-    (
-	const void *pv,
-	ULONG cb,
-	ULONG *pcbWritten
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Seek
-    (
-	LARGE_INTEGER dlibMove,
-	DWORD dwOrigin,
-	ULARGE_INTEGER *plibNewPosition
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE SetSize
-    (
-	ULARGE_INTEGER libNewSize
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE CopyTo
-    (
-	IStream *pstm,
-	ULARGE_INTEGER cb,
-	ULARGE_INTEGER *pcbRead,
-	ULARGE_INTEGER *pcbWritten
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Commit
-    (
-	DWORD grfCommitFlags
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Revert
-    (
-        void
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE LockRegion
-    (
-	ULARGE_INTEGER libOffset,
-	ULARGE_INTEGER cb,
-	DWORD dwLockType
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE UnlockRegion
-    (
-	ULARGE_INTEGER libOffset,
-	ULARGE_INTEGER cb,
-	DWORD dwLockType
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Stat
-    (
-	STATSTG *pstatstg,
-	DWORD grfStatFlag
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Clone
-    (
-	IStream **ppstm
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IStreamVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IStream FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IStream FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IStream FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Read)
-    (
-        IStream FAR * This,
-	void *pv,
-	ULONG cb,
-	ULONG *pcbRead
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Write)
-    (
-        IStream FAR * This,
-	const void *pv,
-	ULONG cb,
-	ULONG *pcbWritten
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Seek)
-    (
-        IStream FAR * This,
-	LARGE_INTEGER dlibMove,
-	DWORD dwOrigin,
-	ULARGE_INTEGER *plibNewPosition
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *SetSize)
-    (
-        IStream FAR * This,
-	ULARGE_INTEGER libNewSize
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *CopyTo)
-    (
-        IStream FAR * This,
-	IStream *pstm,
-	ULARGE_INTEGER cb,
-	ULARGE_INTEGER *pcbRead,
-	ULARGE_INTEGER *pcbWritten
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Commit)
-    (
-        IStream FAR * This,
-	DWORD grfCommitFlags
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Revert)
-    (
-        IStream FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *LockRegion)
-    (
-        IStream FAR * This,
-	ULARGE_INTEGER libOffset,
-	ULARGE_INTEGER cb,
-	DWORD dwLockType
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *UnlockRegion)
-    (
-        IStream FAR * This,
-	ULARGE_INTEGER libOffset,
-	ULARGE_INTEGER cb,
-	DWORD dwLockType
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Stat)
-    (
-        IStream FAR * This,
-	STATSTG *pstatstg,
-	DWORD grfStatFlag
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Clone)
-    (
-        IStream FAR * This,
-	IStream **ppstm
-    );
-    
-} IStreamVtbl;
-
-interface IStream
-{
-    IStreamVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IStream__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IMalloc
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IMalloc__
-#define __IMalloc__
-
-/* Forward declaration */
-typedef interface IMalloc IMalloc;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPMALLOC_DEFINED
-
-#define _LPMALLOC_DEFINED
-
-typedef IMalloc *LPMALLOC;
-
-
-#endif
-
-EXTERN_C const IID IID_IMalloc;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IMalloc : public IUnknown
-{
-public:
-    virtual void  FAR *STDMETHODCALLTYPE Alloc
-    (
-	ULONG cb
-    ) = 0;
-    
-    virtual void  FAR *STDMETHODCALLTYPE Realloc
-    (
-	void *pv,
-	ULONG cb
-    ) = 0;
-    
-    virtual void STDMETHODCALLTYPE Free
-    (
-	void *pv
-    ) = 0;
     
-    virtual ULONG STDMETHODCALLTYPE GetSize
-    (
-	void *pv
-    ) = 0;
+    interface IClassFactory : public IUnknown
+    {
+    public:
+        virtual /* [local] */ HRESULT __stdcall CreateInstance( 
+            /* [unique][in] */ IUnknown __RPC_FAR *pUnkOuter,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject) = 0;
+        
+        virtual HRESULT __stdcall LockServer( 
+            /* [in] */ BOOL fLock) = 0;
+        
+    };
     
-    virtual int STDMETHODCALLTYPE DidAlloc
-    (
-	void *pv
-    ) = 0;
+#else 	/* C style interface */
     
-    virtual void STDMETHODCALLTYPE HeapMinimize
-    (
-        void
-    ) = 0;
+    typedef struct IClassFactoryVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IClassFactory __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IClassFactory __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IClassFactory __RPC_FAR * This);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *CreateInstance )( 
+            IClassFactory __RPC_FAR * This,
+            /* [unique][in] */ IUnknown __RPC_FAR *pUnkOuter,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        HRESULT ( __stdcall __RPC_FAR *LockServer )( 
+            IClassFactory __RPC_FAR * This,
+            /* [in] */ BOOL fLock);
+        
+    } IClassFactoryVtbl;
     
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IMallocVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IMalloc FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IMalloc FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IMalloc FAR * This
-    );
-    
-    void  FAR *(STDMETHODCALLTYPE FAR *Alloc)
-    (
-        IMalloc FAR * This,
-	ULONG cb
-    );
-    
-    void  FAR *(STDMETHODCALLTYPE FAR *Realloc)
-    (
-        IMalloc FAR * This,
-	void *pv,
-	ULONG cb
-    );
-    
-    void (STDMETHODCALLTYPE FAR *Free)
-    (
-        IMalloc FAR * This,
-	void *pv
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *GetSize)
-    (
-        IMalloc FAR * This,
-	void *pv
-    );
-    
-    int (STDMETHODCALLTYPE FAR *DidAlloc)
-    (
-        IMalloc FAR * This,
-	void *pv
-    );
-    
-    void (STDMETHODCALLTYPE FAR *HeapMinimize)
-    (
-        IMalloc FAR * This
-    );
-    
-} IMallocVtbl;
-
-interface IMalloc
-{
-    IMallocVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IMalloc__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IStdMarshalInfo
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IStdMarshalInfo__
-#define __IStdMarshalInfo__
-
-/* Forward declaration */
-typedef interface IStdMarshalInfo IStdMarshalInfo;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPSTDMARSHALINFO_DEFINED
-
-#define _LPSTDMARSHALINFO_DEFINED
-
-typedef IStdMarshalInfo *LPSTDMARSHALINFO;
-
-
-#endif
-
-EXTERN_C const IID IID_IStdMarshalInfo;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IStdMarshalInfo : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE GetClassForHandler
-    (
-	DWORD dwDestContext,
-	void *pvDestContext,
-	CLSID *pClsid
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IStdMarshalInfoVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IStdMarshalInfo FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IStdMarshalInfo FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IStdMarshalInfo FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetClassForHandler)
-    (
-        IStdMarshalInfo FAR * This,
-	DWORD dwDestContext,
-	void *pvDestContext,
-	CLSID *pClsid
-    );
-    
-} IStdMarshalInfoVtbl;
-
-interface IStdMarshalInfo
-{
-    IStdMarshalInfoVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IStdMarshalInfo__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IMessageFilter
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IMessageFilter__
-#define __IMessageFilter__
-
-/* Forward declaration */
-typedef interface IMessageFilter IMessageFilter;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPMESSAGEFILTER_DEFINED
-
-#define _LPMESSAGEFILTER_DEFINED
-
-typedef IMessageFilter *LPMESSAGEFILTER;
-
-
-#endif
-
-#ifndef _tagCALLTYPE_DEFINED
-
-typedef enum tagCALLTYPE
-  {
-	CALLTYPE_TOPLEVEL = 1,
-	CALLTYPE_NESTED = 2,
-	CALLTYPE_ASYNC = 3,
-	CALLTYPE_TOPLEVEL_CALLPENDING = 4,
-	CALLTYPE_ASYNC_CALLPENDING = 5
-  }
-CALLTYPE;
-
-
-#define _tagCALLTYPE_DEFINED
-
-#define _CALLTYPE_DEFINED
-
-#endif
-
-#ifndef _tagSERVERCALL_DEFINED
-
-typedef enum tagSERVERCALL
-  {
-	SERVERCALL_ISHANDLED = 0,
-	SERVERCALL_REJECTED = 1,
-	SERVERCALL_RETRYLATER = 2
-  }
-SERVERCALL;
-
-
-#define _tagSERVERCALL_DEFINED
-
-#define _SERVERCALL_DEFINED
-
-#endif
-
-#ifndef _tagPENDINGTYPE_DEFINED
-
-typedef enum tagPENDINGTYPE
-  {
-	PENDINGTYPE_TOPLEVEL = 1,
-	PENDINGTYPE_NESTED = 2
-  }
-PENDINGTYPE;
-
-
-#define _tagPENDINGTYPE_DEFINED
-
-#define _PENDINGTYPE_DEFINED
-
-#endif
-
-#ifndef _tagPENDINGMSG_DEFINED
-
-typedef enum tagPENDINGMSG
-  {
-	PENDINGMSG_CANCELCALL = 0,
-	PENDINGMSG_WAITNOPROCESS = 1,
-	PENDINGMSG_WAITDEFPROCESS = 2
-  }
-PENDINGMSG;
-
-
-#define _tagPENDINGMSG_DEFINED
-
-#define _PENDINGMSG_DEFINED
-
-#endif
-
-#ifndef _tagINTERFACEINFO_DEFINED
-
-typedef struct tagINTERFACEINFO
-  {
-  IUnknown *pUnk;
-  IID iid;
-  WORD wMethod;
-  }
-INTERFACEINFO;
-
-
-typedef struct tagINTERFACEINFO *LPINTERFACEINFO;
-
-
-#define _tagINTERFACEINFO_DEFINED
-
-#define _INTERFACEINFO_DEFINED
-
-#define _LPINTERFACEINFO_DEFINED
-
-#endif
-
-EXTERN_C const IID IID_IMessageFilter;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IMessageFilter : public IUnknown
-{
-public:
-    virtual DWORD STDMETHODCALLTYPE HandleInComingCall
-    (
-	DWORD dwCallType,
-	HTASK htaskCaller,
-	DWORD dwTickCount,
-	LPINTERFACEINFO lpInterfaceInfo
-    ) = 0;
-    
-    virtual DWORD STDMETHODCALLTYPE RetryRejectedCall
-    (
-	HTASK htaskCallee,
-	DWORD dwTickCount,
-	DWORD dwRejectType
-    ) = 0;
+    interface IClassFactory
+    {
+        CONST_VTBL struct IClassFactoryVtbl __RPC_FAR *lpVtbl;
+    };
     
-    virtual DWORD STDMETHODCALLTYPE MessagePending
-    (
-	HTASK htaskCallee,
-	DWORD dwTickCount,
-	DWORD dwPendingType
-    ) = 0;
     
-};
 
-#else 
+#ifdef COBJMACROS
 
-/* C Language Binding */
 
-typedef struct IMessageFilterVtbl
-{
+#define IClassFactory_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
 
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IMessageFilter FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IMessageFilter FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IMessageFilter FAR * This
-    );
-    
-    DWORD (STDMETHODCALLTYPE FAR *HandleInComingCall)
-    (
-        IMessageFilter FAR * This,
-	DWORD dwCallType,
-	HTASK htaskCaller,
-	DWORD dwTickCount,
-	LPINTERFACEINFO lpInterfaceInfo
-    );
-    
-    DWORD (STDMETHODCALLTYPE FAR *RetryRejectedCall)
-    (
-        IMessageFilter FAR * This,
-	HTASK htaskCallee,
-	DWORD dwTickCount,
-	DWORD dwRejectType
-    );
-    
-    DWORD (STDMETHODCALLTYPE FAR *MessagePending)
-    (
-        IMessageFilter FAR * This,
-	HTASK htaskCallee,
-	DWORD dwTickCount,
-	DWORD dwPendingType
-    );
-    
-} IMessageFilterVtbl;
-
-interface IMessageFilter
-{
-    IMessageFilterVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IMessageFilter__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IEnumSTATSTG
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IEnumSTATSTG__
-#define __IEnumSTATSTG__
-
-/* Forward declaration */
-typedef interface IEnumSTATSTG IEnumSTATSTG;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
+#define IClassFactory_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
 
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
+#define IClassFactory_Release(This)	\
+    (This)->lpVtbl -> Release(This)
 
 
-#ifndef _LPENUMSTATSTG_DEFINED
+#define IClassFactory_CreateInstance(This,pUnkOuter,riid,ppvObject)	\
+    (This)->lpVtbl -> CreateInstance(This,pUnkOuter,riid,ppvObject)
 
-#define _LPENUMSTATSTG_DEFINED
+#define IClassFactory_LockServer(This,fLock)	\
+    (This)->lpVtbl -> LockServer(This,fLock)
 
-typedef IEnumSTATSTG *LPENUMSTATSTG;
+#endif /* COBJMACROS */
 
 
-#endif
+#endif 	/* C style interface */
 
-EXTERN_C const IID IID_IEnumSTATSTG;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IEnumSTATSTG : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE Next
-    (
-	ULONG celt,
-	STATSTG *rgelt,
-	ULONG *pceltFetched
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Skip
-    (
-	ULONG celt
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Reset
-    (
-        void
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Clone
-    (
-	IEnumSTATSTG **ppenum
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IEnumSTATSTGVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IEnumSTATSTG FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IEnumSTATSTG FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IEnumSTATSTG FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Next)
-    (
-        IEnumSTATSTG FAR * This,
-	ULONG celt,
-	STATSTG *rgelt,
-	ULONG *pceltFetched
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Skip)
-    (
-        IEnumSTATSTG FAR * This,
-	ULONG celt
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Reset)
-    (
-        IEnumSTATSTG FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Clone)
-    (
-        IEnumSTATSTG FAR * This,
-	IEnumSTATSTG **ppenum
-    );
-    
-} IEnumSTATSTGVtbl;
 
-interface IEnumSTATSTG
-{
-    IEnumSTATSTGVtbl FAR *lpVtbl;
-} ;
 
+/* [call_as] */ HRESULT __stdcall IClassFactory_RemoteCreateInstance_Proxy( 
+    IClassFactory __RPC_FAR * This,
+    /* [in] */ REFIID riid,
+    /* [iid_is][out] */ IUnknown __RPC_FAR *__RPC_FAR *ppvObject);
 
-#endif
 
-#endif /*__IEnumSTATSTG__*/
+void __RPC_STUB IClassFactory_RemoteCreateInstance_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
 
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IMarshal
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
 
-#ifndef __IMarshal__
-#define __IMarshal__
+HRESULT __stdcall IClassFactory_LockServer_Proxy( 
+    IClassFactory __RPC_FAR * This,
+    /* [in] */ BOOL fLock);
 
-/* Forward declaration */
-typedef interface IMarshal IMarshal;
 
+void __RPC_STUB IClassFactory_LockServer_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
 
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
 
 
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
+#endif 	/* __IClassFactory_INTERFACE_DEFINED__ */
 
 
-#ifndef _LPMARSHAL_DEFINED
+#ifndef __IMarshal_INTERFACE_DEFINED__
+#define __IMarshal_INTERFACE_DEFINED__
 
-#define _LPMARSHAL_DEFINED
+/****************************************
+ * Generated header for interface: IMarshal
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [uuid][object][local] */ 
 
-typedef IMarshal *LPMARSHAL;
 
+			/* size is 4 */
+typedef /* [unique] */ IMarshal __RPC_FAR *LPMARSHAL;
 
-#endif
 
 EXTERN_C const IID IID_IMarshal;
+
 #if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IMarshal : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE GetUnmarshalClass
-    (
-	REFIID riid,
-	void *pv,
-	DWORD dwDestContext,
-	void *pvDestContext,
-	DWORD mshlflags,
-	CLSID *pCid
-    ) = 0;
     
-    virtual HRESULT STDMETHODCALLTYPE GetMarshalSizeMax
-    (
-	REFIID riid,
-	void *pv,
-	DWORD dwDestContext,
-	void *pvDestContext,
-	DWORD mshlflags,
-	DWORD *pSize
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE MarshalInterface
-    (
-	IStream *pStm,
-	REFIID riid,
-	void *pv,
-	DWORD dwDestContext,
-	void *pvDestContext,
-	DWORD mshlflags
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE UnmarshalInterface
-    (
-	IStream *pStm,
-	REFIID riid,
-	void **ppv
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE ReleaseMarshalData
-    (
-	IStream *pStm
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE DisconnectObject
-    (
-	DWORD dwReserved
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IMarshalVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IMarshal FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IMarshal FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IMarshal FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetUnmarshalClass)
-    (
-        IMarshal FAR * This,
-	REFIID riid,
-	void *pv,
-	DWORD dwDestContext,
-	void *pvDestContext,
-	DWORD mshlflags,
-	CLSID *pCid
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetMarshalSizeMax)
-    (
-        IMarshal FAR * This,
-	REFIID riid,
-	void *pv,
-	DWORD dwDestContext,
-	void *pvDestContext,
-	DWORD mshlflags,
-	DWORD *pSize
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *MarshalInterface)
-    (
-        IMarshal FAR * This,
-	IStream *pStm,
-	REFIID riid,
-	void *pv,
-	DWORD dwDestContext,
-	void *pvDestContext,
-	DWORD mshlflags
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *UnmarshalInterface)
-    (
-        IMarshal FAR * This,
-	IStream *pStm,
-	REFIID riid,
-	void **ppv
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *ReleaseMarshalData)
-    (
-        IMarshal FAR * This,
-	IStream *pStm
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *DisconnectObject)
-    (
-        IMarshal FAR * This,
-	DWORD dwReserved
-    );
-    
-} IMarshalVtbl;
-
-interface IMarshal
-{
-    IMarshalVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IMarshal__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IPersistFile
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IPersistFile__
-#define __IPersistFile__
-
-/* Forward declaration */
-typedef interface IPersistFile IPersistFile;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPPERSISTFILE_DEFINED
-
-#define _LPPERSISTFILE_DEFINED
-
-typedef IPersistFile *LPPERSISTFILE;
-
-
-#endif
-
-EXTERN_C const IID IID_IPersistFile;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IPersistFile : public IPersist
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE IsDirty
-    (
-        void
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Load
-    (
-	LPCOLESTR pszFileName,
-	DWORD dwMode
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Save
-    (
-	LPCOLESTR pszFileName,
-	BOOL fRemember
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE SaveCompleted
-    (
-	LPCOLESTR pszFileName
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE GetCurFile
-    (
-	LPOLESTR *ppszFileName
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IPersistFileVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IPersistFile FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IPersistFile FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IPersistFile FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetClassID)
-    (
-        IPersistFile FAR * This,
-	CLSID *pClassID
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *IsDirty)
-    (
-        IPersistFile FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Load)
-    (
-        IPersistFile FAR * This,
-	LPCOLESTR pszFileName,
-	DWORD dwMode
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Save)
-    (
-        IPersistFile FAR * This,
-	LPCOLESTR pszFileName,
-	BOOL fRemember
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *SaveCompleted)
-    (
-        IPersistFile FAR * This,
-	LPCOLESTR pszFileName
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetCurFile)
-    (
-        IPersistFile FAR * This,
-	LPOLESTR *ppszFileName
-    );
-    
-} IPersistFileVtbl;
-
-interface IPersistFile
-{
-    IPersistFileVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IPersistFile__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IRpcChannelBuffer
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IRpcChannelBuffer__
-#define __IRpcChannelBuffer__
-
-/* Forward declaration */
-typedef interface IRpcChannelBuffer IRpcChannelBuffer;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-typedef unsigned long RPCOLEDATAREP;
-
-
-/* RPCFLG_* are also #defined by rpcdcep.h; when that header is in scope
- * (e.g. the CAIROLE OLE build) this enum's members collide with the macros.
- * Guard it — NT 3.5 (build 782) objbase.h has no tagRPCFLG enum; the values
- * come from rpcdcep.h and the RPCFLG type from CAIROLE's own EXTENS.H. */
-#ifndef RPCFLG_ASYNCHRONOUS
-typedef enum tagRPCFLG
-  {
-	RPCFLG_ASYNCHRONOUS = 1073741824,
-	RPCFLG_INPUT_SYNCHRONOUS = 536870912
-  }
-RPCFLG;
-#endif
-
-
-typedef struct tagRPCOLEMESSAGE
-  {
-  void *reserved1;
-  RPCOLEDATAREP dataRepresentation;
-  void *Buffer;
-  ULONG cbBuffer;
-  ULONG iMethod;
-  void *reserved2[5];
-  ULONG rpcFlags;
-  }
-RPCOLEMESSAGE;
-
-
-typedef RPCOLEMESSAGE *PRPCOLEMESSAGE;
-
-
-EXTERN_C const IID IID_IRpcChannelBuffer;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IRpcChannelBuffer : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE GetBuffer
-    (
-	RPCOLEMESSAGE *pMessage,
-	REFIID riid
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE SendReceive
-    (
-	RPCOLEMESSAGE *pMessage,
-	ULONG *pStatus
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE FreeBuffer
-    (
-	RPCOLEMESSAGE *pMessage
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE GetDestCtx
-    (
-	DWORD *pdwDestContext,
-	void **ppvDestContext
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE IsConnected
-    (
-        void
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IRpcChannelBufferVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IRpcChannelBuffer FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IRpcChannelBuffer FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IRpcChannelBuffer FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetBuffer)
-    (
-        IRpcChannelBuffer FAR * This,
-	RPCOLEMESSAGE *pMessage,
-	REFIID riid
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *SendReceive)
-    (
-        IRpcChannelBuffer FAR * This,
-	RPCOLEMESSAGE *pMessage,
-	ULONG *pStatus
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *FreeBuffer)
-    (
-        IRpcChannelBuffer FAR * This,
-	RPCOLEMESSAGE *pMessage
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetDestCtx)
-    (
-        IRpcChannelBuffer FAR * This,
-	DWORD *pdwDestContext,
-	void **ppvDestContext
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *IsConnected)
-    (
-        IRpcChannelBuffer FAR * This
-    );
-    
-} IRpcChannelBufferVtbl;
-
-interface IRpcChannelBuffer
-{
-    IRpcChannelBufferVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IRpcChannelBuffer__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for ILockBytes
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __ILockBytes__
-#define __ILockBytes__
-
-/* Forward declaration */
-typedef interface ILockBytes ILockBytes;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-typedef ILockBytes *LPLOCKBYTES;
-
-
-EXTERN_C const IID IID_ILockBytes;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface ILockBytes : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE ReadAt
-    (
-	ULARGE_INTEGER ulOffset,
-	void *pv,
-	ULONG cb,
-	ULONG *pcbRead
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE WriteAt
-    (
-	ULARGE_INTEGER ulOffset,
-	const void *pv,
-	ULONG cb,
-	ULONG *pcbWritten
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Flush
-    (
-        void
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE SetSize
-    (
-	ULARGE_INTEGER cb
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE LockRegion
-    (
-	ULARGE_INTEGER libOffset,
-	ULARGE_INTEGER cb,
-	DWORD dwLockType
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE UnlockRegion
-    (
-	ULARGE_INTEGER libOffset,
-	ULARGE_INTEGER cb,
-	DWORD dwLockType
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Stat
-    (
-	STATSTG *pstatstg,
-	DWORD grfStatFlag
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct ILockBytesVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        ILockBytes FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        ILockBytes FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        ILockBytes FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *ReadAt)
-    (
-        ILockBytes FAR * This,
-	ULARGE_INTEGER ulOffset,
-	void *pv,
-	ULONG cb,
-	ULONG *pcbRead
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *WriteAt)
-    (
-        ILockBytes FAR * This,
-	ULARGE_INTEGER ulOffset,
-	const void *pv,
-	ULONG cb,
-	ULONG *pcbWritten
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Flush)
-    (
-        ILockBytes FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *SetSize)
-    (
-        ILockBytes FAR * This,
-	ULARGE_INTEGER cb
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *LockRegion)
-    (
-        ILockBytes FAR * This,
-	ULARGE_INTEGER libOffset,
-	ULARGE_INTEGER cb,
-	DWORD dwLockType
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *UnlockRegion)
-    (
-        ILockBytes FAR * This,
-	ULARGE_INTEGER libOffset,
-	ULARGE_INTEGER cb,
-	DWORD dwLockType
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Stat)
-    (
-        ILockBytes FAR * This,
-	STATSTG *pstatstg,
-	DWORD grfStatFlag
-    );
-    
-} ILockBytesVtbl;
-
-interface ILockBytes
-{
-    ILockBytesVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__ILockBytes__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IRpcProxyBuffer
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IRpcProxyBuffer__
-#define __IRpcProxyBuffer__
-
-/* Forward declaration */
-typedef interface IRpcProxyBuffer IRpcProxyBuffer;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-EXTERN_C const IID IID_IRpcProxyBuffer;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IRpcProxyBuffer : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE Connect
-    (
-	IRpcChannelBuffer *pRpcChannelBuffer
-    ) = 0;
-    
-    virtual void STDMETHODCALLTYPE Disconnect
-    (
-        void
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IRpcProxyBufferVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IRpcProxyBuffer FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IRpcProxyBuffer FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IRpcProxyBuffer FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Connect)
-    (
-        IRpcProxyBuffer FAR * This,
-	IRpcChannelBuffer *pRpcChannelBuffer
-    );
-    
-    void (STDMETHODCALLTYPE FAR *Disconnect)
-    (
-        IRpcProxyBuffer FAR * This
-    );
-    
-} IRpcProxyBufferVtbl;
-
-interface IRpcProxyBuffer
-{
-    IRpcProxyBufferVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IRpcProxyBuffer__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IPersistStream
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IPersistStream__
-#define __IPersistStream__
-
-/* Forward declaration */
-typedef interface IPersistStream IPersistStream;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPPERSISTSTREAM_DEFINED
-
-#define _LPPERSISTSTREAM_DEFINED
-
-typedef IPersistStream *LPPERSISTSTREAM;
-
-
-#endif
-
-EXTERN_C const IID IID_IPersistStream;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IPersistStream : public IPersist
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE IsDirty
-    (
-        void
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Load
-    (
-	IStream *pStm
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Save
-    (
-	IStream *pStm,
-	BOOL fClearDirty
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE GetSizeMax
-    (
-	ULARGE_INTEGER *pcbSize
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IPersistStreamVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IPersistStream FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IPersistStream FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IPersistStream FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetClassID)
-    (
-        IPersistStream FAR * This,
-	CLSID *pClassID
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *IsDirty)
-    (
-        IPersistStream FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Load)
-    (
-        IPersistStream FAR * This,
-	IStream *pStm
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Save)
-    (
-        IPersistStream FAR * This,
-	IStream *pStm,
-	BOOL fClearDirty
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetSizeMax)
-    (
-        IPersistStream FAR * This,
-	ULARGE_INTEGER *pcbSize
-    );
-    
-} IPersistStreamVtbl;
-
-interface IPersistStream
-{
-    IPersistStreamVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IPersistStream__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IStorage
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IStorage__
-#define __IStorage__
-
-/* Forward declaration */
-typedef interface IStorage IStorage;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPSTORAGE_DEFINED
-
-#define _LPSTORAGE_DEFINED
-
-typedef IStorage *LPSTORAGE;
-
-
-#endif
-
-typedef struct tagRemSNB
-  {
-  unsigned long ulCntStr;
-  unsigned long ulCntChar;
-  OLECHAR rgString[1];
-  }
-RemSNB;
-
-
-#ifndef _SNB_DEFINED
-
-#define _SNB_DEFINED
-
-typedef OLECHAR **SNB;
-void __RPC_API SNB_to_xmit (SNB __RPC_FAR *, RemSNB __RPC_FAR * __RPC_FAR *);
-void __RPC_API SNB_from_xmit (RemSNB __RPC_FAR *, SNB __RPC_FAR *);
-void __RPC_API SNB_free_inst (SNB __RPC_FAR *);
-void __RPC_API SNB_free_xmit (RemSNB __RPC_FAR *);
-
-
-#endif
-
-EXTERN_C const IID IID_IStorage;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IStorage : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE CreateStream
-    (
-	const OLECHAR *pwcsName,
-	DWORD grfMode,
-	DWORD reserved1,
-	DWORD reserved2,
-	IStream **ppstm
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE OpenStream
-    (
-	const OLECHAR *pwcsName,
-	void *reserved1,
-	DWORD grfMode,
-	DWORD reserved2,
-	IStream **ppstm
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE CreateStorage
-    (
-	const OLECHAR *pwcsName,
-	DWORD grfMode,
-	DWORD dwStgFmt,
-	DWORD reserved2,
-	IStorage **ppstg
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE OpenStorage
-    (
-	const OLECHAR *pwcsName,
-	IStorage *pstgPriority,
-	DWORD grfMode,
-	SNB snbExclude,
-	DWORD reserved,
-	IStorage **ppstg
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE CopyTo
-    (
-	DWORD ciidExclude,
-	const IID *rgiidExclude,
-	SNB snbExclude,
-	IStorage *pstgDest
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE MoveElementTo
-    (
-	const OLECHAR *pwcsName,
-	IStorage *pstgDest,
-	const OLECHAR *pwcsNewName,
-	DWORD grfFlags
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Commit
-    (
-	DWORD grfCommitFlags
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Revert
-    (
-        void
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE EnumElements
-    (
-	DWORD reserved1,
-	void *reserved2,
-	DWORD reserved3,
-	IEnumSTATSTG **ppenum
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE DestroyElement
-    (
-	const OLECHAR *pwcsName
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE RenameElement
-    (
-	const OLECHAR *pwcsOldName,
-	const OLECHAR *pwcsNewName
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE SetElementTimes
-    (
-	const OLECHAR *pwcsName,
-	const FILETIME *pctime,
-	const FILETIME *patime,
-	const FILETIME *pmtime
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE SetClass
-    (
-	REFCLSID clsid
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE SetStateBits
-    (
-	DWORD grfStateBits,
-	DWORD grfMask
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Stat
-    (
-	STATSTG *pstatstg,
-	DWORD grfStatFlag
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IStorageVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IStorage FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IStorage FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IStorage FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *CreateStream)
-    (
-        IStorage FAR * This,
-	const OLECHAR *pwcsName,
-	DWORD grfMode,
-	DWORD reserved1,
-	DWORD reserved2,
-	IStream **ppstm
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *OpenStream)
-    (
-        IStorage FAR * This,
-	const OLECHAR *pwcsName,
-	void *reserved1,
-	DWORD grfMode,
-	DWORD reserved2,
-	IStream **ppstm
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *CreateStorage)
-    (
-        IStorage FAR * This,
-	const OLECHAR *pwcsName,
-	DWORD grfMode,
-	DWORD dwStgFmt,
-	DWORD reserved2,
-	IStorage **ppstg
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *OpenStorage)
-    (
-        IStorage FAR * This,
-	const OLECHAR *pwcsName,
-	IStorage *pstgPriority,
-	DWORD grfMode,
-	SNB snbExclude,
-	DWORD reserved,
-	IStorage **ppstg
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *CopyTo)
-    (
-        IStorage FAR * This,
-	DWORD ciidExclude,
-	const IID *rgiidExclude,
-	SNB snbExclude,
-	IStorage *pstgDest
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *MoveElementTo)
-    (
-        IStorage FAR * This,
-	const OLECHAR *pwcsName,
-	IStorage *pstgDest,
-	const OLECHAR *pwcsNewName,
-	DWORD grfFlags
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Commit)
-    (
-        IStorage FAR * This,
-	DWORD grfCommitFlags
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Revert)
-    (
-        IStorage FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *EnumElements)
-    (
-        IStorage FAR * This,
-	DWORD reserved1,
-	void *reserved2,
-	DWORD reserved3,
-	IEnumSTATSTG **ppenum
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *DestroyElement)
-    (
-        IStorage FAR * This,
-	const OLECHAR *pwcsName
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *RenameElement)
-    (
-        IStorage FAR * This,
-	const OLECHAR *pwcsOldName,
-	const OLECHAR *pwcsNewName
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *SetElementTimes)
-    (
-        IStorage FAR * This,
-	const OLECHAR *pwcsName,
-	const FILETIME *pctime,
-	const FILETIME *patime,
-	const FILETIME *pmtime
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *SetClass)
-    (
-        IStorage FAR * This,
-	REFCLSID clsid
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *SetStateBits)
-    (
-        IStorage FAR * This,
-	DWORD grfStateBits,
-	DWORD grfMask
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Stat)
-    (
-        IStorage FAR * This,
-	STATSTG *pstatstg,
-	DWORD grfStatFlag
-    );
-    
-} IStorageVtbl;
-
-interface IStorage
-{
-    IStorageVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IStorage__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IRpcStubBuffer
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IRpcStubBuffer__
-#define __IRpcStubBuffer__
-
-/* Forward declaration */
-typedef interface IRpcStubBuffer IRpcStubBuffer;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-EXTERN_C const IID IID_IRpcStubBuffer;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IRpcStubBuffer : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE Connect
-    (
-	IUnknown *pUnkServer
-    ) = 0;
-    
-    virtual void STDMETHODCALLTYPE Disconnect
-    (
-        void
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Invoke
-    (
-	RPCOLEMESSAGE *_prpcmsg,
-	IRpcChannelBuffer *_pRpcChannelBuffer
-    ) = 0;
-    
-    virtual IRpcStubBuffer  FAR *STDMETHODCALLTYPE IsIIDSupported
-    (
-	REFIID riid
-    ) = 0;
-    
-    virtual ULONG STDMETHODCALLTYPE CountRefs
-    (
-        void
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE DebugServerQueryInterface
-    (
-	void **ppv
-    ) = 0;
-    
-    virtual void STDMETHODCALLTYPE DebugServerRelease
-    (
-	void *pv
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IRpcStubBufferVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IRpcStubBuffer FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IRpcStubBuffer FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IRpcStubBuffer FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Connect)
-    (
-        IRpcStubBuffer FAR * This,
-	IUnknown *pUnkServer
-    );
-    
-    void (STDMETHODCALLTYPE FAR *Disconnect)
-    (
-        IRpcStubBuffer FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Invoke)
-    (
-        IRpcStubBuffer FAR * This,
-	RPCOLEMESSAGE *_prpcmsg,
-	IRpcChannelBuffer *_pRpcChannelBuffer
-    );
-    
-    IRpcStubBuffer  FAR *(STDMETHODCALLTYPE FAR *IsIIDSupported)
-    (
-        IRpcStubBuffer FAR * This,
-	REFIID riid
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *CountRefs)
-    (
-        IRpcStubBuffer FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *DebugServerQueryInterface)
-    (
-        IRpcStubBuffer FAR * This,
-	void **ppv
-    );
-    
-    void (STDMETHODCALLTYPE FAR *DebugServerRelease)
-    (
-        IRpcStubBuffer FAR * This,
-	void *pv
-    );
-    
-} IRpcStubBufferVtbl;
-
-interface IRpcStubBuffer
-{
-    IRpcStubBufferVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IRpcStubBuffer__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IPSFactoryBuffer
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IPSFactoryBuffer__
-#define __IPSFactoryBuffer__
-
-/* Forward declaration */
-typedef interface IPSFactoryBuffer IPSFactoryBuffer;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-EXTERN_C const IID IID_IPSFactoryBuffer;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IPSFactoryBuffer : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE CreateProxy
-    (
-	IUnknown *pUnkOuter,
-	REFIID riid,
-	IRpcProxyBuffer **ppProxy,
-	void **ppv
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE CreateStub
-    (
-	REFIID riid,
-	IUnknown *pUnkServer,
-	IRpcStubBuffer **ppStub
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IPSFactoryBufferVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IPSFactoryBuffer FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IPSFactoryBuffer FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IPSFactoryBuffer FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *CreateProxy)
-    (
-        IPSFactoryBuffer FAR * This,
-	IUnknown *pUnkOuter,
-	REFIID riid,
-	IRpcProxyBuffer **ppProxy,
-	void **ppv
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *CreateStub)
-    (
-        IPSFactoryBuffer FAR * This,
-	REFIID riid,
-	IUnknown *pUnkServer,
-	IRpcStubBuffer **ppStub
-    );
-    
-} IPSFactoryBufferVtbl;
-
-interface IPSFactoryBuffer
-{
-    IPSFactoryBufferVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IPSFactoryBuffer__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IPersistStorage
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IPersistStorage__
-#define __IPersistStorage__
-
-/* Forward declaration */
-typedef interface IPersistStorage IPersistStorage;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPPERSISTSTORAGE_DEFINED
-
-#define _LPPERSISTSTORAGE_DEFINED
-
-typedef IPersistStorage *LPPERSISTSTORAGE;
-
-
-#endif
-
-EXTERN_C const IID IID_IPersistStorage;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IPersistStorage : public IPersist
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE IsDirty
-    (
-        void
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE InitNew
-    (
-	IStorage *pStg
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Load
-    (
-	IStorage *pStg
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Save
-    (
-	IStorage *pStgSave,
-	BOOL fSameAsLoad
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE SaveCompleted
-    (
-	IStorage *pStgNew
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE HandsOffStorage
-    (
-        void
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IPersistStorageVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IPersistStorage FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IPersistStorage FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IPersistStorage FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetClassID)
-    (
-        IPersistStorage FAR * This,
-	CLSID *pClassID
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *IsDirty)
-    (
-        IPersistStorage FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *InitNew)
-    (
-        IPersistStorage FAR * This,
-	IStorage *pStg
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Load)
-    (
-        IPersistStorage FAR * This,
-	IStorage *pStg
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Save)
-    (
-        IPersistStorage FAR * This,
-	IStorage *pStgSave,
-	BOOL fSameAsLoad
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *SaveCompleted)
-    (
-        IPersistStorage FAR * This,
-	IStorage *pStgNew
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *HandsOffStorage)
-    (
-        IPersistStorage FAR * This
-    );
-    
-} IPersistStorageVtbl;
-
-interface IPersistStorage
-{
-    IPersistStorageVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IPersistStorage__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IAdviseSink
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IAdviseSink__
-#define __IAdviseSink__
-
-/* Forward declaration */
-typedef interface IAdviseSink IAdviseSink;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-typedef IAdviseSink *LPADVISESINK;
-
-
-typedef enum tagTYMED
-  {
-	TYMED_HGLOBAL = 1,
-	TYMED_FILE = 2,
-	TYMED_ISTREAM = 4,
-	TYMED_ISTORAGE = 8,
-	TYMED_GDI = 16,
-	TYMED_MFPICT = 32,
-	TYMED_NULL = 0
-  }
-TYMED;
-void __RPC_API TYMED_to_xmit (TYMED __RPC_FAR *, long __RPC_FAR * __RPC_FAR *);
-void __RPC_API TYMED_from_xmit (long __RPC_FAR *, TYMED __RPC_FAR *);
-void __RPC_API TYMED_free_inst (TYMED __RPC_FAR *);
-void __RPC_API TYMED_free_xmit (long __RPC_FAR *);
-
-
-#define TYMED_to_xmit(pEnum, ppLong) *(ppLong) = (long *) (pEnum)
-
-#define TYMED_from_xmit(pLong, pEnum) *(pEnum) = (TYMED) *(pLong)
-
-#define TYMED_free_inst(pEnum) 
-
-#define TYMED_free_xmit(pLong) 
-
-typedef struct tagRemSTGMEDIUM
-  {
-  DWORD tymed;
-  unsigned long pData;
-  unsigned long pUnkForRelease;
-  unsigned long cbData;
-  byte data[1];
-  }
-RemSTGMEDIUM;
-
-
-typedef struct tagSTGMEDIUM
-  {
-  DWORD tymed;
-union
+    interface IMarshal : public IUnknown
     {
-    HBITMAP hBitmap;
-    HMETAFILEPICT hMetaFilePict;
-    HGLOBAL hGlobal;
-    LPOLESTR lpszFileName;
-    IStream *pstm;
-    IStorage *pstg;
-    }
-  ;
-  IUnknown *pUnkForRelease;
-  }
-STGMEDIUM;
-void __RPC_API STGMEDIUM_to_xmit (STGMEDIUM __RPC_FAR *, RemSTGMEDIUM __RPC_FAR * __RPC_FAR *);
-void __RPC_API STGMEDIUM_from_xmit (RemSTGMEDIUM __RPC_FAR *, STGMEDIUM __RPC_FAR *);
-void __RPC_API STGMEDIUM_free_inst (STGMEDIUM __RPC_FAR *);
-void __RPC_API STGMEDIUM_free_xmit (RemSTGMEDIUM __RPC_FAR *);
+    public:
+        virtual HRESULT __stdcall GetUnmarshalClass( 
+            /* [in] */ REFIID riid,
+            /* [unique][in] */ void __RPC_FAR *pv,
+            /* [in] */ DWORD dwDestContext,
+            /* [unique][in] */ void __RPC_FAR *pvDestContext,
+            /* [in] */ DWORD mshlflags,
+            /* [out] */ CLSID __RPC_FAR *pCid) = 0;
+        
+        virtual HRESULT __stdcall GetMarshalSizeMax( 
+            /* [in] */ REFIID riid,
+            /* [unique][in] */ void __RPC_FAR *pv,
+            /* [in] */ DWORD dwDestContext,
+            /* [unique][in] */ void __RPC_FAR *pvDestContext,
+            /* [in] */ DWORD mshlflags,
+            /* [out] */ DWORD __RPC_FAR *pSize) = 0;
+        
+        virtual HRESULT __stdcall MarshalInterface( 
+            /* [unique][in] */ IStream __RPC_FAR *pStm,
+            /* [in] */ REFIID riid,
+            /* [unique][in] */ void __RPC_FAR *pv,
+            /* [in] */ DWORD dwDestContext,
+            /* [unique][in] */ void __RPC_FAR *pvDestContext,
+            /* [in] */ DWORD mshlflags) = 0;
+        
+        virtual HRESULT __stdcall UnmarshalInterface( 
+            /* [unique][in] */ IStream __RPC_FAR *pStm,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppv) = 0;
+        
+        virtual HRESULT __stdcall ReleaseMarshalData( 
+            /* [unique][in] */ IStream __RPC_FAR *pStm) = 0;
+        
+        virtual HRESULT __stdcall DisconnectObject( 
+            /* [in] */ DWORD dwReserved) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IMarshalVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IMarshal __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IMarshal __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IMarshal __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *GetUnmarshalClass )( 
+            IMarshal __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [unique][in] */ void __RPC_FAR *pv,
+            /* [in] */ DWORD dwDestContext,
+            /* [unique][in] */ void __RPC_FAR *pvDestContext,
+            /* [in] */ DWORD mshlflags,
+            /* [out] */ CLSID __RPC_FAR *pCid);
+        
+        HRESULT ( __stdcall __RPC_FAR *GetMarshalSizeMax )( 
+            IMarshal __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [unique][in] */ void __RPC_FAR *pv,
+            /* [in] */ DWORD dwDestContext,
+            /* [unique][in] */ void __RPC_FAR *pvDestContext,
+            /* [in] */ DWORD mshlflags,
+            /* [out] */ DWORD __RPC_FAR *pSize);
+        
+        HRESULT ( __stdcall __RPC_FAR *MarshalInterface )( 
+            IMarshal __RPC_FAR * This,
+            /* [unique][in] */ IStream __RPC_FAR *pStm,
+            /* [in] */ REFIID riid,
+            /* [unique][in] */ void __RPC_FAR *pv,
+            /* [in] */ DWORD dwDestContext,
+            /* [unique][in] */ void __RPC_FAR *pvDestContext,
+            /* [in] */ DWORD mshlflags);
+        
+        HRESULT ( __stdcall __RPC_FAR *UnmarshalInterface )( 
+            IMarshal __RPC_FAR * This,
+            /* [unique][in] */ IStream __RPC_FAR *pStm,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppv);
+        
+        HRESULT ( __stdcall __RPC_FAR *ReleaseMarshalData )( 
+            IMarshal __RPC_FAR * This,
+            /* [unique][in] */ IStream __RPC_FAR *pStm);
+        
+        HRESULT ( __stdcall __RPC_FAR *DisconnectObject )( 
+            IMarshal __RPC_FAR * This,
+            /* [in] */ DWORD dwReserved);
+        
+    } IMarshalVtbl;
+    
+    interface IMarshal
+    {
+        CONST_VTBL struct IMarshalVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
 
-union __MIDL_IAdviseSink_0001
-  {
-  HBITMAP hBitmap;
-  HMETAFILEPICT hMetaFilePict;
-  HGLOBAL hGlobal;
-  LPOLESTR lpszFileName;
-  IStream *pstm;
-  IStorage *pstg;
-  }
-;
+#ifdef COBJMACROS
 
 
-typedef STGMEDIUM *LPSTGMEDIUM;
+#define IMarshal_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IMarshal_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IMarshal_Release(This)	\
+    (This)->lpVtbl -> Release(This)
 
 
-EXTERN_C const IID IID_IAdviseSink;
+#define IMarshal_GetUnmarshalClass(This,riid,pv,dwDestContext,pvDestContext,mshlflags,pCid)	\
+    (This)->lpVtbl -> GetUnmarshalClass(This,riid,pv,dwDestContext,pvDestContext,mshlflags,pCid)
+
+#define IMarshal_GetMarshalSizeMax(This,riid,pv,dwDestContext,pvDestContext,mshlflags,pSize)	\
+    (This)->lpVtbl -> GetMarshalSizeMax(This,riid,pv,dwDestContext,pvDestContext,mshlflags,pSize)
+
+#define IMarshal_MarshalInterface(This,pStm,riid,pv,dwDestContext,pvDestContext,mshlflags)	\
+    (This)->lpVtbl -> MarshalInterface(This,pStm,riid,pv,dwDestContext,pvDestContext,mshlflags)
+
+#define IMarshal_UnmarshalInterface(This,pStm,riid,ppv)	\
+    (This)->lpVtbl -> UnmarshalInterface(This,pStm,riid,ppv)
+
+#define IMarshal_ReleaseMarshalData(This,pStm)	\
+    (This)->lpVtbl -> ReleaseMarshalData(This,pStm)
+
+#define IMarshal_DisconnectObject(This,dwReserved)	\
+    (This)->lpVtbl -> DisconnectObject(This,dwReserved)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+HRESULT __stdcall IMarshal_GetUnmarshalClass_Proxy( 
+    IMarshal __RPC_FAR * This,
+    /* [in] */ REFIID riid,
+    /* [unique][in] */ void __RPC_FAR *pv,
+    /* [in] */ DWORD dwDestContext,
+    /* [unique][in] */ void __RPC_FAR *pvDestContext,
+    /* [in] */ DWORD mshlflags,
+    /* [out] */ CLSID __RPC_FAR *pCid);
+
+
+void __RPC_STUB IMarshal_GetUnmarshalClass_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IMarshal_GetMarshalSizeMax_Proxy( 
+    IMarshal __RPC_FAR * This,
+    /* [in] */ REFIID riid,
+    /* [unique][in] */ void __RPC_FAR *pv,
+    /* [in] */ DWORD dwDestContext,
+    /* [unique][in] */ void __RPC_FAR *pvDestContext,
+    /* [in] */ DWORD mshlflags,
+    /* [out] */ DWORD __RPC_FAR *pSize);
+
+
+void __RPC_STUB IMarshal_GetMarshalSizeMax_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IMarshal_MarshalInterface_Proxy( 
+    IMarshal __RPC_FAR * This,
+    /* [unique][in] */ IStream __RPC_FAR *pStm,
+    /* [in] */ REFIID riid,
+    /* [unique][in] */ void __RPC_FAR *pv,
+    /* [in] */ DWORD dwDestContext,
+    /* [unique][in] */ void __RPC_FAR *pvDestContext,
+    /* [in] */ DWORD mshlflags);
+
+
+void __RPC_STUB IMarshal_MarshalInterface_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IMarshal_UnmarshalInterface_Proxy( 
+    IMarshal __RPC_FAR * This,
+    /* [unique][in] */ IStream __RPC_FAR *pStm,
+    /* [in] */ REFIID riid,
+    /* [out] */ void __RPC_FAR *__RPC_FAR *ppv);
+
+
+void __RPC_STUB IMarshal_UnmarshalInterface_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IMarshal_ReleaseMarshalData_Proxy( 
+    IMarshal __RPC_FAR * This,
+    /* [unique][in] */ IStream __RPC_FAR *pStm);
+
+
+void __RPC_STUB IMarshal_ReleaseMarshalData_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IMarshal_DisconnectObject_Proxy( 
+    IMarshal __RPC_FAR * This,
+    /* [in] */ DWORD dwReserved);
+
+
+void __RPC_STUB IMarshal_DisconnectObject_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IMarshal_INTERFACE_DEFINED__ */
+
+
+#ifndef __IMalloc_INTERFACE_DEFINED__
+#define __IMalloc_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IMalloc
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [uuid][object][local] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IMalloc __RPC_FAR *LPMALLOC;
+
+
+EXTERN_C const IID IID_IMalloc;
+
 #if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IAdviseSink : public IUnknown
-{
-public:
-    virtual void STDMETHODCALLTYPE OnDataChange
-    (
-	FORMATETC *pFormatetc,
-	STGMEDIUM *pStgmed
-    ) = 0;
     
-    virtual void STDMETHODCALLTYPE OnViewChange
-    (
-	DWORD dwAspect,
-	LONG lindex
-    ) = 0;
+    interface IMalloc : public IUnknown
+    {
+    public:
+        virtual void __RPC_FAR *__stdcall Alloc( 
+            /* [in] */ ULONG cb) = 0;
+        
+        virtual void __RPC_FAR *__stdcall Realloc( 
+            /* [in] */ void __RPC_FAR *pv,
+            /* [in] */ ULONG cb) = 0;
+        
+        virtual void __stdcall Free( 
+            /* [in] */ void __RPC_FAR *pv) = 0;
+        
+        virtual ULONG __stdcall GetSize( 
+            /* [in] */ void __RPC_FAR *pv) = 0;
+        
+        virtual int __stdcall DidAlloc( 
+            void __RPC_FAR *pv) = 0;
+        
+        virtual void __stdcall HeapMinimize( void) = 0;
+        
+    };
     
-    virtual void STDMETHODCALLTYPE OnRename
-    (
-	IMoniker *pmk
-    ) = 0;
+#else 	/* C style interface */
     
-    virtual void STDMETHODCALLTYPE OnSave
-    (
-        void
-    ) = 0;
+    typedef struct IMallocVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IMalloc __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IMalloc __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IMalloc __RPC_FAR * This);
+        
+        void __RPC_FAR *( __stdcall __RPC_FAR *Alloc )( 
+            IMalloc __RPC_FAR * This,
+            /* [in] */ ULONG cb);
+        
+        void __RPC_FAR *( __stdcall __RPC_FAR *Realloc )( 
+            IMalloc __RPC_FAR * This,
+            /* [in] */ void __RPC_FAR *pv,
+            /* [in] */ ULONG cb);
+        
+        void ( __stdcall __RPC_FAR *Free )( 
+            IMalloc __RPC_FAR * This,
+            /* [in] */ void __RPC_FAR *pv);
+        
+        ULONG ( __stdcall __RPC_FAR *GetSize )( 
+            IMalloc __RPC_FAR * This,
+            /* [in] */ void __RPC_FAR *pv);
+        
+        int ( __stdcall __RPC_FAR *DidAlloc )( 
+            IMalloc __RPC_FAR * This,
+            void __RPC_FAR *pv);
+        
+        void ( __stdcall __RPC_FAR *HeapMinimize )( 
+            IMalloc __RPC_FAR * This);
+        
+    } IMallocVtbl;
     
-    virtual void STDMETHODCALLTYPE OnClose
-    (
-        void
-    ) = 0;
+    interface IMalloc
+    {
+        CONST_VTBL struct IMallocVtbl __RPC_FAR *lpVtbl;
+    };
     
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IAdviseSinkVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IAdviseSink FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
     
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IAdviseSink FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IAdviseSink FAR * This
-    );
-    
-    void (STDMETHODCALLTYPE FAR *OnDataChange)
-    (
-        IAdviseSink FAR * This,
-	FORMATETC *pFormatetc,
-	STGMEDIUM *pStgmed
-    );
-    
-    void (STDMETHODCALLTYPE FAR *OnViewChange)
-    (
-        IAdviseSink FAR * This,
-	DWORD dwAspect,
-	LONG lindex
-    );
-    
-    void (STDMETHODCALLTYPE FAR *OnRename)
-    (
-        IAdviseSink FAR * This,
-	IMoniker *pmk
-    );
-    
-    void (STDMETHODCALLTYPE FAR *OnSave)
-    (
-        IAdviseSink FAR * This
-    );
-    
-    void (STDMETHODCALLTYPE FAR *OnClose)
-    (
-        IAdviseSink FAR * This
-    );
-    
-} IAdviseSinkVtbl;
 
-interface IAdviseSink
-{
-    IAdviseSinkVtbl FAR *lpVtbl;
-} ;
+#ifdef COBJMACROS
 
 
-#endif
+#define IMalloc_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
 
-#endif /*__IAdviseSink__*/
+#define IMalloc_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
 
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IEnumMoniker
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IEnumMoniker__
-#define __IEnumMoniker__
-
-/* Forward declaration */
-typedef interface IEnumMoniker IEnumMoniker;
+#define IMalloc_Release(This)	\
+    (This)->lpVtbl -> Release(This)
 
 
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
+#define IMalloc_Alloc(This,cb)	\
+    (This)->lpVtbl -> Alloc(This,cb)
+
+#define IMalloc_Realloc(This,pv,cb)	\
+    (This)->lpVtbl -> Realloc(This,pv,cb)
+
+#define IMalloc_Free(This,pv)	\
+    (This)->lpVtbl -> Free(This,pv)
+
+#define IMalloc_GetSize(This,pv)	\
+    (This)->lpVtbl -> GetSize(This,pv)
+
+#define IMalloc_DidAlloc(This,pv)	\
+    (This)->lpVtbl -> DidAlloc(This,pv)
+
+#define IMalloc_HeapMinimize(This)	\
+    (This)->lpVtbl -> HeapMinimize(This)
+
+#endif /* COBJMACROS */
 
 
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
+#endif 	/* C style interface */
 
 
-#ifndef _LPENUMMONIKER_DEFINED
 
-#define _LPENUMMONIKER_DEFINED
+void __RPC_FAR *__stdcall IMalloc_Alloc_Proxy( 
+    IMalloc __RPC_FAR * This,
+    /* [in] */ ULONG cb);
 
-typedef IEnumMoniker *LPENUMMONIKER;
+
+void __RPC_STUB IMalloc_Alloc_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
 
 
-#endif
+void __RPC_FAR *__stdcall IMalloc_Realloc_Proxy( 
+    IMalloc __RPC_FAR * This,
+    /* [in] */ void __RPC_FAR *pv,
+    /* [in] */ ULONG cb);
 
-EXTERN_C const IID IID_IEnumMoniker;
+
+void __RPC_STUB IMalloc_Realloc_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+void __stdcall IMalloc_Free_Proxy( 
+    IMalloc __RPC_FAR * This,
+    /* [in] */ void __RPC_FAR *pv);
+
+
+void __RPC_STUB IMalloc_Free_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+ULONG __stdcall IMalloc_GetSize_Proxy( 
+    IMalloc __RPC_FAR * This,
+    /* [in] */ void __RPC_FAR *pv);
+
+
+void __RPC_STUB IMalloc_GetSize_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+int __stdcall IMalloc_DidAlloc_Proxy( 
+    IMalloc __RPC_FAR * This,
+    void __RPC_FAR *pv);
+
+
+void __RPC_STUB IMalloc_DidAlloc_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+void __stdcall IMalloc_HeapMinimize_Proxy( 
+    IMalloc __RPC_FAR * This);
+
+
+void __RPC_STUB IMalloc_HeapMinimize_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IMalloc_INTERFACE_DEFINED__ */
+
+
+#ifndef __IStdMarshalInfo_INTERFACE_DEFINED__
+#define __IStdMarshalInfo_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IStdMarshalInfo
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [uuid][object][local] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IStdMarshalInfo __RPC_FAR *LPSTDMARSHALINFO;
+
+
+EXTERN_C const IID IID_IStdMarshalInfo;
+
 #if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IEnumMoniker : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE Next
-    (
-	ULONG celt,
-	IMoniker **rgelt,
-	ULONG *pceltFetched
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Skip
-    (
-	ULONG celt
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Reset
-    (
-        void
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Clone
-    (
-	IEnumMoniker **ppenum
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IEnumMonikerVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IEnumMoniker FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IEnumMoniker FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IEnumMoniker FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Next)
-    (
-        IEnumMoniker FAR * This,
-	ULONG celt,
-	IMoniker **rgelt,
-	ULONG *pceltFetched
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Skip)
-    (
-        IEnumMoniker FAR * This,
-	ULONG celt
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Reset)
-    (
-        IEnumMoniker FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Clone)
-    (
-        IEnumMoniker FAR * This,
-	IEnumMoniker **ppenum
-    );
-    
-} IEnumMonikerVtbl;
-
-interface IEnumMoniker
-{
-    IEnumMonikerVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IEnumMoniker__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IEnumSTATDATA
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IEnumSTATDATA__
-#define __IEnumSTATDATA__
-
-/* Forward declaration */
-typedef interface IEnumSTATDATA IEnumSTATDATA;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPENUMSTATDATA_DEFINED
-
-#define _LPENUMSTATDATA_DEFINED
-
-typedef IEnumSTATDATA *LPENUMSTATDATA;
-
-
-#endif
-
-#ifndef _tagADVF_DEFINED
-
-#define _tagADVF_DEFINED
-
-#define _ADVF_DEFINED
-
-typedef enum tagADVF
-  {
-	ADVF_NODATA = 1,
-	ADVF_PRIMEFIRST = 2,
-	ADVF_ONLYONCE = 4,
-	ADVF_DATAONSTOP = 64,
-	ADVFCACHE_NOHANDLER = 8,
-	ADVFCACHE_FORCEBUILTIN = 16,
-	ADVFCACHE_ONSAVE = 32
-  }
-ADVF;
-
-
-#endif
-
-#ifndef _tagSTATDATA_DEFINED
-
-typedef struct tagSTATDATA
-  {
-  FORMATETC formatetc;
-  DWORD advf;
-  IAdviseSink *pAdvSink;
-  DWORD dwConnection;
-  }
-STATDATA;
-
-
-typedef STATDATA *LPSTATDATA;
-
-
-#define _tagSTATDATA_DEFINED
-
-#define _STATDATA_DEFINED
-
-#endif
-
-EXTERN_C const IID IID_IEnumSTATDATA;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IEnumSTATDATA : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE Next
-    (
-	ULONG celt,
-	STATDATA *rgelt,
-	ULONG *pceltFetched
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Skip
-    (
-	ULONG celt
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Reset
-    (
-        void
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Clone
-    (
-	IEnumSTATDATA **ppenum
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IEnumSTATDATAVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IEnumSTATDATA FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IEnumSTATDATA FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IEnumSTATDATA FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Next)
-    (
-        IEnumSTATDATA FAR * This,
-	ULONG celt,
-	STATDATA *rgelt,
-	ULONG *pceltFetched
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Skip)
-    (
-        IEnumSTATDATA FAR * This,
-	ULONG celt
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Reset)
-    (
-        IEnumSTATDATA FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Clone)
-    (
-        IEnumSTATDATA FAR * This,
-	IEnumSTATDATA **ppenum
-    );
-    
-} IEnumSTATDATAVtbl;
-
-interface IEnumSTATDATA
-{
-    IEnumSTATDATAVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IEnumSTATDATA__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IMoniker
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IMoniker__
-#define __IMoniker__
-
-/* Forward declaration */
-typedef interface IMoniker IMoniker;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPMONIKER_DEFINED
-
-#define _LPMONIKER_DEFINED
-
-typedef IMoniker *LPMONIKER;
-
-
-#endif
-
-#ifndef _tagMKSYS_DEFINED
-
-typedef enum tagMKSYS
-  {
-	MKSYS_NONE = 0,
-	MKSYS_GENERICCOMPOSITE = 1,
-	MKSYS_FILEMONIKER = 2,
-	MKSYS_ANTIMONIKER = 3,
-	MKSYS_ITEMMONIKER = 4,
-	MKSYS_POINTERMONIKER = 5
-  }
-MKSYS;
-
-
-#define _tagMKSYS_DEFINED
-
-#define _MKSYS_DEFINED
-
-#endif
-
-#ifndef _tagMKREDUCE_DEFINED
-
-typedef enum tagMKREDUCE
-  {
-	MKRREDUCE_ONE = 196608,
-	MKRREDUCE_TOUSER = 131072,
-	MKRREDUCE_THROUGHUSER = 65536,
-	MKRREDUCE_ALL = 0
-  }
-MKRREDUCE;
-
-
-#define _tagMKREDUCE_DEFINED
-
-#define _MKRREDUCE_DEFINED
-
-#endif
-
-EXTERN_C const IID IID_IMoniker;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IMoniker : public IPersistStream
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE BindToObject
-    (
-	IBindCtx *pbc,
-	IMoniker *pmkToLeft,
-	REFIID riidResult,
-	void **ppvResult
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE BindToStorage
-    (
-	IBindCtx *pbc,
-	IMoniker *pmkToLeft,
-	REFIID riid,
-	void **ppvObj
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Reduce
-    (
-	IBindCtx *pbc,
-	DWORD dwReduceHowFar,
-	IMoniker **ppmkToLeft,
-	IMoniker **ppmkReduced
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE ComposeWith
-    (
-	IMoniker *pmkRight,
-	BOOL fOnlyIfNotGeneric,
-	IMoniker **ppmkComposite
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Enum
-    (
-	BOOL fForward,
-	IEnumMoniker **ppenumMoniker
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE IsEqual
-    (
-	IMoniker *pmkOtherMoniker
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Hash
-    (
-	DWORD *pdwHash
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE IsRunning
-    (
-	IBindCtx *pbc,
-	IMoniker *pmkToLeft,
-	IMoniker *pmkNewlyRunning
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE GetTimeOfLastChange
-    (
-	IBindCtx *pbc,
-	IMoniker *pmkToLeft,
-	FILETIME *pFileTime
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Inverse
-    (
-	IMoniker **ppmk
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE CommonPrefixWith
-    (
-	IMoniker *pmkOther,
-	IMoniker **ppmkPrefix
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE RelativePathTo
-    (
-	IMoniker *pmkOther,
-	IMoniker **ppmkRelPath
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE GetDisplayName
-    (
-	IBindCtx *pbc,
-	IMoniker *pmkToLeft,
-	LPOLESTR *ppszDisplayName
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE ParseDisplayName
-    (
-	IBindCtx *pbc,
-	IMoniker *pmkToLeft,
-	LPOLESTR pszDisplayName,
-	ULONG *pchEaten,
-	IMoniker **ppmkOut
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE IsSystemMoniker
-    (
-	DWORD *pdwMksys
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IMonikerVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IMoniker FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IMoniker FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IMoniker FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetClassID)
-    (
-        IMoniker FAR * This,
-	CLSID *pClassID
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *IsDirty)
-    (
-        IMoniker FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Load)
-    (
-        IMoniker FAR * This,
-	IStream *pStm
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Save)
-    (
-        IMoniker FAR * This,
-	IStream *pStm,
-	BOOL fClearDirty
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetSizeMax)
-    (
-        IMoniker FAR * This,
-	ULARGE_INTEGER *pcbSize
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *BindToObject)
-    (
-        IMoniker FAR * This,
-	IBindCtx *pbc,
-	IMoniker *pmkToLeft,
-	REFIID riidResult,
-	void **ppvResult
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *BindToStorage)
-    (
-        IMoniker FAR * This,
-	IBindCtx *pbc,
-	IMoniker *pmkToLeft,
-	REFIID riid,
-	void **ppvObj
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Reduce)
-    (
-        IMoniker FAR * This,
-	IBindCtx *pbc,
-	DWORD dwReduceHowFar,
-	IMoniker **ppmkToLeft,
-	IMoniker **ppmkReduced
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *ComposeWith)
-    (
-        IMoniker FAR * This,
-	IMoniker *pmkRight,
-	BOOL fOnlyIfNotGeneric,
-	IMoniker **ppmkComposite
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Enum)
-    (
-        IMoniker FAR * This,
-	BOOL fForward,
-	IEnumMoniker **ppenumMoniker
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *IsEqual)
-    (
-        IMoniker FAR * This,
-	IMoniker *pmkOtherMoniker
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Hash)
-    (
-        IMoniker FAR * This,
-	DWORD *pdwHash
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *IsRunning)
-    (
-        IMoniker FAR * This,
-	IBindCtx *pbc,
-	IMoniker *pmkToLeft,
-	IMoniker *pmkNewlyRunning
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetTimeOfLastChange)
-    (
-        IMoniker FAR * This,
-	IBindCtx *pbc,
-	IMoniker *pmkToLeft,
-	FILETIME *pFileTime
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Inverse)
-    (
-        IMoniker FAR * This,
-	IMoniker **ppmk
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *CommonPrefixWith)
-    (
-        IMoniker FAR * This,
-	IMoniker *pmkOther,
-	IMoniker **ppmkPrefix
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *RelativePathTo)
-    (
-        IMoniker FAR * This,
-	IMoniker *pmkOther,
-	IMoniker **ppmkRelPath
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetDisplayName)
-    (
-        IMoniker FAR * This,
-	IBindCtx *pbc,
-	IMoniker *pmkToLeft,
-	LPOLESTR *ppszDisplayName
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *ParseDisplayName)
-    (
-        IMoniker FAR * This,
-	IBindCtx *pbc,
-	IMoniker *pmkToLeft,
-	LPOLESTR pszDisplayName,
-	ULONG *pchEaten,
-	IMoniker **ppmkOut
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *IsSystemMoniker)
-    (
-        IMoniker FAR * This,
-	DWORD *pdwMksys
-    );
-    
-} IMonikerVtbl;
-
-interface IMoniker
-{
-    IMonikerVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IMoniker__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IRunningObjectTable
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IRunningObjectTable__
-#define __IRunningObjectTable__
-
-/* Forward declaration */
-typedef interface IRunningObjectTable IRunningObjectTable;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPRUNNINGOBJECTTABLE_DEFINED
-
-#define _LPRUNNINGOBJECTTABLE_DEFINED
-
-typedef IRunningObjectTable *LPRUNNINGOBJECTTABLE;
-
-
-#endif
-
-EXTERN_C const IID IID_IRunningObjectTable;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IRunningObjectTable : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE Register
-    (
-	DWORD grfFlags,
-	IUnknown *punkObject,
-	IMoniker *pmkObjectName,
-	DWORD *pdwRegister
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Revoke
-    (
-	DWORD dwRegister
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE IsRunning
-    (
-	IMoniker *pmkObjectName
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE GetObject
-    (
-	IMoniker *pmkObjectName,
-	IUnknown **ppunkObject
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE NoteChangeTime
-    (
-	DWORD dwRegister,
-	FILETIME *pfiletime
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE GetTimeOfLastChange
-    (
-	IMoniker *pmkObjectName,
-	FILETIME *pfiletime
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE EnumRunning
-    (
-	IEnumMoniker **ppenumMoniker
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IRunningObjectTableVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IRunningObjectTable FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IRunningObjectTable FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IRunningObjectTable FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Register)
-    (
-        IRunningObjectTable FAR * This,
-	DWORD grfFlags,
-	IUnknown *punkObject,
-	IMoniker *pmkObjectName,
-	DWORD *pdwRegister
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Revoke)
-    (
-        IRunningObjectTable FAR * This,
-	DWORD dwRegister
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *IsRunning)
-    (
-        IRunningObjectTable FAR * This,
-	IMoniker *pmkObjectName
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetObject)
-    (
-        IRunningObjectTable FAR * This,
-	IMoniker *pmkObjectName,
-	IUnknown **ppunkObject
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *NoteChangeTime)
-    (
-        IRunningObjectTable FAR * This,
-	DWORD dwRegister,
-	FILETIME *pfiletime
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *GetTimeOfLastChange)
-    (
-        IRunningObjectTable FAR * This,
-	IMoniker *pmkObjectName,
-	FILETIME *pfiletime
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *EnumRunning)
-    (
-        IRunningObjectTable FAR * This,
-	IEnumMoniker **ppenumMoniker
-    );
-    
-} IRunningObjectTableVtbl;
-
-interface IRunningObjectTable
-{
-    IRunningObjectTableVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IRunningObjectTable__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IAdviseSink2
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IAdviseSink2__
-#define __IAdviseSink2__
-
-/* Forward declaration */
-typedef interface IAdviseSink2 IAdviseSink2;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPADVISESINK2_DEFINED
-
-#define _LPADVISESINK2_DEFINED
-
-typedef IAdviseSink2 *LPADVISESINK2;
-
-
-#endif
-
-EXTERN_C const IID IID_IAdviseSink2;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IAdviseSink2 : public IAdviseSink
-{
-public:
-    virtual void STDMETHODCALLTYPE OnLinkSrcChange
-    (
-	IMoniker *pmk
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IAdviseSink2Vtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IAdviseSink2 FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IAdviseSink2 FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IAdviseSink2 FAR * This
-    );
-    
-    void (STDMETHODCALLTYPE FAR *OnDataChange)
-    (
-        IAdviseSink2 FAR * This,
-	FORMATETC *pFormatetc,
-	STGMEDIUM *pStgmed
-    );
-    
-    void (STDMETHODCALLTYPE FAR *OnViewChange)
-    (
-        IAdviseSink2 FAR * This,
-	DWORD dwAspect,
-	LONG lindex
-    );
-    
-    void (STDMETHODCALLTYPE FAR *OnRename)
-    (
-        IAdviseSink2 FAR * This,
-	IMoniker *pmk
-    );
-    
-    void (STDMETHODCALLTYPE FAR *OnSave)
-    (
-        IAdviseSink2 FAR * This
-    );
-    
-    void (STDMETHODCALLTYPE FAR *OnClose)
-    (
-        IAdviseSink2 FAR * This
-    );
-    
-    void (STDMETHODCALLTYPE FAR *OnLinkSrcChange)
-    (
-        IAdviseSink2 FAR * This,
-	IMoniker *pmk
-    );
-    
-} IAdviseSink2Vtbl;
-
-interface IAdviseSink2
-{
-    IAdviseSink2Vtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IAdviseSink2__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IDataObject
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IDataObject__
-#define __IDataObject__
-
-/* Forward declaration */
-typedef interface IDataObject IDataObject;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
-
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
-
-
-#ifndef _LPDATAOBJECT_DEFINED
-
-#define _LPDATAOBJECT_DEFINED
-
-typedef IDataObject *LPDATAOBJECT;
-
-
-#endif
-
-#ifndef _tagDATADIR_DEFINED
-
-#define _tagDATADIR_DEFINED
-
-#define _DATADIR_DEFINED
-
-typedef enum tagDATADIR
-  {
-	DATADIR_GET = 1,
-	DATADIR_SET = 2
-  }
-DATADIR;
-
-
-#endif
-
-EXTERN_C const IID IID_IDataObject;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IDataObject : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE GetData
-    (
-	FORMATETC *pformatetcIn,
-	STGMEDIUM *pmedium
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE GetDataHere
-    (
-	FORMATETC *pformatetc,
-	STGMEDIUM *pmedium
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE QueryGetData
-    (
-	FORMATETC *pformatetc
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE GetCanonicalFormatEtc
-    (
-	FORMATETC *pformatectIn,
-	FORMATETC *pformatetcOut
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE SetData
-    (
-	FORMATETC *pformatetc,
-	STGMEDIUM *pmedium,
-	BOOL fRelease
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE EnumFormatEtc
-    (
-	DWORD dwDirection,
-	IEnumFORMATETC **ppenumFormatEtc
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE DAdvise
-    (
-	FORMATETC *pformatetc,
-	DWORD advf,
-	IAdviseSink *pAdvSink,
-	DWORD *pdwConnection
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE DUnadvise
-    (
-	DWORD dwConnection
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE EnumDAdvise
-    (
-	IEnumSTATDATA **ppenumAdvise
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IDataObjectVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IDataObject FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IDataObject FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IDataObject FAR * This
-    );
     
-    HRESULT (STDMETHODCALLTYPE FAR *GetData)
-    (
-        IDataObject FAR * This,
-	FORMATETC *pformatetcIn,
-	STGMEDIUM *pmedium
-    );
+    interface IStdMarshalInfo : public IUnknown
+    {
+    public:
+        virtual HRESULT __stdcall GetClassForHandler( 
+            /* [in] */ DWORD dwDestContext,
+            /* [unique][in] */ void __RPC_FAR *pvDestContext,
+            /* [out] */ CLSID __RPC_FAR *pClsid) = 0;
+        
+    };
     
-    HRESULT (STDMETHODCALLTYPE FAR *GetDataHere)
-    (
-        IDataObject FAR * This,
-	FORMATETC *pformatetc,
-	STGMEDIUM *pmedium
-    );
+#else 	/* C style interface */
     
-    HRESULT (STDMETHODCALLTYPE FAR *QueryGetData)
-    (
-        IDataObject FAR * This,
-	FORMATETC *pformatetc
-    );
+    typedef struct IStdMarshalInfoVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IStdMarshalInfo __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IStdMarshalInfo __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IStdMarshalInfo __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *GetClassForHandler )( 
+            IStdMarshalInfo __RPC_FAR * This,
+            /* [in] */ DWORD dwDestContext,
+            /* [unique][in] */ void __RPC_FAR *pvDestContext,
+            /* [out] */ CLSID __RPC_FAR *pClsid);
+        
+    } IStdMarshalInfoVtbl;
     
-    HRESULT (STDMETHODCALLTYPE FAR *GetCanonicalFormatEtc)
-    (
-        IDataObject FAR * This,
-	FORMATETC *pformatectIn,
-	FORMATETC *pformatetcOut
-    );
+    interface IStdMarshalInfo
+    {
+        CONST_VTBL struct IStdMarshalInfoVtbl __RPC_FAR *lpVtbl;
+    };
     
-    HRESULT (STDMETHODCALLTYPE FAR *SetData)
-    (
-        IDataObject FAR * This,
-	FORMATETC *pformatetc,
-	STGMEDIUM *pmedium,
-	BOOL fRelease
-    );
     
-    HRESULT (STDMETHODCALLTYPE FAR *EnumFormatEtc)
-    (
-        IDataObject FAR * This,
-	DWORD dwDirection,
-	IEnumFORMATETC **ppenumFormatEtc
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *DAdvise)
-    (
-        IDataObject FAR * This,
-	FORMATETC *pformatetc,
-	DWORD advf,
-	IAdviseSink *pAdvSink,
-	DWORD *pdwConnection
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *DUnadvise)
-    (
-        IDataObject FAR * This,
-	DWORD dwConnection
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *EnumDAdvise)
-    (
-        IDataObject FAR * This,
-	IEnumSTATDATA **ppenumAdvise
-    );
-    
-} IDataObjectVtbl;
-
-interface IDataObject
-{
-    IDataObjectVtbl FAR *lpVtbl;
-} ;
-
-
-#endif
-
-#endif /*__IDataObject__*/
-
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IDataAdviseHolder
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
-
-#ifndef __IDataAdviseHolder__
-#define __IDataAdviseHolder__
-
-/* Forward declaration */
-typedef interface IDataAdviseHolder IDataAdviseHolder;
-
-
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
-
 
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
+#ifdef COBJMACROS
 
 
-#ifndef _LPDATAADVISEHOLDER_DEFINED
+#define IStdMarshalInfo_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
 
-#define _LPDATAADVISEHOLDER_DEFINED
+#define IStdMarshalInfo_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
 
-typedef IDataAdviseHolder *LPDATAADVISEHOLDER;
+#define IStdMarshalInfo_Release(This)	\
+    (This)->lpVtbl -> Release(This)
 
-
-#endif
-
-EXTERN_C const IID IID_IDataAdviseHolder;
-#if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IDataAdviseHolder : public IUnknown
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE Advise
-    (
-	IDataObject *pDataObject,
-	FORMATETC *pFetc,
-	DWORD advf,
-	IAdviseSink *pAdvise,
-	DWORD *pdwConnection
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE Unadvise
-    (
-	DWORD dwConnection
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE EnumAdvise
-    (
-	IEnumSTATDATA **ppenumAdvise
-    ) = 0;
-    
-    virtual HRESULT STDMETHODCALLTYPE SendOnDataChange
-    (
-	IDataObject *pDataObject,
-	DWORD dwReserved,
-	DWORD advf
-    ) = 0;
-    
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IDataAdviseHolderVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IDataAdviseHolder FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IDataAdviseHolder FAR * This
-    );
-    
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IDataAdviseHolder FAR * This
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Advise)
-    (
-        IDataAdviseHolder FAR * This,
-	IDataObject *pDataObject,
-	FORMATETC *pFetc,
-	DWORD advf,
-	IAdviseSink *pAdvise,
-	DWORD *pdwConnection
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *Unadvise)
-    (
-        IDataAdviseHolder FAR * This,
-	DWORD dwConnection
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *EnumAdvise)
-    (
-        IDataAdviseHolder FAR * This,
-	IEnumSTATDATA **ppenumAdvise
-    );
-    
-    HRESULT (STDMETHODCALLTYPE FAR *SendOnDataChange)
-    (
-        IDataAdviseHolder FAR * This,
-	IDataObject *pDataObject,
-	DWORD dwReserved,
-	DWORD advf
-    );
-    
-} IDataAdviseHolderVtbl;
 
-interface IDataAdviseHolder
-{
-    IDataAdviseHolderVtbl FAR *lpVtbl;
-} ;
+#define IStdMarshalInfo_GetClassForHandler(This,dwDestContext,pvDestContext,pClsid)	\
+    (This)->lpVtbl -> GetClassForHandler(This,dwDestContext,pvDestContext,pClsid)
 
+#endif /* COBJMACROS */
 
-#endif
 
-#endif /*__IDataAdviseHolder__*/
+#endif 	/* C style interface */
 
-//+-------------------------------------------------------------------------
-//
-//  Microsoft Windows
-//  Copyright (C) Microsoft Corporation, 1992 - 1993.
-//
-//
-//  Contents: Interface header file for IExternalConnection
-//
-//  History: Created by Microsoft (R) MIDL Compiler Version 1.10.85
-//
-//--------------------------------------------------------------------------
 
-#ifndef __IExternalConnection__
-#define __IExternalConnection__
 
-/* Forward declaration */
-typedef interface IExternalConnection IExternalConnection;
+HRESULT __stdcall IStdMarshalInfo_GetClassForHandler_Proxy( 
+    IStdMarshalInfo __RPC_FAR * This,
+    /* [in] */ DWORD dwDestContext,
+    /* [unique][in] */ void __RPC_FAR *pvDestContext,
+    /* [out] */ CLSID __RPC_FAR *pClsid);
 
 
-#ifndef _ERROR_STATUS_T_DEFINED
-typedef unsigned long error_status_t;
-#define _ERROR_STATUS_T_DEFINED
-#endif
+void __RPC_STUB IStdMarshalInfo_GetClassForHandler_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
 
 
-#ifndef _WCHAR_T_DEFINED
-typedef unsigned short wchar_t;
-#define _WCHAR_T_DEFINED
-#endif
 
+#endif 	/* __IStdMarshalInfo_INTERFACE_DEFINED__ */
 
-#ifndef _LPEXTERNALCONNECTION_DEFINED
 
-#define _LPEXTERNALCONNECTION_DEFINED
+#ifndef __IExternalConnection_INTERFACE_DEFINED__
+#define __IExternalConnection_INTERFACE_DEFINED__
 
-typedef IExternalConnection *LPEXTERNALCONNECTION;
+/****************************************
+ * Generated header for interface: IExternalConnection
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [uuid][local][object] */ 
 
 
-#endif
+			/* size is 4 */
+typedef /* [unique] */ IExternalConnection __RPC_FAR *LPEXTERNALCONNECTION;
 
-typedef enum tagEXTCONN
-  {
-	EXTCONN_STRONG = 1
-  }
-EXTCONN;
+			/* size is 2 */
+typedef 
+enum tagEXTCONN
+    {	EXTCONN_STRONG	= 0x1,
+	EXTCONN_WEAK	= 0x2,
+	EXTCONN_CALLABLE	= 0x4
+    }	EXTCONN;
 
 
 EXTERN_C const IID IID_IExternalConnection;
+
 #if defined(__cplusplus) && !defined(CINTERFACE)
-
-/* C++ Language Binding */
-
-interface IExternalConnection : public IUnknown
-{
-public:
-    virtual DWORD STDMETHODCALLTYPE AddConnection
-    (
-	DWORD extconn,
-	DWORD reserved
-    ) = 0;
     
-    virtual DWORD STDMETHODCALLTYPE ReleaseConnection
-    (
-	DWORD extconn,
-	DWORD reserved,
-	BOOL fLastReleaseCloses
-    ) = 0;
+    interface IExternalConnection : public IUnknown
+    {
+    public:
+        virtual DWORD __stdcall AddConnection( 
+            /* [in] */ DWORD extconn,
+            /* [in] */ DWORD reserved) = 0;
+        
+        virtual DWORD __stdcall ReleaseConnection( 
+            /* [in] */ DWORD extconn,
+            /* [in] */ DWORD reserved,
+            /* [in] */ BOOL fLastReleaseCloses) = 0;
+        
+    };
     
-};
-
-#else 
-
-/* C Language Binding */
-
-typedef struct IExternalConnectionVtbl
-{
-
-    HRESULT (STDMETHODCALLTYPE FAR *QueryInterface)
-    (
-        IExternalConnection FAR * This,
-	REFIID riid,
-	void **ppvObject
-    );
+#else 	/* C style interface */
     
-    ULONG (STDMETHODCALLTYPE FAR *AddRef)
-    (
-        IExternalConnection FAR * This
-    );
+    typedef struct IExternalConnectionVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IExternalConnection __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IExternalConnection __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IExternalConnection __RPC_FAR * This);
+        
+        DWORD ( __stdcall __RPC_FAR *AddConnection )( 
+            IExternalConnection __RPC_FAR * This,
+            /* [in] */ DWORD extconn,
+            /* [in] */ DWORD reserved);
+        
+        DWORD ( __stdcall __RPC_FAR *ReleaseConnection )( 
+            IExternalConnection __RPC_FAR * This,
+            /* [in] */ DWORD extconn,
+            /* [in] */ DWORD reserved,
+            /* [in] */ BOOL fLastReleaseCloses);
+        
+    } IExternalConnectionVtbl;
     
-    ULONG (STDMETHODCALLTYPE FAR *Release)
-    (
-        IExternalConnection FAR * This
-    );
+    interface IExternalConnection
+    {
+        CONST_VTBL struct IExternalConnectionVtbl __RPC_FAR *lpVtbl;
+    };
     
-    DWORD (STDMETHODCALLTYPE FAR *AddConnection)
-    (
-        IExternalConnection FAR * This,
-	DWORD extconn,
-	DWORD reserved
-    );
     
-    DWORD (STDMETHODCALLTYPE FAR *ReleaseConnection)
-    (
-        IExternalConnection FAR * This,
-	DWORD extconn,
-	DWORD reserved,
-	BOOL fLastReleaseCloses
-    );
-    
-} IExternalConnectionVtbl;
 
-interface IExternalConnection
-{
-    IExternalConnectionVtbl FAR *lpVtbl;
-} ;
+#ifdef COBJMACROS
 
 
+#define IExternalConnection_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IExternalConnection_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IExternalConnection_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IExternalConnection_AddConnection(This,extconn,reserved)	\
+    (This)->lpVtbl -> AddConnection(This,extconn,reserved)
+
+#define IExternalConnection_ReleaseConnection(This,extconn,reserved,fLastReleaseCloses)	\
+    (This)->lpVtbl -> ReleaseConnection(This,extconn,reserved,fLastReleaseCloses)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+DWORD __stdcall IExternalConnection_AddConnection_Proxy( 
+    IExternalConnection __RPC_FAR * This,
+    /* [in] */ DWORD extconn,
+    /* [in] */ DWORD reserved);
+
+
+void __RPC_STUB IExternalConnection_AddConnection_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+DWORD __stdcall IExternalConnection_ReleaseConnection_Proxy( 
+    IExternalConnection __RPC_FAR * This,
+    /* [in] */ DWORD extconn,
+    /* [in] */ DWORD reserved,
+    /* [in] */ BOOL fLastReleaseCloses);
+
+
+void __RPC_STUB IExternalConnection_ReleaseConnection_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IExternalConnection_INTERFACE_DEFINED__ */
+
+
+#ifndef __IWeakRef_INTERFACE_DEFINED__
+#define __IWeakRef_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IWeakRef
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [uuid][local][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IWeakRef __RPC_FAR *LPWEAKREF;
+
+
+EXTERN_C const IID IID_IWeakRef;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IWeakRef : public IUnknown
+    {
+    public:
+        virtual ULONG __stdcall ChangeWeakCount( 
+            /* [in] */ LONG delta) = 0;
+        
+        virtual ULONG __stdcall ReleaseKeepAlive( 
+            /* [in] */ IUnknown __RPC_FAR *pUnkReleased,
+            /* [in] */ DWORD reserved) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IWeakRefVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IWeakRef __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IWeakRef __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IWeakRef __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *ChangeWeakCount )( 
+            IWeakRef __RPC_FAR * This,
+            /* [in] */ LONG delta);
+        
+        ULONG ( __stdcall __RPC_FAR *ReleaseKeepAlive )( 
+            IWeakRef __RPC_FAR * This,
+            /* [in] */ IUnknown __RPC_FAR *pUnkReleased,
+            /* [in] */ DWORD reserved);
+        
+    } IWeakRefVtbl;
+    
+    interface IWeakRef
+    {
+        CONST_VTBL struct IWeakRefVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IWeakRef_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IWeakRef_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IWeakRef_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IWeakRef_ChangeWeakCount(This,delta)	\
+    (This)->lpVtbl -> ChangeWeakCount(This,delta)
+
+#define IWeakRef_ReleaseKeepAlive(This,pUnkReleased,reserved)	\
+    (This)->lpVtbl -> ReleaseKeepAlive(This,pUnkReleased,reserved)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+ULONG __stdcall IWeakRef_ChangeWeakCount_Proxy( 
+    IWeakRef __RPC_FAR * This,
+    /* [in] */ LONG delta);
+
+
+void __RPC_STUB IWeakRef_ChangeWeakCount_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+ULONG __stdcall IWeakRef_ReleaseKeepAlive_Proxy( 
+    IWeakRef __RPC_FAR * This,
+    /* [in] */ IUnknown __RPC_FAR *pUnkReleased,
+    /* [in] */ DWORD reserved);
+
+
+void __RPC_STUB IWeakRef_ReleaseKeepAlive_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IWeakRef_INTERFACE_DEFINED__ */
+
+
+#ifndef __IEnumUnknown_INTERFACE_DEFINED__
+#define __IEnumUnknown_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IEnumUnknown
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IEnumUnknown __RPC_FAR *LPENUMUNKNOWN;
+
+
+EXTERN_C const IID IID_IEnumUnknown;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IEnumUnknown : public IUnknown
+    {
+    public:
+        virtual /* [local] */ HRESULT __stdcall Next( 
+            /* [in] */ ULONG celt,
+            /* [out] */ IUnknown __RPC_FAR *__RPC_FAR *rgelt,
+            /* [out] */ ULONG __RPC_FAR *pceltFetched) = 0;
+        
+        virtual HRESULT __stdcall Skip( 
+            /* [in] */ ULONG celt) = 0;
+        
+        virtual HRESULT __stdcall Reset( void) = 0;
+        
+        virtual HRESULT __stdcall Clone( 
+            /* [out] */ IEnumUnknown __RPC_FAR *__RPC_FAR *ppenum) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IEnumUnknownVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IEnumUnknown __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IEnumUnknown __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IEnumUnknown __RPC_FAR * This);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *Next )( 
+            IEnumUnknown __RPC_FAR * This,
+            /* [in] */ ULONG celt,
+            /* [out] */ IUnknown __RPC_FAR *__RPC_FAR *rgelt,
+            /* [out] */ ULONG __RPC_FAR *pceltFetched);
+        
+        HRESULT ( __stdcall __RPC_FAR *Skip )( 
+            IEnumUnknown __RPC_FAR * This,
+            /* [in] */ ULONG celt);
+        
+        HRESULT ( __stdcall __RPC_FAR *Reset )( 
+            IEnumUnknown __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *Clone )( 
+            IEnumUnknown __RPC_FAR * This,
+            /* [out] */ IEnumUnknown __RPC_FAR *__RPC_FAR *ppenum);
+        
+    } IEnumUnknownVtbl;
+    
+    interface IEnumUnknown
+    {
+        CONST_VTBL struct IEnumUnknownVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IEnumUnknown_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IEnumUnknown_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IEnumUnknown_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IEnumUnknown_Next(This,celt,rgelt,pceltFetched)	\
+    (This)->lpVtbl -> Next(This,celt,rgelt,pceltFetched)
+
+#define IEnumUnknown_Skip(This,celt)	\
+    (This)->lpVtbl -> Skip(This,celt)
+
+#define IEnumUnknown_Reset(This)	\
+    (This)->lpVtbl -> Reset(This)
+
+#define IEnumUnknown_Clone(This,ppenum)	\
+    (This)->lpVtbl -> Clone(This,ppenum)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+/* [call_as] */ HRESULT __stdcall IEnumUnknown_RemoteNext_Proxy( 
+    IEnumUnknown __RPC_FAR * This,
+    /* [in] */ ULONG celt,
+    /* [length_is][size_is][out] */ IUnknown __RPC_FAR *__RPC_FAR *rgelt,
+    /* [out] */ ULONG __RPC_FAR *pceltFetched);
+
+
+void __RPC_STUB IEnumUnknown_RemoteNext_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IEnumUnknown_Skip_Proxy( 
+    IEnumUnknown __RPC_FAR * This,
+    /* [in] */ ULONG celt);
+
+
+void __RPC_STUB IEnumUnknown_Skip_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IEnumUnknown_Reset_Proxy( 
+    IEnumUnknown __RPC_FAR * This);
+
+
+void __RPC_STUB IEnumUnknown_Reset_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IEnumUnknown_Clone_Proxy( 
+    IEnumUnknown __RPC_FAR * This,
+    /* [out] */ IEnumUnknown __RPC_FAR *__RPC_FAR *ppenum);
+
+
+void __RPC_STUB IEnumUnknown_Clone_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IEnumUnknown_INTERFACE_DEFINED__ */
+
+
+#ifndef __IBindCtx_INTERFACE_DEFINED__
+#define __IBindCtx_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IBindCtx
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IBindCtx __RPC_FAR *LPBC;
+
+			/* size is 4 */
+typedef /* [unique] */ IBindCtx __RPC_FAR *LPBINDCTX;
+
+			/* size is 16 */
+typedef struct  tagBIND_OPTS
+    {
+    DWORD cbStruct;
+    DWORD grfFlags;
+    DWORD grfMode;
+    DWORD dwTickCountDeadline;
+    }	BIND_OPTS;
+
+			/* size is 4 */
+typedef struct tagBIND_OPTS __RPC_FAR *LPBIND_OPTS;
+
+			/* size is 2 */
+typedef 
+enum tagBIND_FLAGS
+    {	BIND_MAYBOTHERUSER	= 1,
+	BIND_JUSTTESTEXISTENCE	= 2
+    }	BIND_FLAGS;
+
+
+EXTERN_C const IID IID_IBindCtx;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IBindCtx : public IUnknown
+    {
+    public:
+        virtual HRESULT __stdcall RegisterObjectBound( 
+            /* [unique][in] */ IUnknown __RPC_FAR *punk) = 0;
+        
+        virtual HRESULT __stdcall RevokeObjectBound( 
+            /* [unique][in] */ IUnknown __RPC_FAR *punk) = 0;
+        
+        virtual HRESULT __stdcall ReleaseBoundObjects( void) = 0;
+        
+        virtual HRESULT __stdcall SetBindOptions( 
+            /* [in] */ BIND_OPTS __RPC_FAR *pbindopts) = 0;
+        
+        virtual HRESULT __stdcall GetBindOptions( 
+            /* [out][in] */ BIND_OPTS __RPC_FAR *pbindopts) = 0;
+        
+        virtual HRESULT __stdcall GetRunningObjectTable( 
+            /* [out] */ IRunningObjectTable __RPC_FAR *__RPC_FAR *pprot) = 0;
+        
+        virtual HRESULT __stdcall RegisterObjectParam( 
+            /* [in] */ LPOLESTR pszKey,
+            /* [unique][in] */ IUnknown __RPC_FAR *punk) = 0;
+        
+        virtual HRESULT __stdcall GetObjectParam( 
+            /* [in] */ LPOLESTR pszKey,
+            /* [out] */ IUnknown __RPC_FAR *__RPC_FAR *ppunk) = 0;
+        
+        virtual HRESULT __stdcall EnumObjectParam( 
+            /* [out] */ IEnumString __RPC_FAR *__RPC_FAR *ppenum) = 0;
+        
+        virtual HRESULT __stdcall RevokeObjectParam( 
+            /* [in] */ LPOLESTR pszKey) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IBindCtxVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IBindCtx __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IBindCtx __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IBindCtx __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *RegisterObjectBound )( 
+            IBindCtx __RPC_FAR * This,
+            /* [unique][in] */ IUnknown __RPC_FAR *punk);
+        
+        HRESULT ( __stdcall __RPC_FAR *RevokeObjectBound )( 
+            IBindCtx __RPC_FAR * This,
+            /* [unique][in] */ IUnknown __RPC_FAR *punk);
+        
+        HRESULT ( __stdcall __RPC_FAR *ReleaseBoundObjects )( 
+            IBindCtx __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *SetBindOptions )( 
+            IBindCtx __RPC_FAR * This,
+            /* [in] */ BIND_OPTS __RPC_FAR *pbindopts);
+        
+        HRESULT ( __stdcall __RPC_FAR *GetBindOptions )( 
+            IBindCtx __RPC_FAR * This,
+            /* [out][in] */ BIND_OPTS __RPC_FAR *pbindopts);
+        
+        HRESULT ( __stdcall __RPC_FAR *GetRunningObjectTable )( 
+            IBindCtx __RPC_FAR * This,
+            /* [out] */ IRunningObjectTable __RPC_FAR *__RPC_FAR *pprot);
+        
+        HRESULT ( __stdcall __RPC_FAR *RegisterObjectParam )( 
+            IBindCtx __RPC_FAR * This,
+            /* [in] */ LPOLESTR pszKey,
+            /* [unique][in] */ IUnknown __RPC_FAR *punk);
+        
+        HRESULT ( __stdcall __RPC_FAR *GetObjectParam )( 
+            IBindCtx __RPC_FAR * This,
+            /* [in] */ LPOLESTR pszKey,
+            /* [out] */ IUnknown __RPC_FAR *__RPC_FAR *ppunk);
+        
+        HRESULT ( __stdcall __RPC_FAR *EnumObjectParam )( 
+            IBindCtx __RPC_FAR * This,
+            /* [out] */ IEnumString __RPC_FAR *__RPC_FAR *ppenum);
+        
+        HRESULT ( __stdcall __RPC_FAR *RevokeObjectParam )( 
+            IBindCtx __RPC_FAR * This,
+            /* [in] */ LPOLESTR pszKey);
+        
+    } IBindCtxVtbl;
+    
+    interface IBindCtx
+    {
+        CONST_VTBL struct IBindCtxVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IBindCtx_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IBindCtx_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IBindCtx_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IBindCtx_RegisterObjectBound(This,punk)	\
+    (This)->lpVtbl -> RegisterObjectBound(This,punk)
+
+#define IBindCtx_RevokeObjectBound(This,punk)	\
+    (This)->lpVtbl -> RevokeObjectBound(This,punk)
+
+#define IBindCtx_ReleaseBoundObjects(This)	\
+    (This)->lpVtbl -> ReleaseBoundObjects(This)
+
+#define IBindCtx_SetBindOptions(This,pbindopts)	\
+    (This)->lpVtbl -> SetBindOptions(This,pbindopts)
+
+#define IBindCtx_GetBindOptions(This,pbindopts)	\
+    (This)->lpVtbl -> GetBindOptions(This,pbindopts)
+
+#define IBindCtx_GetRunningObjectTable(This,pprot)	\
+    (This)->lpVtbl -> GetRunningObjectTable(This,pprot)
+
+#define IBindCtx_RegisterObjectParam(This,pszKey,punk)	\
+    (This)->lpVtbl -> RegisterObjectParam(This,pszKey,punk)
+
+#define IBindCtx_GetObjectParam(This,pszKey,ppunk)	\
+    (This)->lpVtbl -> GetObjectParam(This,pszKey,ppunk)
+
+#define IBindCtx_EnumObjectParam(This,ppenum)	\
+    (This)->lpVtbl -> EnumObjectParam(This,ppenum)
+
+#define IBindCtx_RevokeObjectParam(This,pszKey)	\
+    (This)->lpVtbl -> RevokeObjectParam(This,pszKey)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+HRESULT __stdcall IBindCtx_RegisterObjectBound_Proxy( 
+    IBindCtx __RPC_FAR * This,
+    /* [unique][in] */ IUnknown __RPC_FAR *punk);
+
+
+void __RPC_STUB IBindCtx_RegisterObjectBound_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IBindCtx_RevokeObjectBound_Proxy( 
+    IBindCtx __RPC_FAR * This,
+    /* [unique][in] */ IUnknown __RPC_FAR *punk);
+
+
+void __RPC_STUB IBindCtx_RevokeObjectBound_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IBindCtx_ReleaseBoundObjects_Proxy( 
+    IBindCtx __RPC_FAR * This);
+
+
+void __RPC_STUB IBindCtx_ReleaseBoundObjects_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IBindCtx_SetBindOptions_Proxy( 
+    IBindCtx __RPC_FAR * This,
+    /* [in] */ BIND_OPTS __RPC_FAR *pbindopts);
+
+
+void __RPC_STUB IBindCtx_SetBindOptions_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IBindCtx_GetBindOptions_Proxy( 
+    IBindCtx __RPC_FAR * This,
+    /* [out][in] */ BIND_OPTS __RPC_FAR *pbindopts);
+
+
+void __RPC_STUB IBindCtx_GetBindOptions_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IBindCtx_GetRunningObjectTable_Proxy( 
+    IBindCtx __RPC_FAR * This,
+    /* [out] */ IRunningObjectTable __RPC_FAR *__RPC_FAR *pprot);
+
+
+void __RPC_STUB IBindCtx_GetRunningObjectTable_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IBindCtx_RegisterObjectParam_Proxy( 
+    IBindCtx __RPC_FAR * This,
+    /* [in] */ LPOLESTR pszKey,
+    /* [unique][in] */ IUnknown __RPC_FAR *punk);
+
+
+void __RPC_STUB IBindCtx_RegisterObjectParam_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IBindCtx_GetObjectParam_Proxy( 
+    IBindCtx __RPC_FAR * This,
+    /* [in] */ LPOLESTR pszKey,
+    /* [out] */ IUnknown __RPC_FAR *__RPC_FAR *ppunk);
+
+
+void __RPC_STUB IBindCtx_GetObjectParam_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IBindCtx_EnumObjectParam_Proxy( 
+    IBindCtx __RPC_FAR * This,
+    /* [out] */ IEnumString __RPC_FAR *__RPC_FAR *ppenum);
+
+
+void __RPC_STUB IBindCtx_EnumObjectParam_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IBindCtx_RevokeObjectParam_Proxy( 
+    IBindCtx __RPC_FAR * This,
+    /* [in] */ LPOLESTR pszKey);
+
+
+void __RPC_STUB IBindCtx_RevokeObjectParam_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IBindCtx_INTERFACE_DEFINED__ */
+
+
+#ifndef __IParseDisplayName_INTERFACE_DEFINED__
+#define __IParseDisplayName_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IParseDisplayName
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IParseDisplayName __RPC_FAR *LPPARSEDISPLAYNAME;
+
+
+EXTERN_C const IID IID_IParseDisplayName;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IParseDisplayName : public IUnknown
+    {
+    public:
+        virtual HRESULT __stdcall ParseDisplayName( 
+            /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+            /* [in] */ LPOLESTR pszDisplayName,
+            /* [out] */ ULONG __RPC_FAR *pchEaten,
+            /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkOut) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IParseDisplayNameVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IParseDisplayName __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IParseDisplayName __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IParseDisplayName __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *ParseDisplayName )( 
+            IParseDisplayName __RPC_FAR * This,
+            /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+            /* [in] */ LPOLESTR pszDisplayName,
+            /* [out] */ ULONG __RPC_FAR *pchEaten,
+            /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkOut);
+        
+    } IParseDisplayNameVtbl;
+    
+    interface IParseDisplayName
+    {
+        CONST_VTBL struct IParseDisplayNameVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IParseDisplayName_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IParseDisplayName_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IParseDisplayName_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IParseDisplayName_ParseDisplayName(This,pbc,pszDisplayName,pchEaten,ppmkOut)	\
+    (This)->lpVtbl -> ParseDisplayName(This,pbc,pszDisplayName,pchEaten,ppmkOut)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+HRESULT __stdcall IParseDisplayName_ParseDisplayName_Proxy( 
+    IParseDisplayName __RPC_FAR * This,
+    /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+    /* [in] */ LPOLESTR pszDisplayName,
+    /* [out] */ ULONG __RPC_FAR *pchEaten,
+    /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkOut);
+
+
+void __RPC_STUB IParseDisplayName_ParseDisplayName_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IParseDisplayName_INTERFACE_DEFINED__ */
+
+
+#ifndef __IEnumMoniker_INTERFACE_DEFINED__
+#define __IEnumMoniker_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IEnumMoniker
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IEnumMoniker __RPC_FAR *LPENUMMONIKER;
+
+
+EXTERN_C const IID IID_IEnumMoniker;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IEnumMoniker : public IUnknown
+    {
+    public:
+        virtual /* [local] */ HRESULT __stdcall Next( 
+            /* [in] */ ULONG celt,
+            /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *rgelt,
+            /* [out] */ ULONG __RPC_FAR *pceltFetched) = 0;
+        
+        virtual HRESULT __stdcall Skip( 
+            /* [in] */ ULONG celt) = 0;
+        
+        virtual HRESULT __stdcall Reset( void) = 0;
+        
+        virtual HRESULT __stdcall Clone( 
+            /* [out] */ IEnumMoniker __RPC_FAR *__RPC_FAR *ppenum) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IEnumMonikerVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IEnumMoniker __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IEnumMoniker __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IEnumMoniker __RPC_FAR * This);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *Next )( 
+            IEnumMoniker __RPC_FAR * This,
+            /* [in] */ ULONG celt,
+            /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *rgelt,
+            /* [out] */ ULONG __RPC_FAR *pceltFetched);
+        
+        HRESULT ( __stdcall __RPC_FAR *Skip )( 
+            IEnumMoniker __RPC_FAR * This,
+            /* [in] */ ULONG celt);
+        
+        HRESULT ( __stdcall __RPC_FAR *Reset )( 
+            IEnumMoniker __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *Clone )( 
+            IEnumMoniker __RPC_FAR * This,
+            /* [out] */ IEnumMoniker __RPC_FAR *__RPC_FAR *ppenum);
+        
+    } IEnumMonikerVtbl;
+    
+    interface IEnumMoniker
+    {
+        CONST_VTBL struct IEnumMonikerVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IEnumMoniker_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IEnumMoniker_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IEnumMoniker_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IEnumMoniker_Next(This,celt,rgelt,pceltFetched)	\
+    (This)->lpVtbl -> Next(This,celt,rgelt,pceltFetched)
+
+#define IEnumMoniker_Skip(This,celt)	\
+    (This)->lpVtbl -> Skip(This,celt)
+
+#define IEnumMoniker_Reset(This)	\
+    (This)->lpVtbl -> Reset(This)
+
+#define IEnumMoniker_Clone(This,ppenum)	\
+    (This)->lpVtbl -> Clone(This,ppenum)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+/* [call_as] */ HRESULT __stdcall IEnumMoniker_RemoteNext_Proxy( 
+    IEnumMoniker __RPC_FAR * This,
+    /* [in] */ ULONG celt,
+    /* [length_is][size_is][out] */ IMoniker __RPC_FAR *__RPC_FAR *rgelt,
+    /* [out] */ ULONG __RPC_FAR *pceltFetched);
+
+
+void __RPC_STUB IEnumMoniker_RemoteNext_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IEnumMoniker_Skip_Proxy( 
+    IEnumMoniker __RPC_FAR * This,
+    /* [in] */ ULONG celt);
+
+
+void __RPC_STUB IEnumMoniker_Skip_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IEnumMoniker_Reset_Proxy( 
+    IEnumMoniker __RPC_FAR * This);
+
+
+void __RPC_STUB IEnumMoniker_Reset_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IEnumMoniker_Clone_Proxy( 
+    IEnumMoniker __RPC_FAR * This,
+    /* [out] */ IEnumMoniker __RPC_FAR *__RPC_FAR *ppenum);
+
+
+void __RPC_STUB IEnumMoniker_Clone_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IEnumMoniker_INTERFACE_DEFINED__ */
+
+
+#ifndef __IRunnableObject_INTERFACE_DEFINED__
+#define __IRunnableObject_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IRunnableObject
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [uuid][object][local] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IRunnableObject __RPC_FAR *LPRUNNABLEOBJECT;
+
+
+EXTERN_C const IID IID_IRunnableObject;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IRunnableObject : public IUnknown
+    {
+    public:
+        virtual HRESULT __stdcall GetRunningClass( 
+            /* [out] */ LPCLSID lpClsid) = 0;
+        
+        virtual HRESULT __stdcall Run( 
+            /* [in] */ LPBINDCTX pbc) = 0;
+        
+        virtual BOOL __stdcall IsRunning( void) = 0;
+        
+        virtual HRESULT __stdcall LockRunning( 
+            /* [in] */ BOOL fLock,
+            /* [in] */ BOOL fLastUnlockCloses) = 0;
+        
+        virtual HRESULT __stdcall SetContainedObject( 
+            /* [in] */ BOOL fContained) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IRunnableObjectVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IRunnableObject __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IRunnableObject __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IRunnableObject __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *GetRunningClass )( 
+            IRunnableObject __RPC_FAR * This,
+            /* [out] */ LPCLSID lpClsid);
+        
+        HRESULT ( __stdcall __RPC_FAR *Run )( 
+            IRunnableObject __RPC_FAR * This,
+            /* [in] */ LPBINDCTX pbc);
+        
+        BOOL ( __stdcall __RPC_FAR *IsRunning )( 
+            IRunnableObject __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *LockRunning )( 
+            IRunnableObject __RPC_FAR * This,
+            /* [in] */ BOOL fLock,
+            /* [in] */ BOOL fLastUnlockCloses);
+        
+        HRESULT ( __stdcall __RPC_FAR *SetContainedObject )( 
+            IRunnableObject __RPC_FAR * This,
+            /* [in] */ BOOL fContained);
+        
+    } IRunnableObjectVtbl;
+    
+    interface IRunnableObject
+    {
+        CONST_VTBL struct IRunnableObjectVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IRunnableObject_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IRunnableObject_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IRunnableObject_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IRunnableObject_GetRunningClass(This,lpClsid)	\
+    (This)->lpVtbl -> GetRunningClass(This,lpClsid)
+
+#define IRunnableObject_Run(This,pbc)	\
+    (This)->lpVtbl -> Run(This,pbc)
+
+#define IRunnableObject_IsRunning(This)	\
+    (This)->lpVtbl -> IsRunning(This)
+
+#define IRunnableObject_LockRunning(This,fLock,fLastUnlockCloses)	\
+    (This)->lpVtbl -> LockRunning(This,fLock,fLastUnlockCloses)
+
+#define IRunnableObject_SetContainedObject(This,fContained)	\
+    (This)->lpVtbl -> SetContainedObject(This,fContained)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+HRESULT __stdcall IRunnableObject_GetRunningClass_Proxy( 
+    IRunnableObject __RPC_FAR * This,
+    /* [out] */ LPCLSID lpClsid);
+
+
+void __RPC_STUB IRunnableObject_GetRunningClass_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IRunnableObject_Run_Proxy( 
+    IRunnableObject __RPC_FAR * This,
+    /* [in] */ LPBINDCTX pbc);
+
+
+void __RPC_STUB IRunnableObject_Run_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+BOOL __stdcall IRunnableObject_IsRunning_Proxy( 
+    IRunnableObject __RPC_FAR * This);
+
+
+void __RPC_STUB IRunnableObject_IsRunning_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IRunnableObject_LockRunning_Proxy( 
+    IRunnableObject __RPC_FAR * This,
+    /* [in] */ BOOL fLock,
+    /* [in] */ BOOL fLastUnlockCloses);
+
+
+void __RPC_STUB IRunnableObject_LockRunning_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IRunnableObject_SetContainedObject_Proxy( 
+    IRunnableObject __RPC_FAR * This,
+    /* [in] */ BOOL fContained);
+
+
+void __RPC_STUB IRunnableObject_SetContainedObject_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IRunnableObject_INTERFACE_DEFINED__ */
+
+
+#ifndef __IRunningObjectTable_INTERFACE_DEFINED__
+#define __IRunningObjectTable_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IRunningObjectTable
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IRunningObjectTable __RPC_FAR *LPRUNNINGOBJECTTABLE;
+
+
+EXTERN_C const IID IID_IRunningObjectTable;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IRunningObjectTable : public IUnknown
+    {
+    public:
+        virtual HRESULT __stdcall Register( 
+            /* [in] */ DWORD grfFlags,
+            /* [unique][in] */ IUnknown __RPC_FAR *punkObject,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkObjectName,
+            /* [out] */ DWORD __RPC_FAR *pdwRegister) = 0;
+        
+        virtual HRESULT __stdcall Revoke( 
+            /* [in] */ DWORD dwRegister) = 0;
+        
+        virtual HRESULT __stdcall IsRunning( 
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkObjectName) = 0;
+        
+        virtual HRESULT __stdcall GetObject( 
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkObjectName,
+            /* [out] */ IUnknown __RPC_FAR *__RPC_FAR *ppunkObject) = 0;
+        
+        virtual HRESULT __stdcall NoteChangeTime( 
+            /* [in] */ DWORD dwRegister,
+            /* [in] */ FILETIME __RPC_FAR *pfiletime) = 0;
+        
+        virtual HRESULT __stdcall GetTimeOfLastChange( 
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkObjectName,
+            /* [out] */ FILETIME __RPC_FAR *pfiletime) = 0;
+        
+        virtual HRESULT __stdcall EnumRunning( 
+            /* [out] */ IEnumMoniker __RPC_FAR *__RPC_FAR *ppenumMoniker) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IRunningObjectTableVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IRunningObjectTable __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IRunningObjectTable __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IRunningObjectTable __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *Register )( 
+            IRunningObjectTable __RPC_FAR * This,
+            /* [in] */ DWORD grfFlags,
+            /* [unique][in] */ IUnknown __RPC_FAR *punkObject,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkObjectName,
+            /* [out] */ DWORD __RPC_FAR *pdwRegister);
+        
+        HRESULT ( __stdcall __RPC_FAR *Revoke )( 
+            IRunningObjectTable __RPC_FAR * This,
+            /* [in] */ DWORD dwRegister);
+        
+        HRESULT ( __stdcall __RPC_FAR *IsRunning )( 
+            IRunningObjectTable __RPC_FAR * This,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkObjectName);
+        
+        HRESULT ( __stdcall __RPC_FAR *GetObject )( 
+            IRunningObjectTable __RPC_FAR * This,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkObjectName,
+            /* [out] */ IUnknown __RPC_FAR *__RPC_FAR *ppunkObject);
+        
+        HRESULT ( __stdcall __RPC_FAR *NoteChangeTime )( 
+            IRunningObjectTable __RPC_FAR * This,
+            /* [in] */ DWORD dwRegister,
+            /* [in] */ FILETIME __RPC_FAR *pfiletime);
+        
+        HRESULT ( __stdcall __RPC_FAR *GetTimeOfLastChange )( 
+            IRunningObjectTable __RPC_FAR * This,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkObjectName,
+            /* [out] */ FILETIME __RPC_FAR *pfiletime);
+        
+        HRESULT ( __stdcall __RPC_FAR *EnumRunning )( 
+            IRunningObjectTable __RPC_FAR * This,
+            /* [out] */ IEnumMoniker __RPC_FAR *__RPC_FAR *ppenumMoniker);
+        
+    } IRunningObjectTableVtbl;
+    
+    interface IRunningObjectTable
+    {
+        CONST_VTBL struct IRunningObjectTableVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IRunningObjectTable_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IRunningObjectTable_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IRunningObjectTable_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IRunningObjectTable_Register(This,grfFlags,punkObject,pmkObjectName,pdwRegister)	\
+    (This)->lpVtbl -> Register(This,grfFlags,punkObject,pmkObjectName,pdwRegister)
+
+#define IRunningObjectTable_Revoke(This,dwRegister)	\
+    (This)->lpVtbl -> Revoke(This,dwRegister)
+
+#define IRunningObjectTable_IsRunning(This,pmkObjectName)	\
+    (This)->lpVtbl -> IsRunning(This,pmkObjectName)
+
+#define IRunningObjectTable_GetObject(This,pmkObjectName,ppunkObject)	\
+    (This)->lpVtbl -> GetObject(This,pmkObjectName,ppunkObject)
+
+#define IRunningObjectTable_NoteChangeTime(This,dwRegister,pfiletime)	\
+    (This)->lpVtbl -> NoteChangeTime(This,dwRegister,pfiletime)
+
+#define IRunningObjectTable_GetTimeOfLastChange(This,pmkObjectName,pfiletime)	\
+    (This)->lpVtbl -> GetTimeOfLastChange(This,pmkObjectName,pfiletime)
+
+#define IRunningObjectTable_EnumRunning(This,ppenumMoniker)	\
+    (This)->lpVtbl -> EnumRunning(This,ppenumMoniker)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+HRESULT __stdcall IRunningObjectTable_Register_Proxy( 
+    IRunningObjectTable __RPC_FAR * This,
+    /* [in] */ DWORD grfFlags,
+    /* [unique][in] */ IUnknown __RPC_FAR *punkObject,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkObjectName,
+    /* [out] */ DWORD __RPC_FAR *pdwRegister);
+
+
+void __RPC_STUB IRunningObjectTable_Register_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IRunningObjectTable_Revoke_Proxy( 
+    IRunningObjectTable __RPC_FAR * This,
+    /* [in] */ DWORD dwRegister);
+
+
+void __RPC_STUB IRunningObjectTable_Revoke_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IRunningObjectTable_IsRunning_Proxy( 
+    IRunningObjectTable __RPC_FAR * This,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkObjectName);
+
+
+void __RPC_STUB IRunningObjectTable_IsRunning_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IRunningObjectTable_GetObject_Proxy( 
+    IRunningObjectTable __RPC_FAR * This,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkObjectName,
+    /* [out] */ IUnknown __RPC_FAR *__RPC_FAR *ppunkObject);
+
+
+void __RPC_STUB IRunningObjectTable_GetObject_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IRunningObjectTable_NoteChangeTime_Proxy( 
+    IRunningObjectTable __RPC_FAR * This,
+    /* [in] */ DWORD dwRegister,
+    /* [in] */ FILETIME __RPC_FAR *pfiletime);
+
+
+void __RPC_STUB IRunningObjectTable_NoteChangeTime_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IRunningObjectTable_GetTimeOfLastChange_Proxy( 
+    IRunningObjectTable __RPC_FAR * This,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkObjectName,
+    /* [out] */ FILETIME __RPC_FAR *pfiletime);
+
+
+void __RPC_STUB IRunningObjectTable_GetTimeOfLastChange_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IRunningObjectTable_EnumRunning_Proxy( 
+    IRunningObjectTable __RPC_FAR * This,
+    /* [out] */ IEnumMoniker __RPC_FAR *__RPC_FAR *ppenumMoniker);
+
+
+void __RPC_STUB IRunningObjectTable_EnumRunning_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IRunningObjectTable_INTERFACE_DEFINED__ */
+
+
+#ifndef __IPersist_INTERFACE_DEFINED__
+#define __IPersist_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IPersist
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IPersist __RPC_FAR *LPPERSIST;
+
+
+EXTERN_C const IID IID_IPersist;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IPersist : public IUnknown
+    {
+    public:
+        virtual /* [optimize] */ HRESULT __stdcall GetClassID( 
+            /* [out] */ CLSID __RPC_FAR *pClassID) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IPersistVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IPersist __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IPersist __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IPersist __RPC_FAR * This);
+        
+        /* [optimize] */ HRESULT ( __stdcall __RPC_FAR *GetClassID )( 
+            IPersist __RPC_FAR * This,
+            /* [out] */ CLSID __RPC_FAR *pClassID);
+        
+    } IPersistVtbl;
+    
+    interface IPersist
+    {
+        CONST_VTBL struct IPersistVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IPersist_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IPersist_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IPersist_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IPersist_GetClassID(This,pClassID)	\
+    (This)->lpVtbl -> GetClassID(This,pClassID)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+/* [optimize] */ HRESULT __stdcall IPersist_GetClassID_Proxy( 
+    IPersist __RPC_FAR * This,
+    /* [out] */ CLSID __RPC_FAR *pClassID);
+
+
+void __RPC_STUB IPersist_GetClassID_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IPersist_INTERFACE_DEFINED__ */
+
+
+#ifndef __IPersistStream_INTERFACE_DEFINED__
+#define __IPersistStream_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IPersistStream
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IPersistStream __RPC_FAR *LPPERSISTSTREAM;
+
+
+EXTERN_C const IID IID_IPersistStream;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IPersistStream : public IPersist
+    {
+    public:
+        virtual HRESULT __stdcall IsDirty( void) = 0;
+        
+        virtual HRESULT __stdcall Load( 
+            /* [unique][in] */ IStream __RPC_FAR *pStm) = 0;
+        
+        virtual HRESULT __stdcall Save( 
+            /* [unique][in] */ IStream __RPC_FAR *pStm,
+            /* [in] */ BOOL fClearDirty) = 0;
+        
+        virtual HRESULT __stdcall GetSizeMax( 
+            /* [out] */ ULARGE_INTEGER __RPC_FAR *pcbSize) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IPersistStreamVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IPersistStream __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IPersistStream __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IPersistStream __RPC_FAR * This);
+        
+        /* [optimize] */ HRESULT ( __stdcall __RPC_FAR *GetClassID )( 
+            IPersistStream __RPC_FAR * This,
+            /* [out] */ CLSID __RPC_FAR *pClassID);
+        
+        HRESULT ( __stdcall __RPC_FAR *IsDirty )( 
+            IPersistStream __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *Load )( 
+            IPersistStream __RPC_FAR * This,
+            /* [unique][in] */ IStream __RPC_FAR *pStm);
+        
+        HRESULT ( __stdcall __RPC_FAR *Save )( 
+            IPersistStream __RPC_FAR * This,
+            /* [unique][in] */ IStream __RPC_FAR *pStm,
+            /* [in] */ BOOL fClearDirty);
+        
+        HRESULT ( __stdcall __RPC_FAR *GetSizeMax )( 
+            IPersistStream __RPC_FAR * This,
+            /* [out] */ ULARGE_INTEGER __RPC_FAR *pcbSize);
+        
+    } IPersistStreamVtbl;
+    
+    interface IPersistStream
+    {
+        CONST_VTBL struct IPersistStreamVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IPersistStream_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IPersistStream_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IPersistStream_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IPersistStream_GetClassID(This,pClassID)	\
+    (This)->lpVtbl -> GetClassID(This,pClassID)
+
+
+#define IPersistStream_IsDirty(This)	\
+    (This)->lpVtbl -> IsDirty(This)
+
+#define IPersistStream_Load(This,pStm)	\
+    (This)->lpVtbl -> Load(This,pStm)
+
+#define IPersistStream_Save(This,pStm,fClearDirty)	\
+    (This)->lpVtbl -> Save(This,pStm,fClearDirty)
+
+#define IPersistStream_GetSizeMax(This,pcbSize)	\
+    (This)->lpVtbl -> GetSizeMax(This,pcbSize)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+HRESULT __stdcall IPersistStream_IsDirty_Proxy( 
+    IPersistStream __RPC_FAR * This);
+
+
+void __RPC_STUB IPersistStream_IsDirty_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IPersistStream_Load_Proxy( 
+    IPersistStream __RPC_FAR * This,
+    /* [unique][in] */ IStream __RPC_FAR *pStm);
+
+
+void __RPC_STUB IPersistStream_Load_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IPersistStream_Save_Proxy( 
+    IPersistStream __RPC_FAR * This,
+    /* [unique][in] */ IStream __RPC_FAR *pStm,
+    /* [in] */ BOOL fClearDirty);
+
+
+void __RPC_STUB IPersistStream_Save_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IPersistStream_GetSizeMax_Proxy( 
+    IPersistStream __RPC_FAR * This,
+    /* [out] */ ULARGE_INTEGER __RPC_FAR *pcbSize);
+
+
+void __RPC_STUB IPersistStream_GetSizeMax_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IPersistStream_INTERFACE_DEFINED__ */
+
+
+#ifndef __IMoniker_INTERFACE_DEFINED__
+#define __IMoniker_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IMoniker
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IMoniker __RPC_FAR *LPMONIKER;
+
+			/* size is 2 */
+typedef 
+enum tagMKSYS
+    {	MKSYS_NONE	= 0,
+	MKSYS_GENERICCOMPOSITE	= 1,
+	MKSYS_FILEMONIKER	= 2,
+	MKSYS_ANTIMONIKER	= 3,
+	MKSYS_ITEMMONIKER	= 4,
+	MKSYS_POINTERMONIKER	= 5
+    }	MKSYS;
+
+			/* size is 2 */
+typedef /* [v1_enum] */ 
+enum tagMKREDUCE
+    {	MKRREDUCE_ONE	= 3 << 16,
+	MKRREDUCE_TOUSER	= 2 << 16,
+	MKRREDUCE_THROUGHUSER	= 1 << 16,
+	MKRREDUCE_ALL	= 0
+    }	MKRREDUCE;
+
+
+EXTERN_C const IID IID_IMoniker;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IMoniker : public IPersistStream
+    {
+    public:
+        virtual /* [local] */ HRESULT __stdcall BindToObject( 
+            /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+            /* [in] */ REFIID riidResult,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvResult) = 0;
+        
+        virtual /* [local] */ HRESULT __stdcall BindToStorage( 
+            /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObj) = 0;
+        
+        virtual HRESULT __stdcall Reduce( 
+            /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+            /* [in] */ DWORD dwReduceHowFar,
+            /* [unique][out][in] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkToLeft,
+            /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkReduced) = 0;
+        
+        virtual HRESULT __stdcall ComposeWith( 
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkRight,
+            /* [in] */ BOOL fOnlyIfNotGeneric,
+            /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkComposite) = 0;
+        
+        virtual HRESULT __stdcall Enum( 
+            /* [in] */ BOOL fForward,
+            /* [out] */ IEnumMoniker __RPC_FAR *__RPC_FAR *ppenumMoniker) = 0;
+        
+        virtual HRESULT __stdcall IsEqual( 
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkOtherMoniker) = 0;
+        
+        virtual HRESULT __stdcall Hash( 
+            /* [out] */ DWORD __RPC_FAR *pdwHash) = 0;
+        
+        virtual HRESULT __stdcall IsRunning( 
+            /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkNewlyRunning) = 0;
+        
+        virtual HRESULT __stdcall GetTimeOfLastChange( 
+            /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+            /* [out] */ FILETIME __RPC_FAR *pFileTime) = 0;
+        
+        virtual HRESULT __stdcall Inverse( 
+            /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmk) = 0;
+        
+        virtual HRESULT __stdcall CommonPrefixWith( 
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkOther,
+            /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkPrefix) = 0;
+        
+        virtual HRESULT __stdcall RelativePathTo( 
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkOther,
+            /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkRelPath) = 0;
+        
+        virtual HRESULT __stdcall GetDisplayName( 
+            /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+            /* [out] */ LPOLESTR __RPC_FAR *ppszDisplayName) = 0;
+        
+        virtual HRESULT __stdcall ParseDisplayName( 
+            /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+            /* [in] */ LPOLESTR pszDisplayName,
+            /* [out] */ ULONG __RPC_FAR *pchEaten,
+            /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkOut) = 0;
+        
+        virtual HRESULT __stdcall IsSystemMoniker( 
+            /* [out] */ DWORD __RPC_FAR *pdwMksys) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IMonikerVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IMoniker __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IMoniker __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IMoniker __RPC_FAR * This);
+        
+        /* [optimize] */ HRESULT ( __stdcall __RPC_FAR *GetClassID )( 
+            IMoniker __RPC_FAR * This,
+            /* [out] */ CLSID __RPC_FAR *pClassID);
+        
+        HRESULT ( __stdcall __RPC_FAR *IsDirty )( 
+            IMoniker __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *Load )( 
+            IMoniker __RPC_FAR * This,
+            /* [unique][in] */ IStream __RPC_FAR *pStm);
+        
+        HRESULT ( __stdcall __RPC_FAR *Save )( 
+            IMoniker __RPC_FAR * This,
+            /* [unique][in] */ IStream __RPC_FAR *pStm,
+            /* [in] */ BOOL fClearDirty);
+        
+        HRESULT ( __stdcall __RPC_FAR *GetSizeMax )( 
+            IMoniker __RPC_FAR * This,
+            /* [out] */ ULARGE_INTEGER __RPC_FAR *pcbSize);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *BindToObject )( 
+            IMoniker __RPC_FAR * This,
+            /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+            /* [in] */ REFIID riidResult,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvResult);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *BindToStorage )( 
+            IMoniker __RPC_FAR * This,
+            /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObj);
+        
+        HRESULT ( __stdcall __RPC_FAR *Reduce )( 
+            IMoniker __RPC_FAR * This,
+            /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+            /* [in] */ DWORD dwReduceHowFar,
+            /* [unique][out][in] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkToLeft,
+            /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkReduced);
+        
+        HRESULT ( __stdcall __RPC_FAR *ComposeWith )( 
+            IMoniker __RPC_FAR * This,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkRight,
+            /* [in] */ BOOL fOnlyIfNotGeneric,
+            /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkComposite);
+        
+        HRESULT ( __stdcall __RPC_FAR *Enum )( 
+            IMoniker __RPC_FAR * This,
+            /* [in] */ BOOL fForward,
+            /* [out] */ IEnumMoniker __RPC_FAR *__RPC_FAR *ppenumMoniker);
+        
+        HRESULT ( __stdcall __RPC_FAR *IsEqual )( 
+            IMoniker __RPC_FAR * This,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkOtherMoniker);
+        
+        HRESULT ( __stdcall __RPC_FAR *Hash )( 
+            IMoniker __RPC_FAR * This,
+            /* [out] */ DWORD __RPC_FAR *pdwHash);
+        
+        HRESULT ( __stdcall __RPC_FAR *IsRunning )( 
+            IMoniker __RPC_FAR * This,
+            /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkNewlyRunning);
+        
+        HRESULT ( __stdcall __RPC_FAR *GetTimeOfLastChange )( 
+            IMoniker __RPC_FAR * This,
+            /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+            /* [out] */ FILETIME __RPC_FAR *pFileTime);
+        
+        HRESULT ( __stdcall __RPC_FAR *Inverse )( 
+            IMoniker __RPC_FAR * This,
+            /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmk);
+        
+        HRESULT ( __stdcall __RPC_FAR *CommonPrefixWith )( 
+            IMoniker __RPC_FAR * This,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkOther,
+            /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkPrefix);
+        
+        HRESULT ( __stdcall __RPC_FAR *RelativePathTo )( 
+            IMoniker __RPC_FAR * This,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkOther,
+            /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkRelPath);
+        
+        HRESULT ( __stdcall __RPC_FAR *GetDisplayName )( 
+            IMoniker __RPC_FAR * This,
+            /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+            /* [out] */ LPOLESTR __RPC_FAR *ppszDisplayName);
+        
+        HRESULT ( __stdcall __RPC_FAR *ParseDisplayName )( 
+            IMoniker __RPC_FAR * This,
+            /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+            /* [in] */ LPOLESTR pszDisplayName,
+            /* [out] */ ULONG __RPC_FAR *pchEaten,
+            /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkOut);
+        
+        HRESULT ( __stdcall __RPC_FAR *IsSystemMoniker )( 
+            IMoniker __RPC_FAR * This,
+            /* [out] */ DWORD __RPC_FAR *pdwMksys);
+        
+    } IMonikerVtbl;
+    
+    interface IMoniker
+    {
+        CONST_VTBL struct IMonikerVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IMoniker_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IMoniker_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IMoniker_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IMoniker_GetClassID(This,pClassID)	\
+    (This)->lpVtbl -> GetClassID(This,pClassID)
+
+
+#define IMoniker_IsDirty(This)	\
+    (This)->lpVtbl -> IsDirty(This)
+
+#define IMoniker_Load(This,pStm)	\
+    (This)->lpVtbl -> Load(This,pStm)
+
+#define IMoniker_Save(This,pStm,fClearDirty)	\
+    (This)->lpVtbl -> Save(This,pStm,fClearDirty)
+
+#define IMoniker_GetSizeMax(This,pcbSize)	\
+    (This)->lpVtbl -> GetSizeMax(This,pcbSize)
+
+
+#define IMoniker_BindToObject(This,pbc,pmkToLeft,riidResult,ppvResult)	\
+    (This)->lpVtbl -> BindToObject(This,pbc,pmkToLeft,riidResult,ppvResult)
+
+#define IMoniker_BindToStorage(This,pbc,pmkToLeft,riid,ppvObj)	\
+    (This)->lpVtbl -> BindToStorage(This,pbc,pmkToLeft,riid,ppvObj)
+
+#define IMoniker_Reduce(This,pbc,dwReduceHowFar,ppmkToLeft,ppmkReduced)	\
+    (This)->lpVtbl -> Reduce(This,pbc,dwReduceHowFar,ppmkToLeft,ppmkReduced)
+
+#define IMoniker_ComposeWith(This,pmkRight,fOnlyIfNotGeneric,ppmkComposite)	\
+    (This)->lpVtbl -> ComposeWith(This,pmkRight,fOnlyIfNotGeneric,ppmkComposite)
+
+#define IMoniker_Enum(This,fForward,ppenumMoniker)	\
+    (This)->lpVtbl -> Enum(This,fForward,ppenumMoniker)
+
+#define IMoniker_IsEqual(This,pmkOtherMoniker)	\
+    (This)->lpVtbl -> IsEqual(This,pmkOtherMoniker)
+
+#define IMoniker_Hash(This,pdwHash)	\
+    (This)->lpVtbl -> Hash(This,pdwHash)
+
+#define IMoniker_IsRunning(This,pbc,pmkToLeft,pmkNewlyRunning)	\
+    (This)->lpVtbl -> IsRunning(This,pbc,pmkToLeft,pmkNewlyRunning)
+
+#define IMoniker_GetTimeOfLastChange(This,pbc,pmkToLeft,pFileTime)	\
+    (This)->lpVtbl -> GetTimeOfLastChange(This,pbc,pmkToLeft,pFileTime)
+
+#define IMoniker_Inverse(This,ppmk)	\
+    (This)->lpVtbl -> Inverse(This,ppmk)
+
+#define IMoniker_CommonPrefixWith(This,pmkOther,ppmkPrefix)	\
+    (This)->lpVtbl -> CommonPrefixWith(This,pmkOther,ppmkPrefix)
+
+#define IMoniker_RelativePathTo(This,pmkOther,ppmkRelPath)	\
+    (This)->lpVtbl -> RelativePathTo(This,pmkOther,ppmkRelPath)
+
+#define IMoniker_GetDisplayName(This,pbc,pmkToLeft,ppszDisplayName)	\
+    (This)->lpVtbl -> GetDisplayName(This,pbc,pmkToLeft,ppszDisplayName)
+
+#define IMoniker_ParseDisplayName(This,pbc,pmkToLeft,pszDisplayName,pchEaten,ppmkOut)	\
+    (This)->lpVtbl -> ParseDisplayName(This,pbc,pmkToLeft,pszDisplayName,pchEaten,ppmkOut)
+
+#define IMoniker_IsSystemMoniker(This,pdwMksys)	\
+    (This)->lpVtbl -> IsSystemMoniker(This,pdwMksys)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+/* [call_as] */ HRESULT __stdcall IMoniker_RemoteBindToObject_Proxy( 
+    IMoniker __RPC_FAR * This,
+    /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+    /* [in] */ REFIID riidResult,
+    /* [iid_is][out] */ IUnknown __RPC_FAR *__RPC_FAR *ppvResult);
+
+
+void __RPC_STUB IMoniker_RemoteBindToObject_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+/* [call_as] */ HRESULT __stdcall IMoniker_RemoteBindToStorage_Proxy( 
+    IMoniker __RPC_FAR * This,
+    /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+    /* [in] */ REFIID riid,
+    /* [iid_is][out] */ IUnknown __RPC_FAR *__RPC_FAR *ppvObj);
+
+
+void __RPC_STUB IMoniker_RemoteBindToStorage_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IMoniker_Reduce_Proxy( 
+    IMoniker __RPC_FAR * This,
+    /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+    /* [in] */ DWORD dwReduceHowFar,
+    /* [unique][out][in] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkToLeft,
+    /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkReduced);
+
+
+void __RPC_STUB IMoniker_Reduce_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IMoniker_ComposeWith_Proxy( 
+    IMoniker __RPC_FAR * This,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkRight,
+    /* [in] */ BOOL fOnlyIfNotGeneric,
+    /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkComposite);
+
+
+void __RPC_STUB IMoniker_ComposeWith_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IMoniker_Enum_Proxy( 
+    IMoniker __RPC_FAR * This,
+    /* [in] */ BOOL fForward,
+    /* [out] */ IEnumMoniker __RPC_FAR *__RPC_FAR *ppenumMoniker);
+
+
+void __RPC_STUB IMoniker_Enum_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IMoniker_IsEqual_Proxy( 
+    IMoniker __RPC_FAR * This,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkOtherMoniker);
+
+
+void __RPC_STUB IMoniker_IsEqual_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IMoniker_Hash_Proxy( 
+    IMoniker __RPC_FAR * This,
+    /* [out] */ DWORD __RPC_FAR *pdwHash);
+
+
+void __RPC_STUB IMoniker_Hash_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IMoniker_IsRunning_Proxy( 
+    IMoniker __RPC_FAR * This,
+    /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkNewlyRunning);
+
+
+void __RPC_STUB IMoniker_IsRunning_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IMoniker_GetTimeOfLastChange_Proxy( 
+    IMoniker __RPC_FAR * This,
+    /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+    /* [out] */ FILETIME __RPC_FAR *pFileTime);
+
+
+void __RPC_STUB IMoniker_GetTimeOfLastChange_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IMoniker_Inverse_Proxy( 
+    IMoniker __RPC_FAR * This,
+    /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmk);
+
+
+void __RPC_STUB IMoniker_Inverse_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IMoniker_CommonPrefixWith_Proxy( 
+    IMoniker __RPC_FAR * This,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkOther,
+    /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkPrefix);
+
+
+void __RPC_STUB IMoniker_CommonPrefixWith_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IMoniker_RelativePathTo_Proxy( 
+    IMoniker __RPC_FAR * This,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkOther,
+    /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkRelPath);
+
+
+void __RPC_STUB IMoniker_RelativePathTo_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IMoniker_GetDisplayName_Proxy( 
+    IMoniker __RPC_FAR * This,
+    /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+    /* [out] */ LPOLESTR __RPC_FAR *ppszDisplayName);
+
+
+void __RPC_STUB IMoniker_GetDisplayName_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IMoniker_ParseDisplayName_Proxy( 
+    IMoniker __RPC_FAR * This,
+    /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+    /* [in] */ LPOLESTR pszDisplayName,
+    /* [out] */ ULONG __RPC_FAR *pchEaten,
+    /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *ppmkOut);
+
+
+void __RPC_STUB IMoniker_ParseDisplayName_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IMoniker_IsSystemMoniker_Proxy( 
+    IMoniker __RPC_FAR * This,
+    /* [out] */ DWORD __RPC_FAR *pdwMksys);
+
+
+void __RPC_STUB IMoniker_IsSystemMoniker_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IMoniker_INTERFACE_DEFINED__ */
+
+
+#ifndef __IEnumString_INTERFACE_DEFINED__
+#define __IEnumString_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IEnumString
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IEnumString __RPC_FAR *LPENUMSTRING;
+
+
+EXTERN_C const IID IID_IEnumString;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IEnumString : public IUnknown
+    {
+    public:
+        virtual /* [local] */ HRESULT __stdcall Next( 
+            /* [in] */ ULONG celt,
+            /* [out] */ LPOLESTR __RPC_FAR *rgelt,
+            /* [out] */ ULONG __RPC_FAR *pceltFetched) = 0;
+        
+        virtual HRESULT __stdcall Skip( 
+            /* [in] */ ULONG celt) = 0;
+        
+        virtual HRESULT __stdcall Reset( void) = 0;
+        
+        virtual HRESULT __stdcall Clone( 
+            /* [out] */ IEnumString __RPC_FAR *__RPC_FAR *ppenum) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IEnumStringVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IEnumString __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IEnumString __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IEnumString __RPC_FAR * This);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *Next )( 
+            IEnumString __RPC_FAR * This,
+            /* [in] */ ULONG celt,
+            /* [out] */ LPOLESTR __RPC_FAR *rgelt,
+            /* [out] */ ULONG __RPC_FAR *pceltFetched);
+        
+        HRESULT ( __stdcall __RPC_FAR *Skip )( 
+            IEnumString __RPC_FAR * This,
+            /* [in] */ ULONG celt);
+        
+        HRESULT ( __stdcall __RPC_FAR *Reset )( 
+            IEnumString __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *Clone )( 
+            IEnumString __RPC_FAR * This,
+            /* [out] */ IEnumString __RPC_FAR *__RPC_FAR *ppenum);
+        
+    } IEnumStringVtbl;
+    
+    interface IEnumString
+    {
+        CONST_VTBL struct IEnumStringVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IEnumString_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IEnumString_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IEnumString_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IEnumString_Next(This,celt,rgelt,pceltFetched)	\
+    (This)->lpVtbl -> Next(This,celt,rgelt,pceltFetched)
+
+#define IEnumString_Skip(This,celt)	\
+    (This)->lpVtbl -> Skip(This,celt)
+
+#define IEnumString_Reset(This)	\
+    (This)->lpVtbl -> Reset(This)
+
+#define IEnumString_Clone(This,ppenum)	\
+    (This)->lpVtbl -> Clone(This,ppenum)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+/* [call_as] */ HRESULT __stdcall IEnumString_RemoteNext_Proxy( 
+    IEnumString __RPC_FAR * This,
+    /* [in] */ ULONG celt,
+    /* [length_is][size_is][out] */ LPOLESTR __RPC_FAR *rgelt,
+    /* [out] */ ULONG __RPC_FAR *pceltFetched);
+
+
+void __RPC_STUB IEnumString_RemoteNext_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IEnumString_Skip_Proxy( 
+    IEnumString __RPC_FAR * This,
+    /* [in] */ ULONG celt);
+
+
+void __RPC_STUB IEnumString_Skip_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IEnumString_Reset_Proxy( 
+    IEnumString __RPC_FAR * This);
+
+
+void __RPC_STUB IEnumString_Reset_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IEnumString_Clone_Proxy( 
+    IEnumString __RPC_FAR * This,
+    /* [out] */ IEnumString __RPC_FAR *__RPC_FAR *ppenum);
+
+
+void __RPC_STUB IEnumString_Clone_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IEnumString_INTERFACE_DEFINED__ */
+
+
+#ifndef __IStream_INTERFACE_DEFINED__
+#define __IStream_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IStream
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IStream __RPC_FAR *LPSTREAM;
+
+			/* size is 72 */
+typedef struct  tagSTATSTG
+    {
+    LPOLESTR pwcsName;
+    DWORD type;
+    ULARGE_INTEGER cbSize;
+    FILETIME mtime;
+    FILETIME ctime;
+    FILETIME atime;
+    DWORD grfMode;
+    DWORD grfLocksSupported;
+    CLSID clsid;
+    DWORD grfStateBits;
+    DWORD reserved;
+    }	STATSTG;
+
+			/* size is 2 */
+typedef 
+enum tagSTGTY
+    {	STGTY_STORAGE	= 1,
+	STGTY_STREAM	= 2,
+	STGTY_LOCKBYTES	= 3,
+	STGTY_PROPERTY	= 4
+    }	STGTY;
+
+			/* size is 2 */
+typedef 
+enum tagSTREAM_SEEK
+    {	STREAM_SEEK_SET	= 0,
+	STREAM_SEEK_CUR	= 1,
+	STREAM_SEEK_END	= 2
+    }	STREAM_SEEK;
+
+			/* size is 2 */
+typedef 
+enum tagLOCKTYPE
+    {	LOCK_WRITE	= 1,
+	LOCK_EXCLUSIVE	= 2,
+	LOCK_ONLYONCE	= 4
+    }	LOCKTYPE;
+
+
+EXTERN_C const IID IID_IStream;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IStream : public IUnknown
+    {
+    public:
+        virtual /* [local] */ HRESULT __stdcall Read( 
+            /* [out] */ void __RPC_FAR *pv,
+            /* [in] */ ULONG cb,
+            /* [out] */ ULONG __RPC_FAR *pcbRead) = 0;
+        
+        virtual /* [local] */ HRESULT __stdcall Write( 
+            /* [size_is][in] */ const void __RPC_FAR *pv,
+            /* [in] */ ULONG cb,
+            /* [out] */ ULONG __RPC_FAR *pcbWritten) = 0;
+        
+        virtual /* [local] */ HRESULT __stdcall Seek( 
+            /* [in] */ LARGE_INTEGER dlibMove,
+            /* [in] */ DWORD dwOrigin,
+            /* [out] */ ULARGE_INTEGER __RPC_FAR *plibNewPosition) = 0;
+        
+        virtual HRESULT __stdcall SetSize( 
+            /* [in] */ ULARGE_INTEGER libNewSize) = 0;
+        
+        virtual /* [local] */ HRESULT __stdcall CopyTo( 
+            /* [unique][in] */ IStream __RPC_FAR *pstm,
+            /* [in] */ ULARGE_INTEGER cb,
+            /* [out] */ ULARGE_INTEGER __RPC_FAR *pcbRead,
+            /* [out] */ ULARGE_INTEGER __RPC_FAR *pcbWritten) = 0;
+        
+        virtual HRESULT __stdcall Commit( 
+            /* [in] */ DWORD grfCommitFlags) = 0;
+        
+        virtual HRESULT __stdcall Revert( void) = 0;
+        
+        virtual HRESULT __stdcall LockRegion( 
+            /* [in] */ ULARGE_INTEGER libOffset,
+            /* [in] */ ULARGE_INTEGER cb,
+            /* [in] */ DWORD dwLockType) = 0;
+        
+        virtual HRESULT __stdcall UnlockRegion( 
+            /* [in] */ ULARGE_INTEGER libOffset,
+            /* [in] */ ULARGE_INTEGER cb,
+            /* [in] */ DWORD dwLockType) = 0;
+        
+        virtual HRESULT __stdcall Stat( 
+            /* [out] */ STATSTG __RPC_FAR *pstatstg,
+            /* [in] */ DWORD grfStatFlag) = 0;
+        
+        virtual HRESULT __stdcall Clone( 
+            /* [out] */ IStream __RPC_FAR *__RPC_FAR *ppstm) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IStreamVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IStream __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IStream __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IStream __RPC_FAR * This);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *Read )( 
+            IStream __RPC_FAR * This,
+            /* [out] */ void __RPC_FAR *pv,
+            /* [in] */ ULONG cb,
+            /* [out] */ ULONG __RPC_FAR *pcbRead);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *Write )( 
+            IStream __RPC_FAR * This,
+            /* [size_is][in] */ const void __RPC_FAR *pv,
+            /* [in] */ ULONG cb,
+            /* [out] */ ULONG __RPC_FAR *pcbWritten);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *Seek )( 
+            IStream __RPC_FAR * This,
+            /* [in] */ LARGE_INTEGER dlibMove,
+            /* [in] */ DWORD dwOrigin,
+            /* [out] */ ULARGE_INTEGER __RPC_FAR *plibNewPosition);
+        
+        HRESULT ( __stdcall __RPC_FAR *SetSize )( 
+            IStream __RPC_FAR * This,
+            /* [in] */ ULARGE_INTEGER libNewSize);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *CopyTo )( 
+            IStream __RPC_FAR * This,
+            /* [unique][in] */ IStream __RPC_FAR *pstm,
+            /* [in] */ ULARGE_INTEGER cb,
+            /* [out] */ ULARGE_INTEGER __RPC_FAR *pcbRead,
+            /* [out] */ ULARGE_INTEGER __RPC_FAR *pcbWritten);
+        
+        HRESULT ( __stdcall __RPC_FAR *Commit )( 
+            IStream __RPC_FAR * This,
+            /* [in] */ DWORD grfCommitFlags);
+        
+        HRESULT ( __stdcall __RPC_FAR *Revert )( 
+            IStream __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *LockRegion )( 
+            IStream __RPC_FAR * This,
+            /* [in] */ ULARGE_INTEGER libOffset,
+            /* [in] */ ULARGE_INTEGER cb,
+            /* [in] */ DWORD dwLockType);
+        
+        HRESULT ( __stdcall __RPC_FAR *UnlockRegion )( 
+            IStream __RPC_FAR * This,
+            /* [in] */ ULARGE_INTEGER libOffset,
+            /* [in] */ ULARGE_INTEGER cb,
+            /* [in] */ DWORD dwLockType);
+        
+        HRESULT ( __stdcall __RPC_FAR *Stat )( 
+            IStream __RPC_FAR * This,
+            /* [out] */ STATSTG __RPC_FAR *pstatstg,
+            /* [in] */ DWORD grfStatFlag);
+        
+        HRESULT ( __stdcall __RPC_FAR *Clone )( 
+            IStream __RPC_FAR * This,
+            /* [out] */ IStream __RPC_FAR *__RPC_FAR *ppstm);
+        
+    } IStreamVtbl;
+    
+    interface IStream
+    {
+        CONST_VTBL struct IStreamVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IStream_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IStream_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IStream_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IStream_Read(This,pv,cb,pcbRead)	\
+    (This)->lpVtbl -> Read(This,pv,cb,pcbRead)
+
+#define IStream_Write(This,pv,cb,pcbWritten)	\
+    (This)->lpVtbl -> Write(This,pv,cb,pcbWritten)
+
+#define IStream_Seek(This,dlibMove,dwOrigin,plibNewPosition)	\
+    (This)->lpVtbl -> Seek(This,dlibMove,dwOrigin,plibNewPosition)
+
+#define IStream_SetSize(This,libNewSize)	\
+    (This)->lpVtbl -> SetSize(This,libNewSize)
+
+#define IStream_CopyTo(This,pstm,cb,pcbRead,pcbWritten)	\
+    (This)->lpVtbl -> CopyTo(This,pstm,cb,pcbRead,pcbWritten)
+
+#define IStream_Commit(This,grfCommitFlags)	\
+    (This)->lpVtbl -> Commit(This,grfCommitFlags)
+
+#define IStream_Revert(This)	\
+    (This)->lpVtbl -> Revert(This)
+
+#define IStream_LockRegion(This,libOffset,cb,dwLockType)	\
+    (This)->lpVtbl -> LockRegion(This,libOffset,cb,dwLockType)
+
+#define IStream_UnlockRegion(This,libOffset,cb,dwLockType)	\
+    (This)->lpVtbl -> UnlockRegion(This,libOffset,cb,dwLockType)
+
+#define IStream_Stat(This,pstatstg,grfStatFlag)	\
+    (This)->lpVtbl -> Stat(This,pstatstg,grfStatFlag)
+
+#define IStream_Clone(This,ppstm)	\
+    (This)->lpVtbl -> Clone(This,ppstm)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+/* [call_as] */ HRESULT __stdcall IStream_RemoteRead_Proxy( 
+    IStream __RPC_FAR * This,
+    /* [length_is][size_is][out] */ byte __RPC_FAR *pv,
+    /* [in] */ ULONG cb,
+    /* [out] */ ULONG __RPC_FAR *pcbRead);
+
+
+void __RPC_STUB IStream_RemoteRead_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+/* [call_as] */ HRESULT __stdcall IStream_RemoteWrite_Proxy( 
+    IStream __RPC_FAR * This,
+    /* [size_is][in] */ const byte __RPC_FAR *pv,
+    /* [in] */ ULONG cb,
+    /* [out] */ ULONG __RPC_FAR *pcbWritten);
+
+
+void __RPC_STUB IStream_RemoteWrite_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+/* [call_as] */ HRESULT __stdcall IStream_RemoteSeek_Proxy( 
+    IStream __RPC_FAR * This,
+    /* [in] */ LARGE_INTEGER dlibMove,
+    /* [in] */ DWORD dwOrigin,
+    /* [out] */ ULARGE_INTEGER __RPC_FAR *plibNewPosition);
+
+
+void __RPC_STUB IStream_RemoteSeek_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStream_SetSize_Proxy( 
+    IStream __RPC_FAR * This,
+    /* [in] */ ULARGE_INTEGER libNewSize);
+
+
+void __RPC_STUB IStream_SetSize_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+/* [call_as] */ HRESULT __stdcall IStream_RemoteCopyTo_Proxy( 
+    IStream __RPC_FAR * This,
+    /* [unique][in] */ IStream __RPC_FAR *pstm,
+    /* [in] */ ULARGE_INTEGER cb,
+    /* [out] */ ULARGE_INTEGER __RPC_FAR *pcbRead,
+    /* [out] */ ULARGE_INTEGER __RPC_FAR *pcbWritten);
+
+
+void __RPC_STUB IStream_RemoteCopyTo_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStream_Commit_Proxy( 
+    IStream __RPC_FAR * This,
+    /* [in] */ DWORD grfCommitFlags);
+
+
+void __RPC_STUB IStream_Commit_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStream_Revert_Proxy( 
+    IStream __RPC_FAR * This);
+
+
+void __RPC_STUB IStream_Revert_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStream_LockRegion_Proxy( 
+    IStream __RPC_FAR * This,
+    /* [in] */ ULARGE_INTEGER libOffset,
+    /* [in] */ ULARGE_INTEGER cb,
+    /* [in] */ DWORD dwLockType);
+
+
+void __RPC_STUB IStream_LockRegion_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStream_UnlockRegion_Proxy( 
+    IStream __RPC_FAR * This,
+    /* [in] */ ULARGE_INTEGER libOffset,
+    /* [in] */ ULARGE_INTEGER cb,
+    /* [in] */ DWORD dwLockType);
+
+
+void __RPC_STUB IStream_UnlockRegion_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStream_Stat_Proxy( 
+    IStream __RPC_FAR * This,
+    /* [out] */ STATSTG __RPC_FAR *pstatstg,
+    /* [in] */ DWORD grfStatFlag);
+
+
+void __RPC_STUB IStream_Stat_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStream_Clone_Proxy( 
+    IStream __RPC_FAR * This,
+    /* [out] */ IStream __RPC_FAR *__RPC_FAR *ppstm);
+
+
+void __RPC_STUB IStream_Clone_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IStream_INTERFACE_DEFINED__ */
+
+
+#ifndef __IEnumSTATSTG_INTERFACE_DEFINED__
+#define __IEnumSTATSTG_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IEnumSTATSTG
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IEnumSTATSTG __RPC_FAR *LPENUMSTATSTG;
+
+
+EXTERN_C const IID IID_IEnumSTATSTG;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IEnumSTATSTG : public IUnknown
+    {
+    public:
+        virtual /* [local] */ HRESULT __stdcall Next( 
+            /* [in] */ ULONG celt,
+            /* [in] */ STATSTG __RPC_FAR *rgelt,
+            /* [out] */ ULONG __RPC_FAR *pceltFetched) = 0;
+        
+        virtual HRESULT __stdcall Skip( 
+            /* [in] */ ULONG celt) = 0;
+        
+        virtual HRESULT __stdcall Reset( void) = 0;
+        
+        virtual HRESULT __stdcall Clone( 
+            /* [out] */ IEnumSTATSTG __RPC_FAR *__RPC_FAR *ppenum) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IEnumSTATSTGVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IEnumSTATSTG __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IEnumSTATSTG __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IEnumSTATSTG __RPC_FAR * This);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *Next )( 
+            IEnumSTATSTG __RPC_FAR * This,
+            /* [in] */ ULONG celt,
+            /* [in] */ STATSTG __RPC_FAR *rgelt,
+            /* [out] */ ULONG __RPC_FAR *pceltFetched);
+        
+        HRESULT ( __stdcall __RPC_FAR *Skip )( 
+            IEnumSTATSTG __RPC_FAR * This,
+            /* [in] */ ULONG celt);
+        
+        HRESULT ( __stdcall __RPC_FAR *Reset )( 
+            IEnumSTATSTG __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *Clone )( 
+            IEnumSTATSTG __RPC_FAR * This,
+            /* [out] */ IEnumSTATSTG __RPC_FAR *__RPC_FAR *ppenum);
+        
+    } IEnumSTATSTGVtbl;
+    
+    interface IEnumSTATSTG
+    {
+        CONST_VTBL struct IEnumSTATSTGVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IEnumSTATSTG_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IEnumSTATSTG_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IEnumSTATSTG_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IEnumSTATSTG_Next(This,celt,rgelt,pceltFetched)	\
+    (This)->lpVtbl -> Next(This,celt,rgelt,pceltFetched)
+
+#define IEnumSTATSTG_Skip(This,celt)	\
+    (This)->lpVtbl -> Skip(This,celt)
+
+#define IEnumSTATSTG_Reset(This)	\
+    (This)->lpVtbl -> Reset(This)
+
+#define IEnumSTATSTG_Clone(This,ppenum)	\
+    (This)->lpVtbl -> Clone(This,ppenum)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+/* [call_as] */ HRESULT __stdcall IEnumSTATSTG_RemoteNext_Proxy( 
+    IEnumSTATSTG __RPC_FAR * This,
+    /* [in] */ ULONG celt,
+    /* [length_is][size_is][out] */ STATSTG __RPC_FAR *rgelt,
+    /* [out] */ ULONG __RPC_FAR *pceltFetched);
+
+
+void __RPC_STUB IEnumSTATSTG_RemoteNext_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IEnumSTATSTG_Skip_Proxy( 
+    IEnumSTATSTG __RPC_FAR * This,
+    /* [in] */ ULONG celt);
+
+
+void __RPC_STUB IEnumSTATSTG_Skip_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IEnumSTATSTG_Reset_Proxy( 
+    IEnumSTATSTG __RPC_FAR * This);
+
+
+void __RPC_STUB IEnumSTATSTG_Reset_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IEnumSTATSTG_Clone_Proxy( 
+    IEnumSTATSTG __RPC_FAR * This,
+    /* [out] */ IEnumSTATSTG __RPC_FAR *__RPC_FAR *ppenum);
+
+
+void __RPC_STUB IEnumSTATSTG_Clone_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IEnumSTATSTG_INTERFACE_DEFINED__ */
+
+
+#ifndef __IStorage_INTERFACE_DEFINED__
+#define __IStorage_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IStorage
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IStorage __RPC_FAR *LPSTORAGE;
+
+			/* size is 8 */
+typedef struct  tagRemSNB
+    {
+    unsigned long ulCntStr;
+    unsigned long ulCntChar;
+    /* [size_is] */ OLECHAR rgString[ 1 ];
+    }	RemSNB;
+
+			/* size is 4 */
+typedef /* [transmit] */ OLECHAR __RPC_FAR *__RPC_FAR *SNB;
+
+
+EXTERN_C const IID IID_IStorage;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IStorage : public IUnknown
+    {
+    public:
+        virtual HRESULT __stdcall CreateStream( 
+            /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName,
+            /* [in] */ DWORD grfMode,
+            /* [in] */ DWORD reserved1,
+            /* [in] */ DWORD reserved2,
+            /* [out] */ IStream __RPC_FAR *__RPC_FAR *ppstm) = 0;
+        
+        virtual /* [local] */ HRESULT __stdcall OpenStream( 
+            /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName,
+            /* [unique][in] */ void __RPC_FAR *reserved1,
+            /* [in] */ DWORD grfMode,
+            /* [in] */ DWORD reserved2,
+            /* [out] */ IStream __RPC_FAR *__RPC_FAR *ppstm) = 0;
+        
+        virtual HRESULT __stdcall CreateStorage( 
+            /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName,
+            /* [in] */ DWORD grfMode,
+            /* [in] */ DWORD dwStgFmt,
+            /* [in] */ DWORD reserved2,
+            /* [out] */ IStorage __RPC_FAR *__RPC_FAR *ppstg) = 0;
+        
+        virtual HRESULT __stdcall OpenStorage( 
+            /* [string][unique][in] */ const OLECHAR __RPC_FAR *pwcsName,
+            /* [unique][in] */ IStorage __RPC_FAR *pstgPriority,
+            /* [in] */ DWORD grfMode,
+            /* [unique][in] */ SNB snbExclude,
+            /* [in] */ DWORD reserved,
+            /* [out] */ IStorage __RPC_FAR *__RPC_FAR *ppstg) = 0;
+        
+        virtual HRESULT __stdcall CopyTo( 
+            /* [in] */ DWORD ciidExclude,
+            /* [size_is][unique][in] */ const IID __RPC_FAR *rgiidExclude,
+            /* [unique][in] */ SNB snbExclude,
+            /* [unique][in] */ IStorage __RPC_FAR *pstgDest) = 0;
+        
+        virtual HRESULT __stdcall MoveElementTo( 
+            /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName,
+            /* [unique][in] */ IStorage __RPC_FAR *pstgDest,
+            /* [string][in] */ const OLECHAR __RPC_FAR *pwcsNewName,
+            /* [in] */ DWORD grfFlags) = 0;
+        
+        virtual HRESULT __stdcall Commit( 
+            /* [in] */ DWORD grfCommitFlags) = 0;
+        
+        virtual HRESULT __stdcall Revert( void) = 0;
+        
+        virtual /* [local] */ HRESULT __stdcall EnumElements( 
+            /* [in] */ DWORD reserved1,
+            /* [size_is][unique][in] */ void __RPC_FAR *reserved2,
+            /* [in] */ DWORD reserved3,
+            /* [out] */ IEnumSTATSTG __RPC_FAR *__RPC_FAR *ppenum) = 0;
+        
+        virtual HRESULT __stdcall DestroyElement( 
+            /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName) = 0;
+        
+        virtual HRESULT __stdcall RenameElement( 
+            /* [string][in] */ const OLECHAR __RPC_FAR *pwcsOldName,
+            /* [string][in] */ const OLECHAR __RPC_FAR *pwcsNewName) = 0;
+        
+        virtual HRESULT __stdcall SetElementTimes( 
+            /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName,
+            /* [in] */ const FILETIME __RPC_FAR *pctime,
+            /* [in] */ const FILETIME __RPC_FAR *patime,
+            /* [in] */ const FILETIME __RPC_FAR *pmtime) = 0;
+        
+        virtual HRESULT __stdcall SetClass( 
+            /* [in] */ REFCLSID clsid) = 0;
+        
+        virtual HRESULT __stdcall SetStateBits( 
+            /* [in] */ DWORD grfStateBits,
+            /* [in] */ DWORD grfMask) = 0;
+        
+        virtual HRESULT __stdcall Stat( 
+            /* [out] */ STATSTG __RPC_FAR *pstatstg,
+            /* [in] */ DWORD grfStatFlag) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IStorageVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IStorage __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IStorage __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IStorage __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *CreateStream )( 
+            IStorage __RPC_FAR * This,
+            /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName,
+            /* [in] */ DWORD grfMode,
+            /* [in] */ DWORD reserved1,
+            /* [in] */ DWORD reserved2,
+            /* [out] */ IStream __RPC_FAR *__RPC_FAR *ppstm);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *OpenStream )( 
+            IStorage __RPC_FAR * This,
+            /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName,
+            /* [unique][in] */ void __RPC_FAR *reserved1,
+            /* [in] */ DWORD grfMode,
+            /* [in] */ DWORD reserved2,
+            /* [out] */ IStream __RPC_FAR *__RPC_FAR *ppstm);
+        
+        HRESULT ( __stdcall __RPC_FAR *CreateStorage )( 
+            IStorage __RPC_FAR * This,
+            /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName,
+            /* [in] */ DWORD grfMode,
+            /* [in] */ DWORD dwStgFmt,
+            /* [in] */ DWORD reserved2,
+            /* [out] */ IStorage __RPC_FAR *__RPC_FAR *ppstg);
+        
+        HRESULT ( __stdcall __RPC_FAR *OpenStorage )( 
+            IStorage __RPC_FAR * This,
+            /* [string][unique][in] */ const OLECHAR __RPC_FAR *pwcsName,
+            /* [unique][in] */ IStorage __RPC_FAR *pstgPriority,
+            /* [in] */ DWORD grfMode,
+            /* [unique][in] */ SNB snbExclude,
+            /* [in] */ DWORD reserved,
+            /* [out] */ IStorage __RPC_FAR *__RPC_FAR *ppstg);
+        
+        HRESULT ( __stdcall __RPC_FAR *CopyTo )( 
+            IStorage __RPC_FAR * This,
+            /* [in] */ DWORD ciidExclude,
+            /* [size_is][unique][in] */ const IID __RPC_FAR *rgiidExclude,
+            /* [unique][in] */ SNB snbExclude,
+            /* [unique][in] */ IStorage __RPC_FAR *pstgDest);
+        
+        HRESULT ( __stdcall __RPC_FAR *MoveElementTo )( 
+            IStorage __RPC_FAR * This,
+            /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName,
+            /* [unique][in] */ IStorage __RPC_FAR *pstgDest,
+            /* [string][in] */ const OLECHAR __RPC_FAR *pwcsNewName,
+            /* [in] */ DWORD grfFlags);
+        
+        HRESULT ( __stdcall __RPC_FAR *Commit )( 
+            IStorage __RPC_FAR * This,
+            /* [in] */ DWORD grfCommitFlags);
+        
+        HRESULT ( __stdcall __RPC_FAR *Revert )( 
+            IStorage __RPC_FAR * This);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *EnumElements )( 
+            IStorage __RPC_FAR * This,
+            /* [in] */ DWORD reserved1,
+            /* [size_is][unique][in] */ void __RPC_FAR *reserved2,
+            /* [in] */ DWORD reserved3,
+            /* [out] */ IEnumSTATSTG __RPC_FAR *__RPC_FAR *ppenum);
+        
+        HRESULT ( __stdcall __RPC_FAR *DestroyElement )( 
+            IStorage __RPC_FAR * This,
+            /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName);
+        
+        HRESULT ( __stdcall __RPC_FAR *RenameElement )( 
+            IStorage __RPC_FAR * This,
+            /* [string][in] */ const OLECHAR __RPC_FAR *pwcsOldName,
+            /* [string][in] */ const OLECHAR __RPC_FAR *pwcsNewName);
+        
+        HRESULT ( __stdcall __RPC_FAR *SetElementTimes )( 
+            IStorage __RPC_FAR * This,
+            /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName,
+            /* [in] */ const FILETIME __RPC_FAR *pctime,
+            /* [in] */ const FILETIME __RPC_FAR *patime,
+            /* [in] */ const FILETIME __RPC_FAR *pmtime);
+        
+        HRESULT ( __stdcall __RPC_FAR *SetClass )( 
+            IStorage __RPC_FAR * This,
+            /* [in] */ REFCLSID clsid);
+        
+        HRESULT ( __stdcall __RPC_FAR *SetStateBits )( 
+            IStorage __RPC_FAR * This,
+            /* [in] */ DWORD grfStateBits,
+            /* [in] */ DWORD grfMask);
+        
+        HRESULT ( __stdcall __RPC_FAR *Stat )( 
+            IStorage __RPC_FAR * This,
+            /* [out] */ STATSTG __RPC_FAR *pstatstg,
+            /* [in] */ DWORD grfStatFlag);
+        
+    } IStorageVtbl;
+    
+    interface IStorage
+    {
+        CONST_VTBL struct IStorageVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IStorage_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IStorage_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IStorage_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IStorage_CreateStream(This,pwcsName,grfMode,reserved1,reserved2,ppstm)	\
+    (This)->lpVtbl -> CreateStream(This,pwcsName,grfMode,reserved1,reserved2,ppstm)
+
+#define IStorage_OpenStream(This,pwcsName,reserved1,grfMode,reserved2,ppstm)	\
+    (This)->lpVtbl -> OpenStream(This,pwcsName,reserved1,grfMode,reserved2,ppstm)
+
+#define IStorage_CreateStorage(This,pwcsName,grfMode,dwStgFmt,reserved2,ppstg)	\
+    (This)->lpVtbl -> CreateStorage(This,pwcsName,grfMode,dwStgFmt,reserved2,ppstg)
+
+#define IStorage_OpenStorage(This,pwcsName,pstgPriority,grfMode,snbExclude,reserved,ppstg)	\
+    (This)->lpVtbl -> OpenStorage(This,pwcsName,pstgPriority,grfMode,snbExclude,reserved,ppstg)
+
+#define IStorage_CopyTo(This,ciidExclude,rgiidExclude,snbExclude,pstgDest)	\
+    (This)->lpVtbl -> CopyTo(This,ciidExclude,rgiidExclude,snbExclude,pstgDest)
+
+#define IStorage_MoveElementTo(This,pwcsName,pstgDest,pwcsNewName,grfFlags)	\
+    (This)->lpVtbl -> MoveElementTo(This,pwcsName,pstgDest,pwcsNewName,grfFlags)
+
+#define IStorage_Commit(This,grfCommitFlags)	\
+    (This)->lpVtbl -> Commit(This,grfCommitFlags)
+
+#define IStorage_Revert(This)	\
+    (This)->lpVtbl -> Revert(This)
+
+#define IStorage_EnumElements(This,reserved1,reserved2,reserved3,ppenum)	\
+    (This)->lpVtbl -> EnumElements(This,reserved1,reserved2,reserved3,ppenum)
+
+#define IStorage_DestroyElement(This,pwcsName)	\
+    (This)->lpVtbl -> DestroyElement(This,pwcsName)
+
+#define IStorage_RenameElement(This,pwcsOldName,pwcsNewName)	\
+    (This)->lpVtbl -> RenameElement(This,pwcsOldName,pwcsNewName)
+
+#define IStorage_SetElementTimes(This,pwcsName,pctime,patime,pmtime)	\
+    (This)->lpVtbl -> SetElementTimes(This,pwcsName,pctime,patime,pmtime)
+
+#define IStorage_SetClass(This,clsid)	\
+    (This)->lpVtbl -> SetClass(This,clsid)
+
+#define IStorage_SetStateBits(This,grfStateBits,grfMask)	\
+    (This)->lpVtbl -> SetStateBits(This,grfStateBits,grfMask)
+
+#define IStorage_Stat(This,pstatstg,grfStatFlag)	\
+    (This)->lpVtbl -> Stat(This,pstatstg,grfStatFlag)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+HRESULT __stdcall IStorage_CreateStream_Proxy( 
+    IStorage __RPC_FAR * This,
+    /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName,
+    /* [in] */ DWORD grfMode,
+    /* [in] */ DWORD reserved1,
+    /* [in] */ DWORD reserved2,
+    /* [out] */ IStream __RPC_FAR *__RPC_FAR *ppstm);
+
+
+void __RPC_STUB IStorage_CreateStream_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+/* [call_as] */ HRESULT __stdcall IStorage_RemoteOpenStream_Proxy( 
+    IStorage __RPC_FAR * This,
+    /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName,
+    /* [in] */ unsigned long cbReserved1,
+    /* [size_is][unique][in] */ byte __RPC_FAR *reserved1,
+    /* [in] */ DWORD grfMode,
+    /* [in] */ DWORD reserved2,
+    /* [out] */ IStream __RPC_FAR *__RPC_FAR *ppstm);
+
+
+void __RPC_STUB IStorage_RemoteOpenStream_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStorage_CreateStorage_Proxy( 
+    IStorage __RPC_FAR * This,
+    /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName,
+    /* [in] */ DWORD grfMode,
+    /* [in] */ DWORD dwStgFmt,
+    /* [in] */ DWORD reserved2,
+    /* [out] */ IStorage __RPC_FAR *__RPC_FAR *ppstg);
+
+
+void __RPC_STUB IStorage_CreateStorage_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStorage_OpenStorage_Proxy( 
+    IStorage __RPC_FAR * This,
+    /* [string][unique][in] */ const OLECHAR __RPC_FAR *pwcsName,
+    /* [unique][in] */ IStorage __RPC_FAR *pstgPriority,
+    /* [in] */ DWORD grfMode,
+    /* [unique][in] */ SNB snbExclude,
+    /* [in] */ DWORD reserved,
+    /* [out] */ IStorage __RPC_FAR *__RPC_FAR *ppstg);
+
+
+void __RPC_STUB IStorage_OpenStorage_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStorage_CopyTo_Proxy( 
+    IStorage __RPC_FAR * This,
+    /* [in] */ DWORD ciidExclude,
+    /* [size_is][unique][in] */ const IID __RPC_FAR *rgiidExclude,
+    /* [unique][in] */ SNB snbExclude,
+    /* [unique][in] */ IStorage __RPC_FAR *pstgDest);
+
+
+void __RPC_STUB IStorage_CopyTo_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStorage_MoveElementTo_Proxy( 
+    IStorage __RPC_FAR * This,
+    /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName,
+    /* [unique][in] */ IStorage __RPC_FAR *pstgDest,
+    /* [string][in] */ const OLECHAR __RPC_FAR *pwcsNewName,
+    /* [in] */ DWORD grfFlags);
+
+
+void __RPC_STUB IStorage_MoveElementTo_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStorage_Commit_Proxy( 
+    IStorage __RPC_FAR * This,
+    /* [in] */ DWORD grfCommitFlags);
+
+
+void __RPC_STUB IStorage_Commit_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStorage_Revert_Proxy( 
+    IStorage __RPC_FAR * This);
+
+
+void __RPC_STUB IStorage_Revert_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+/* [call_as] */ HRESULT __stdcall IStorage_RemoteEnumElements_Proxy( 
+    IStorage __RPC_FAR * This,
+    /* [in] */ DWORD reserved1,
+    /* [in] */ unsigned long cbReserved2,
+    /* [size_is][unique][in] */ byte __RPC_FAR *reserved2,
+    /* [in] */ DWORD reserved3,
+    /* [out] */ IEnumSTATSTG __RPC_FAR *__RPC_FAR *ppenum);
+
+
+void __RPC_STUB IStorage_RemoteEnumElements_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStorage_DestroyElement_Proxy( 
+    IStorage __RPC_FAR * This,
+    /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName);
+
+
+void __RPC_STUB IStorage_DestroyElement_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStorage_RenameElement_Proxy( 
+    IStorage __RPC_FAR * This,
+    /* [string][in] */ const OLECHAR __RPC_FAR *pwcsOldName,
+    /* [string][in] */ const OLECHAR __RPC_FAR *pwcsNewName);
+
+
+void __RPC_STUB IStorage_RenameElement_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStorage_SetElementTimes_Proxy( 
+    IStorage __RPC_FAR * This,
+    /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName,
+    /* [in] */ const FILETIME __RPC_FAR *pctime,
+    /* [in] */ const FILETIME __RPC_FAR *patime,
+    /* [in] */ const FILETIME __RPC_FAR *pmtime);
+
+
+void __RPC_STUB IStorage_SetElementTimes_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStorage_SetClass_Proxy( 
+    IStorage __RPC_FAR * This,
+    /* [in] */ REFCLSID clsid);
+
+
+void __RPC_STUB IStorage_SetClass_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStorage_SetStateBits_Proxy( 
+    IStorage __RPC_FAR * This,
+    /* [in] */ DWORD grfStateBits,
+    /* [in] */ DWORD grfMask);
+
+
+void __RPC_STUB IStorage_SetStateBits_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IStorage_Stat_Proxy( 
+    IStorage __RPC_FAR * This,
+    /* [out] */ STATSTG __RPC_FAR *pstatstg,
+    /* [in] */ DWORD grfStatFlag);
+
+
+void __RPC_STUB IStorage_Stat_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IStorage_INTERFACE_DEFINED__ */
+
+
+#ifndef __IPersistFile_INTERFACE_DEFINED__
+#define __IPersistFile_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IPersistFile
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IPersistFile __RPC_FAR *LPPERSISTFILE;
+
+
+EXTERN_C const IID IID_IPersistFile;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IPersistFile : public IPersist
+    {
+    public:
+        virtual HRESULT __stdcall IsDirty( void) = 0;
+        
+        virtual HRESULT __stdcall Load( 
+            /* [in] */ LPCOLESTR pszFileName,
+            /* [in] */ DWORD dwMode) = 0;
+        
+        virtual HRESULT __stdcall Save( 
+            /* [unique][in] */ LPCOLESTR pszFileName,
+            /* [in] */ BOOL fRemember) = 0;
+        
+        virtual HRESULT __stdcall SaveCompleted( 
+            /* [unique][in] */ LPCOLESTR pszFileName) = 0;
+        
+        virtual HRESULT __stdcall GetCurFile( 
+            /* [out] */ LPOLESTR __RPC_FAR *ppszFileName) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IPersistFileVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IPersistFile __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IPersistFile __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IPersistFile __RPC_FAR * This);
+        
+        /* [optimize] */ HRESULT ( __stdcall __RPC_FAR *GetClassID )( 
+            IPersistFile __RPC_FAR * This,
+            /* [out] */ CLSID __RPC_FAR *pClassID);
+        
+        HRESULT ( __stdcall __RPC_FAR *IsDirty )( 
+            IPersistFile __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *Load )( 
+            IPersistFile __RPC_FAR * This,
+            /* [in] */ LPCOLESTR pszFileName,
+            /* [in] */ DWORD dwMode);
+        
+        HRESULT ( __stdcall __RPC_FAR *Save )( 
+            IPersistFile __RPC_FAR * This,
+            /* [unique][in] */ LPCOLESTR pszFileName,
+            /* [in] */ BOOL fRemember);
+        
+        HRESULT ( __stdcall __RPC_FAR *SaveCompleted )( 
+            IPersistFile __RPC_FAR * This,
+            /* [unique][in] */ LPCOLESTR pszFileName);
+        
+        HRESULT ( __stdcall __RPC_FAR *GetCurFile )( 
+            IPersistFile __RPC_FAR * This,
+            /* [out] */ LPOLESTR __RPC_FAR *ppszFileName);
+        
+    } IPersistFileVtbl;
+    
+    interface IPersistFile
+    {
+        CONST_VTBL struct IPersistFileVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IPersistFile_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IPersistFile_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IPersistFile_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IPersistFile_GetClassID(This,pClassID)	\
+    (This)->lpVtbl -> GetClassID(This,pClassID)
+
+
+#define IPersistFile_IsDirty(This)	\
+    (This)->lpVtbl -> IsDirty(This)
+
+#define IPersistFile_Load(This,pszFileName,dwMode)	\
+    (This)->lpVtbl -> Load(This,pszFileName,dwMode)
+
+#define IPersistFile_Save(This,pszFileName,fRemember)	\
+    (This)->lpVtbl -> Save(This,pszFileName,fRemember)
+
+#define IPersistFile_SaveCompleted(This,pszFileName)	\
+    (This)->lpVtbl -> SaveCompleted(This,pszFileName)
+
+#define IPersistFile_GetCurFile(This,ppszFileName)	\
+    (This)->lpVtbl -> GetCurFile(This,ppszFileName)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+HRESULT __stdcall IPersistFile_IsDirty_Proxy( 
+    IPersistFile __RPC_FAR * This);
+
+
+void __RPC_STUB IPersistFile_IsDirty_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IPersistFile_Load_Proxy( 
+    IPersistFile __RPC_FAR * This,
+    /* [in] */ LPCOLESTR pszFileName,
+    /* [in] */ DWORD dwMode);
+
+
+void __RPC_STUB IPersistFile_Load_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IPersistFile_Save_Proxy( 
+    IPersistFile __RPC_FAR * This,
+    /* [unique][in] */ LPCOLESTR pszFileName,
+    /* [in] */ BOOL fRemember);
+
+
+void __RPC_STUB IPersistFile_Save_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IPersistFile_SaveCompleted_Proxy( 
+    IPersistFile __RPC_FAR * This,
+    /* [unique][in] */ LPCOLESTR pszFileName);
+
+
+void __RPC_STUB IPersistFile_SaveCompleted_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IPersistFile_GetCurFile_Proxy( 
+    IPersistFile __RPC_FAR * This,
+    /* [out] */ LPOLESTR __RPC_FAR *ppszFileName);
+
+
+void __RPC_STUB IPersistFile_GetCurFile_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IPersistFile_INTERFACE_DEFINED__ */
+
+
+#ifndef __IPersistStorage_INTERFACE_DEFINED__
+#define __IPersistStorage_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IPersistStorage
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IPersistStorage __RPC_FAR *LPPERSISTSTORAGE;
+
+
+EXTERN_C const IID IID_IPersistStorage;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IPersistStorage : public IPersist
+    {
+    public:
+        virtual HRESULT __stdcall IsDirty( void) = 0;
+        
+        virtual HRESULT __stdcall InitNew( 
+            /* [unique][in] */ IStorage __RPC_FAR *pStg) = 0;
+        
+        virtual HRESULT __stdcall Load( 
+            /* [unique][in] */ IStorage __RPC_FAR *pStg) = 0;
+        
+        virtual HRESULT __stdcall Save( 
+            /* [unique][in] */ IStorage __RPC_FAR *pStgSave,
+            /* [in] */ BOOL fSameAsLoad) = 0;
+        
+        virtual HRESULT __stdcall SaveCompleted( 
+            /* [unique][in] */ IStorage __RPC_FAR *pStgNew) = 0;
+        
+        virtual HRESULT __stdcall HandsOffStorage( void) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IPersistStorageVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IPersistStorage __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IPersistStorage __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IPersistStorage __RPC_FAR * This);
+        
+        /* [optimize] */ HRESULT ( __stdcall __RPC_FAR *GetClassID )( 
+            IPersistStorage __RPC_FAR * This,
+            /* [out] */ CLSID __RPC_FAR *pClassID);
+        
+        HRESULT ( __stdcall __RPC_FAR *IsDirty )( 
+            IPersistStorage __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *InitNew )( 
+            IPersistStorage __RPC_FAR * This,
+            /* [unique][in] */ IStorage __RPC_FAR *pStg);
+        
+        HRESULT ( __stdcall __RPC_FAR *Load )( 
+            IPersistStorage __RPC_FAR * This,
+            /* [unique][in] */ IStorage __RPC_FAR *pStg);
+        
+        HRESULT ( __stdcall __RPC_FAR *Save )( 
+            IPersistStorage __RPC_FAR * This,
+            /* [unique][in] */ IStorage __RPC_FAR *pStgSave,
+            /* [in] */ BOOL fSameAsLoad);
+        
+        HRESULT ( __stdcall __RPC_FAR *SaveCompleted )( 
+            IPersistStorage __RPC_FAR * This,
+            /* [unique][in] */ IStorage __RPC_FAR *pStgNew);
+        
+        HRESULT ( __stdcall __RPC_FAR *HandsOffStorage )( 
+            IPersistStorage __RPC_FAR * This);
+        
+    } IPersistStorageVtbl;
+    
+    interface IPersistStorage
+    {
+        CONST_VTBL struct IPersistStorageVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IPersistStorage_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IPersistStorage_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IPersistStorage_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IPersistStorage_GetClassID(This,pClassID)	\
+    (This)->lpVtbl -> GetClassID(This,pClassID)
+
+
+#define IPersistStorage_IsDirty(This)	\
+    (This)->lpVtbl -> IsDirty(This)
+
+#define IPersistStorage_InitNew(This,pStg)	\
+    (This)->lpVtbl -> InitNew(This,pStg)
+
+#define IPersistStorage_Load(This,pStg)	\
+    (This)->lpVtbl -> Load(This,pStg)
+
+#define IPersistStorage_Save(This,pStgSave,fSameAsLoad)	\
+    (This)->lpVtbl -> Save(This,pStgSave,fSameAsLoad)
+
+#define IPersistStorage_SaveCompleted(This,pStgNew)	\
+    (This)->lpVtbl -> SaveCompleted(This,pStgNew)
+
+#define IPersistStorage_HandsOffStorage(This)	\
+    (This)->lpVtbl -> HandsOffStorage(This)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+HRESULT __stdcall IPersistStorage_IsDirty_Proxy( 
+    IPersistStorage __RPC_FAR * This);
+
+
+void __RPC_STUB IPersistStorage_IsDirty_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IPersistStorage_InitNew_Proxy( 
+    IPersistStorage __RPC_FAR * This,
+    /* [unique][in] */ IStorage __RPC_FAR *pStg);
+
+
+void __RPC_STUB IPersistStorage_InitNew_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IPersistStorage_Load_Proxy( 
+    IPersistStorage __RPC_FAR * This,
+    /* [unique][in] */ IStorage __RPC_FAR *pStg);
+
+
+void __RPC_STUB IPersistStorage_Load_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IPersistStorage_Save_Proxy( 
+    IPersistStorage __RPC_FAR * This,
+    /* [unique][in] */ IStorage __RPC_FAR *pStgSave,
+    /* [in] */ BOOL fSameAsLoad);
+
+
+void __RPC_STUB IPersistStorage_Save_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IPersistStorage_SaveCompleted_Proxy( 
+    IPersistStorage __RPC_FAR * This,
+    /* [unique][in] */ IStorage __RPC_FAR *pStgNew);
+
+
+void __RPC_STUB IPersistStorage_SaveCompleted_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IPersistStorage_HandsOffStorage_Proxy( 
+    IPersistStorage __RPC_FAR * This);
+
+
+void __RPC_STUB IPersistStorage_HandsOffStorage_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IPersistStorage_INTERFACE_DEFINED__ */
+
+
+#ifndef __ILockBytes_INTERFACE_DEFINED__
+#define __ILockBytes_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: ILockBytes
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ ILockBytes __RPC_FAR *LPLOCKBYTES;
+
+
+EXTERN_C const IID IID_ILockBytes;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface ILockBytes : public IUnknown
+    {
+    public:
+        virtual /* [local] */ HRESULT __stdcall ReadAt( 
+            /* [in] */ ULARGE_INTEGER ulOffset,
+            /* [in] */ void __RPC_FAR *pv,
+            /* [in] */ ULONG cb,
+            /* [out] */ ULONG __RPC_FAR *pcbRead) = 0;
+        
+        virtual /* [local] */ HRESULT __stdcall WriteAt( 
+            /* [in] */ ULARGE_INTEGER ulOffset,
+            /* [in] */ const void __RPC_FAR *pv,
+            /* [in] */ ULONG cb,
+            /* [out] */ ULONG __RPC_FAR *pcbWritten) = 0;
+        
+        virtual HRESULT __stdcall Flush( void) = 0;
+        
+        virtual HRESULT __stdcall SetSize( 
+            /* [in] */ ULARGE_INTEGER cb) = 0;
+        
+        virtual HRESULT __stdcall LockRegion( 
+            /* [in] */ ULARGE_INTEGER libOffset,
+            /* [in] */ ULARGE_INTEGER cb,
+            /* [in] */ DWORD dwLockType) = 0;
+        
+        virtual HRESULT __stdcall UnlockRegion( 
+            /* [in] */ ULARGE_INTEGER libOffset,
+            /* [in] */ ULARGE_INTEGER cb,
+            /* [in] */ DWORD dwLockType) = 0;
+        
+        virtual HRESULT __stdcall Stat( 
+            /* [out] */ STATSTG __RPC_FAR *pstatstg,
+            /* [in] */ DWORD grfStatFlag) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct ILockBytesVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            ILockBytes __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            ILockBytes __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            ILockBytes __RPC_FAR * This);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *ReadAt )( 
+            ILockBytes __RPC_FAR * This,
+            /* [in] */ ULARGE_INTEGER ulOffset,
+            /* [in] */ void __RPC_FAR *pv,
+            /* [in] */ ULONG cb,
+            /* [out] */ ULONG __RPC_FAR *pcbRead);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *WriteAt )( 
+            ILockBytes __RPC_FAR * This,
+            /* [in] */ ULARGE_INTEGER ulOffset,
+            /* [in] */ const void __RPC_FAR *pv,
+            /* [in] */ ULONG cb,
+            /* [out] */ ULONG __RPC_FAR *pcbWritten);
+        
+        HRESULT ( __stdcall __RPC_FAR *Flush )( 
+            ILockBytes __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *SetSize )( 
+            ILockBytes __RPC_FAR * This,
+            /* [in] */ ULARGE_INTEGER cb);
+        
+        HRESULT ( __stdcall __RPC_FAR *LockRegion )( 
+            ILockBytes __RPC_FAR * This,
+            /* [in] */ ULARGE_INTEGER libOffset,
+            /* [in] */ ULARGE_INTEGER cb,
+            /* [in] */ DWORD dwLockType);
+        
+        HRESULT ( __stdcall __RPC_FAR *UnlockRegion )( 
+            ILockBytes __RPC_FAR * This,
+            /* [in] */ ULARGE_INTEGER libOffset,
+            /* [in] */ ULARGE_INTEGER cb,
+            /* [in] */ DWORD dwLockType);
+        
+        HRESULT ( __stdcall __RPC_FAR *Stat )( 
+            ILockBytes __RPC_FAR * This,
+            /* [out] */ STATSTG __RPC_FAR *pstatstg,
+            /* [in] */ DWORD grfStatFlag);
+        
+    } ILockBytesVtbl;
+    
+    interface ILockBytes
+    {
+        CONST_VTBL struct ILockBytesVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define ILockBytes_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define ILockBytes_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define ILockBytes_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define ILockBytes_ReadAt(This,ulOffset,pv,cb,pcbRead)	\
+    (This)->lpVtbl -> ReadAt(This,ulOffset,pv,cb,pcbRead)
+
+#define ILockBytes_WriteAt(This,ulOffset,pv,cb,pcbWritten)	\
+    (This)->lpVtbl -> WriteAt(This,ulOffset,pv,cb,pcbWritten)
+
+#define ILockBytes_Flush(This)	\
+    (This)->lpVtbl -> Flush(This)
+
+#define ILockBytes_SetSize(This,cb)	\
+    (This)->lpVtbl -> SetSize(This,cb)
+
+#define ILockBytes_LockRegion(This,libOffset,cb,dwLockType)	\
+    (This)->lpVtbl -> LockRegion(This,libOffset,cb,dwLockType)
+
+#define ILockBytes_UnlockRegion(This,libOffset,cb,dwLockType)	\
+    (This)->lpVtbl -> UnlockRegion(This,libOffset,cb,dwLockType)
+
+#define ILockBytes_Stat(This,pstatstg,grfStatFlag)	\
+    (This)->lpVtbl -> Stat(This,pstatstg,grfStatFlag)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+/* [call_as] */ HRESULT __stdcall ILockBytes_RemoteReadAt_Proxy( 
+    ILockBytes __RPC_FAR * This,
+    /* [in] */ ULARGE_INTEGER ulOffset,
+    /* [length_is][size_is][out] */ byte __RPC_FAR *pv,
+    /* [in] */ ULONG cb,
+    /* [out] */ ULONG __RPC_FAR *pcbRead);
+
+
+void __RPC_STUB ILockBytes_RemoteReadAt_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+/* [call_as] */ HRESULT __stdcall ILockBytes_RemoteWriteAt_Proxy( 
+    ILockBytes __RPC_FAR * This,
+    /* [in] */ ULARGE_INTEGER ulOffset,
+    /* [size_is][in] */ const byte __RPC_FAR *pv,
+    /* [in] */ ULONG cb,
+    /* [out] */ ULONG __RPC_FAR *pcbWritten);
+
+
+void __RPC_STUB ILockBytes_RemoteWriteAt_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall ILockBytes_Flush_Proxy( 
+    ILockBytes __RPC_FAR * This);
+
+
+void __RPC_STUB ILockBytes_Flush_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall ILockBytes_SetSize_Proxy( 
+    ILockBytes __RPC_FAR * This,
+    /* [in] */ ULARGE_INTEGER cb);
+
+
+void __RPC_STUB ILockBytes_SetSize_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall ILockBytes_LockRegion_Proxy( 
+    ILockBytes __RPC_FAR * This,
+    /* [in] */ ULARGE_INTEGER libOffset,
+    /* [in] */ ULARGE_INTEGER cb,
+    /* [in] */ DWORD dwLockType);
+
+
+void __RPC_STUB ILockBytes_LockRegion_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall ILockBytes_UnlockRegion_Proxy( 
+    ILockBytes __RPC_FAR * This,
+    /* [in] */ ULARGE_INTEGER libOffset,
+    /* [in] */ ULARGE_INTEGER cb,
+    /* [in] */ DWORD dwLockType);
+
+
+void __RPC_STUB ILockBytes_UnlockRegion_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall ILockBytes_Stat_Proxy( 
+    ILockBytes __RPC_FAR * This,
+    /* [out] */ STATSTG __RPC_FAR *pstatstg,
+    /* [in] */ DWORD grfStatFlag);
+
+
+void __RPC_STUB ILockBytes_Stat_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __ILockBytes_INTERFACE_DEFINED__ */
+
+
+#ifndef __IEnumFORMATETC_INTERFACE_DEFINED__
+#define __IEnumFORMATETC_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IEnumFORMATETC
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IEnumFORMATETC __RPC_FAR *LPENUMFORMATETC;
+
+			/* size is 12 */
+typedef struct  tagDVTARGETDEVICE
+    {
+    DWORD tdSize;
+    WORD tdDriverNameOffset;
+    WORD tdDeviceNameOffset;
+    WORD tdPortNameOffset;
+    WORD tdExtDevmodeOffset;
+    /* [size_is] */ BYTE tdData[ 1 ];
+    }	DVTARGETDEVICE;
+
+			/* size is 2 */
+typedef WORD CLIPFORMAT;
+
+			/* size is 4 */
+typedef CLIPFORMAT __RPC_FAR *LPCLIPFORMAT;
+
+			/* size is 20 */
+typedef struct  tagFORMATETC
+    {
+    CLIPFORMAT cfFormat;
+    /* [unique] */ DVTARGETDEVICE __RPC_FAR *ptd;
+    DWORD dwAspect;
+    LONG lindex;
+    DWORD tymed;
+    }	FORMATETC;
+
+			/* size is 4 */
+typedef struct tagFORMATETC __RPC_FAR *LPFORMATETC;
+
+
+EXTERN_C const IID IID_IEnumFORMATETC;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IEnumFORMATETC : public IUnknown
+    {
+    public:
+        virtual /* [local] */ HRESULT __stdcall Next( 
+            /* [in] */ ULONG celt,
+            /* [out] */ FORMATETC __RPC_FAR *rgelt,
+            /* [out] */ ULONG __RPC_FAR *pceltFetched) = 0;
+        
+        virtual HRESULT __stdcall Skip( 
+            /* [in] */ ULONG celt) = 0;
+        
+        virtual HRESULT __stdcall Reset( void) = 0;
+        
+        virtual HRESULT __stdcall Clone( 
+            /* [out] */ IEnumFORMATETC __RPC_FAR *__RPC_FAR *ppenum) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IEnumFORMATETCVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IEnumFORMATETC __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IEnumFORMATETC __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IEnumFORMATETC __RPC_FAR * This);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *Next )( 
+            IEnumFORMATETC __RPC_FAR * This,
+            /* [in] */ ULONG celt,
+            /* [out] */ FORMATETC __RPC_FAR *rgelt,
+            /* [out] */ ULONG __RPC_FAR *pceltFetched);
+        
+        HRESULT ( __stdcall __RPC_FAR *Skip )( 
+            IEnumFORMATETC __RPC_FAR * This,
+            /* [in] */ ULONG celt);
+        
+        HRESULT ( __stdcall __RPC_FAR *Reset )( 
+            IEnumFORMATETC __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *Clone )( 
+            IEnumFORMATETC __RPC_FAR * This,
+            /* [out] */ IEnumFORMATETC __RPC_FAR *__RPC_FAR *ppenum);
+        
+    } IEnumFORMATETCVtbl;
+    
+    interface IEnumFORMATETC
+    {
+        CONST_VTBL struct IEnumFORMATETCVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IEnumFORMATETC_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IEnumFORMATETC_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IEnumFORMATETC_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IEnumFORMATETC_Next(This,celt,rgelt,pceltFetched)	\
+    (This)->lpVtbl -> Next(This,celt,rgelt,pceltFetched)
+
+#define IEnumFORMATETC_Skip(This,celt)	\
+    (This)->lpVtbl -> Skip(This,celt)
+
+#define IEnumFORMATETC_Reset(This)	\
+    (This)->lpVtbl -> Reset(This)
+
+#define IEnumFORMATETC_Clone(This,ppenum)	\
+    (This)->lpVtbl -> Clone(This,ppenum)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+/* [call_as] */ HRESULT __stdcall IEnumFORMATETC_RemoteNext_Proxy( 
+    IEnumFORMATETC __RPC_FAR * This,
+    /* [in] */ ULONG celt,
+    /* [length_is][size_is][out] */ FORMATETC __RPC_FAR *rgelt,
+    /* [out] */ ULONG __RPC_FAR *pceltFetched);
+
+
+void __RPC_STUB IEnumFORMATETC_RemoteNext_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IEnumFORMATETC_Skip_Proxy( 
+    IEnumFORMATETC __RPC_FAR * This,
+    /* [in] */ ULONG celt);
+
+
+void __RPC_STUB IEnumFORMATETC_Skip_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IEnumFORMATETC_Reset_Proxy( 
+    IEnumFORMATETC __RPC_FAR * This);
+
+
+void __RPC_STUB IEnumFORMATETC_Reset_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IEnumFORMATETC_Clone_Proxy( 
+    IEnumFORMATETC __RPC_FAR * This,
+    /* [out] */ IEnumFORMATETC __RPC_FAR *__RPC_FAR *ppenum);
+
+
+void __RPC_STUB IEnumFORMATETC_Clone_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IEnumFORMATETC_INTERFACE_DEFINED__ */
+
+
+#ifndef __IEnumSTATDATA_INTERFACE_DEFINED__
+#define __IEnumSTATDATA_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IEnumSTATDATA
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IEnumSTATDATA __RPC_FAR *LPENUMSTATDATA;
+
+			/* size is 2 */
+typedef 
+enum tagADVF
+    {	ADVF_NODATA	= 1,
+	ADVF_PRIMEFIRST	= 2,
+	ADVF_ONLYONCE	= 4,
+	ADVF_DATAONSTOP	= 64,
+	ADVFCACHE_NOHANDLER	= 8,
+	ADVFCACHE_FORCEBUILTIN	= 16,
+	ADVFCACHE_ONSAVE	= 32
+    }	ADVF;
+
+			/* size is 32 */
+typedef struct  tagSTATDATA
+    {
+    FORMATETC formatetc;
+    DWORD advf;
+    /* [unique] */ IAdviseSink __RPC_FAR *pAdvSink;
+    DWORD dwConnection;
+    }	STATDATA;
+
+			/* size is 4 */
+typedef STATDATA __RPC_FAR *LPSTATDATA;
+
+
+EXTERN_C const IID IID_IEnumSTATDATA;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IEnumSTATDATA : public IUnknown
+    {
+    public:
+        virtual /* [local] */ HRESULT __stdcall Next( 
+            /* [in] */ ULONG celt,
+            STATDATA __RPC_FAR *rgelt,
+            /* [out] */ ULONG __RPC_FAR *pceltFetched) = 0;
+        
+        virtual HRESULT __stdcall Skip( 
+            /* [in] */ ULONG celt) = 0;
+        
+        virtual HRESULT __stdcall Reset( void) = 0;
+        
+        virtual HRESULT __stdcall Clone( 
+            /* [out] */ IEnumSTATDATA __RPC_FAR *__RPC_FAR *ppenum) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IEnumSTATDATAVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IEnumSTATDATA __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IEnumSTATDATA __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IEnumSTATDATA __RPC_FAR * This);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *Next )( 
+            IEnumSTATDATA __RPC_FAR * This,
+            /* [in] */ ULONG celt,
+            STATDATA __RPC_FAR *rgelt,
+            /* [out] */ ULONG __RPC_FAR *pceltFetched);
+        
+        HRESULT ( __stdcall __RPC_FAR *Skip )( 
+            IEnumSTATDATA __RPC_FAR * This,
+            /* [in] */ ULONG celt);
+        
+        HRESULT ( __stdcall __RPC_FAR *Reset )( 
+            IEnumSTATDATA __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *Clone )( 
+            IEnumSTATDATA __RPC_FAR * This,
+            /* [out] */ IEnumSTATDATA __RPC_FAR *__RPC_FAR *ppenum);
+        
+    } IEnumSTATDATAVtbl;
+    
+    interface IEnumSTATDATA
+    {
+        CONST_VTBL struct IEnumSTATDATAVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IEnumSTATDATA_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IEnumSTATDATA_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IEnumSTATDATA_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IEnumSTATDATA_Next(This,celt,rgelt,pceltFetched)	\
+    (This)->lpVtbl -> Next(This,celt,rgelt,pceltFetched)
+
+#define IEnumSTATDATA_Skip(This,celt)	\
+    (This)->lpVtbl -> Skip(This,celt)
+
+#define IEnumSTATDATA_Reset(This)	\
+    (This)->lpVtbl -> Reset(This)
+
+#define IEnumSTATDATA_Clone(This,ppenum)	\
+    (This)->lpVtbl -> Clone(This,ppenum)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+/* [call_as] */ HRESULT __stdcall IEnumSTATDATA_RemoteNext_Proxy( 
+    IEnumSTATDATA __RPC_FAR * This,
+    /* [in] */ ULONG celt,
+    /* [length_is][size_is][out] */ STATDATA __RPC_FAR *rgelt,
+    /* [out] */ ULONG __RPC_FAR *pceltFetched);
+
+
+void __RPC_STUB IEnumSTATDATA_RemoteNext_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IEnumSTATDATA_Skip_Proxy( 
+    IEnumSTATDATA __RPC_FAR * This,
+    /* [in] */ ULONG celt);
+
+
+void __RPC_STUB IEnumSTATDATA_Skip_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IEnumSTATDATA_Reset_Proxy( 
+    IEnumSTATDATA __RPC_FAR * This);
+
+
+void __RPC_STUB IEnumSTATDATA_Reset_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IEnumSTATDATA_Clone_Proxy( 
+    IEnumSTATDATA __RPC_FAR * This,
+    /* [out] */ IEnumSTATDATA __RPC_FAR *__RPC_FAR *ppenum);
+
+
+void __RPC_STUB IEnumSTATDATA_Clone_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IEnumSTATDATA_INTERFACE_DEFINED__ */
+
+
+#ifndef __IRootStorage_INTERFACE_DEFINED__
+#define __IRootStorage_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IRootStorage
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IRootStorage __RPC_FAR *LPROOTSTORAGE;
+
+
+EXTERN_C const IID IID_IRootStorage;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IRootStorage : public IUnknown
+    {
+    public:
+        virtual HRESULT __stdcall SwitchToFile( 
+            /* [string][in] */ LPOLESTR pszFile) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IRootStorageVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IRootStorage __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IRootStorage __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IRootStorage __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *SwitchToFile )( 
+            IRootStorage __RPC_FAR * This,
+            /* [string][in] */ LPOLESTR pszFile);
+        
+    } IRootStorageVtbl;
+    
+    interface IRootStorage
+    {
+        CONST_VTBL struct IRootStorageVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IRootStorage_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IRootStorage_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IRootStorage_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IRootStorage_SwitchToFile(This,pszFile)	\
+    (This)->lpVtbl -> SwitchToFile(This,pszFile)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+HRESULT __stdcall IRootStorage_SwitchToFile_Proxy( 
+    IRootStorage __RPC_FAR * This,
+    /* [string][in] */ LPOLESTR pszFile);
+
+
+void __RPC_STUB IRootStorage_SwitchToFile_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IRootStorage_INTERFACE_DEFINED__ */
+
+
+#ifndef __IAdviseSink_INTERFACE_DEFINED__
+#define __IAdviseSink_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IAdviseSink
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef IAdviseSink __RPC_FAR *LPADVISESINK;
+
+			/* size is 2 */
+typedef /* [v1_enum] */ 
+enum tagTYMED
+    {	TYMED_HGLOBAL	= 1,
+	TYMED_FILE	= 2,
+	TYMED_ISTREAM	= 4,
+	TYMED_ISTORAGE	= 8,
+	TYMED_GDI	= 16,
+	TYMED_MFPICT	= 32,
+	TYMED_ENHMF	= 64,
+	TYMED_NULL	= 0
+    }	TYMED;
+
+#pragma warning(disable:4200)
+			/* size is 20 */
+typedef struct  tagRemSTGMEDIUM
+    {
+    DWORD tymed;
+    DWORD dwHandleType;
+    unsigned long pData;
+    unsigned long pUnkForRelease;
+    unsigned long cbData;
+    /* [size_is] */ byte data[ 1 ];
+    }	RemSTGMEDIUM;
+
+#pragma warning(default:4200)
+#ifdef NONAMELESSUNION
+typedef struct tagSTGMEDIUM {
+    DWORD tymed;
+    union {
+        HBITMAP hBitmap;
+        HMETAFILEPICT hMetaFilePict;
+        HENHMETAFILE hEnhMetaFile;
+        HGLOBAL hGlobal;
+        LPOLESTR lpszFileName;
+        IStream *pstm;
+        IStorage *pstg;
+        } u;
+    IUnknown *pUnkForRelease;
+}STGMEDIUM;
+#else
+			/* size is 12 */
+typedef struct  tagSTGMEDIUM
+    {
+    DWORD tymed;
+    /* [switch_is][switch_type] */ union 
+        {
+        /* [case] */ HBITMAP hBitmap;
+        /* [case] */ HMETAFILEPICT hMetaFilePict;
+        /* [case] */ HENHMETAFILE hEnhMetaFile;
+        /* [case] */ HGLOBAL hGlobal;
+        /* [case] */ LPOLESTR lpszFileName;
+        /* [case] */ IStream __RPC_FAR *pstm;
+        /* [case] */ IStorage __RPC_FAR *pstg;
+        /* [default] */  /* Empty union arm */ 
+        }	;
+    /* [unique] */ IUnknown __RPC_FAR *pUnkForRelease;
+    }	STGMEDIUM;
+
+#endif /* !NONAMELESSUNION */
+			/* size is 4 */
+typedef STGMEDIUM __RPC_FAR *LPSTGMEDIUM;
+
+
+EXTERN_C const IID IID_IAdviseSink;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IAdviseSink : public IUnknown
+    {
+    public:
+        virtual /* [local] */ void __stdcall OnDataChange( 
+            /* [unique][in] */ FORMATETC __RPC_FAR *pFormatetc,
+            /* [unique][in] */ STGMEDIUM __RPC_FAR *pStgmed) = 0;
+        
+        virtual /* [local] */ void __stdcall OnViewChange( 
+            /* [in] */ DWORD dwAspect,
+            /* [in] */ LONG lindex) = 0;
+        
+        virtual /* [local] */ void __stdcall OnRename( 
+            /* [in] */ IMoniker __RPC_FAR *pmk) = 0;
+        
+        virtual /* [local] */ void __stdcall OnSave( void) = 0;
+        
+        virtual /* [local] */ void __stdcall OnClose( void) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IAdviseSinkVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IAdviseSink __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IAdviseSink __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IAdviseSink __RPC_FAR * This);
+        
+        /* [local] */ void ( __stdcall __RPC_FAR *OnDataChange )( 
+            IAdviseSink __RPC_FAR * This,
+            /* [unique][in] */ FORMATETC __RPC_FAR *pFormatetc,
+            /* [unique][in] */ STGMEDIUM __RPC_FAR *pStgmed);
+        
+        /* [local] */ void ( __stdcall __RPC_FAR *OnViewChange )( 
+            IAdviseSink __RPC_FAR * This,
+            /* [in] */ DWORD dwAspect,
+            /* [in] */ LONG lindex);
+        
+        /* [local] */ void ( __stdcall __RPC_FAR *OnRename )( 
+            IAdviseSink __RPC_FAR * This,
+            /* [in] */ IMoniker __RPC_FAR *pmk);
+        
+        /* [local] */ void ( __stdcall __RPC_FAR *OnSave )( 
+            IAdviseSink __RPC_FAR * This);
+        
+        /* [local] */ void ( __stdcall __RPC_FAR *OnClose )( 
+            IAdviseSink __RPC_FAR * This);
+        
+    } IAdviseSinkVtbl;
+    
+    interface IAdviseSink
+    {
+        CONST_VTBL struct IAdviseSinkVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IAdviseSink_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IAdviseSink_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IAdviseSink_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IAdviseSink_OnDataChange(This,pFormatetc,pStgmed)	\
+    (This)->lpVtbl -> OnDataChange(This,pFormatetc,pStgmed)
+
+#define IAdviseSink_OnViewChange(This,dwAspect,lindex)	\
+    (This)->lpVtbl -> OnViewChange(This,dwAspect,lindex)
+
+#define IAdviseSink_OnRename(This,pmk)	\
+    (This)->lpVtbl -> OnRename(This,pmk)
+
+#define IAdviseSink_OnSave(This)	\
+    (This)->lpVtbl -> OnSave(This)
+
+#define IAdviseSink_OnClose(This)	\
+    (This)->lpVtbl -> OnClose(This)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+/* [async][call_as] */ void __stdcall IAdviseSink_RemoteOnDataChange_Proxy( 
+    IAdviseSink __RPC_FAR * This,
+    /* [unique][in] */ FORMATETC __RPC_FAR *pFormatetc,
+    /* [unique][in] */ RemSTGMEDIUM __RPC_FAR *pStgmed);
+
+
+void __RPC_STUB IAdviseSink_RemoteOnDataChange_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+/* [async][call_as] */ void __stdcall IAdviseSink_RemoteOnViewChange_Proxy( 
+    IAdviseSink __RPC_FAR * This,
+    /* [in] */ DWORD dwAspect,
+    /* [in] */ LONG lindex);
+
+
+void __RPC_STUB IAdviseSink_RemoteOnViewChange_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+/* [async][call_as] */ void __stdcall IAdviseSink_RemoteOnRename_Proxy( 
+    IAdviseSink __RPC_FAR * This,
+    /* [in] */ IMoniker __RPC_FAR *pmk);
+
+
+void __RPC_STUB IAdviseSink_RemoteOnRename_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+/* [async][call_as] */ void __stdcall IAdviseSink_RemoteOnSave_Proxy( 
+    IAdviseSink __RPC_FAR * This);
+
+
+void __RPC_STUB IAdviseSink_RemoteOnSave_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+/* [async][call_as] */ void __stdcall IAdviseSink_RemoteOnClose_Proxy( 
+    IAdviseSink __RPC_FAR * This);
+
+
+void __RPC_STUB IAdviseSink_RemoteOnClose_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IAdviseSink_INTERFACE_DEFINED__ */
+
+
+#ifndef __IAdviseSink2_INTERFACE_DEFINED__
+#define __IAdviseSink2_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IAdviseSink2
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IAdviseSink2 __RPC_FAR *LPADVISESINK2;
+
+
+EXTERN_C const IID IID_IAdviseSink2;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IAdviseSink2 : public IAdviseSink
+    {
+    public:
+        virtual /* [local] */ void __stdcall OnLinkSrcChange( 
+            /* [unique][in] */ IMoniker __RPC_FAR *pmk) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IAdviseSink2Vtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IAdviseSink2 __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IAdviseSink2 __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IAdviseSink2 __RPC_FAR * This);
+        
+        /* [local] */ void ( __stdcall __RPC_FAR *OnDataChange )( 
+            IAdviseSink2 __RPC_FAR * This,
+            /* [unique][in] */ FORMATETC __RPC_FAR *pFormatetc,
+            /* [unique][in] */ STGMEDIUM __RPC_FAR *pStgmed);
+        
+        /* [local] */ void ( __stdcall __RPC_FAR *OnViewChange )( 
+            IAdviseSink2 __RPC_FAR * This,
+            /* [in] */ DWORD dwAspect,
+            /* [in] */ LONG lindex);
+        
+        /* [local] */ void ( __stdcall __RPC_FAR *OnRename )( 
+            IAdviseSink2 __RPC_FAR * This,
+            /* [in] */ IMoniker __RPC_FAR *pmk);
+        
+        /* [local] */ void ( __stdcall __RPC_FAR *OnSave )( 
+            IAdviseSink2 __RPC_FAR * This);
+        
+        /* [local] */ void ( __stdcall __RPC_FAR *OnClose )( 
+            IAdviseSink2 __RPC_FAR * This);
+        
+        /* [local] */ void ( __stdcall __RPC_FAR *OnLinkSrcChange )( 
+            IAdviseSink2 __RPC_FAR * This,
+            /* [unique][in] */ IMoniker __RPC_FAR *pmk);
+        
+    } IAdviseSink2Vtbl;
+    
+    interface IAdviseSink2
+    {
+        CONST_VTBL struct IAdviseSink2Vtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IAdviseSink2_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IAdviseSink2_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IAdviseSink2_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IAdviseSink2_OnDataChange(This,pFormatetc,pStgmed)	\
+    (This)->lpVtbl -> OnDataChange(This,pFormatetc,pStgmed)
+
+#define IAdviseSink2_OnViewChange(This,dwAspect,lindex)	\
+    (This)->lpVtbl -> OnViewChange(This,dwAspect,lindex)
+
+#define IAdviseSink2_OnRename(This,pmk)	\
+    (This)->lpVtbl -> OnRename(This,pmk)
+
+#define IAdviseSink2_OnSave(This)	\
+    (This)->lpVtbl -> OnSave(This)
+
+#define IAdviseSink2_OnClose(This)	\
+    (This)->lpVtbl -> OnClose(This)
+
+
+#define IAdviseSink2_OnLinkSrcChange(This,pmk)	\
+    (This)->lpVtbl -> OnLinkSrcChange(This,pmk)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+/* [async][call_as] */ void __stdcall IAdviseSink2_RemoteOnLinkSrcChange_Proxy( 
+    IAdviseSink2 __RPC_FAR * This,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmk);
+
+
+void __RPC_STUB IAdviseSink2_RemoteOnLinkSrcChange_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IAdviseSink2_INTERFACE_DEFINED__ */
+
+
+#ifndef __IDataObject_INTERFACE_DEFINED__
+#define __IDataObject_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IDataObject
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [unique][uuid][object] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IDataObject __RPC_FAR *LPDATAOBJECT;
+
+			/* size is 2 */
+typedef 
+enum tagDATADIR
+    {	DATADIR_GET	= 1,
+	DATADIR_SET	= 2
+    }	DATADIR;
+
+
+EXTERN_C const IID IID_IDataObject;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IDataObject : public IUnknown
+    {
+    public:
+        virtual /* [local] */ HRESULT __stdcall GetData( 
+            /* [unique][in] */ FORMATETC __RPC_FAR *pformatetcIn,
+            /* [out] */ STGMEDIUM __RPC_FAR *pmedium) = 0;
+        
+        virtual /* [local] */ HRESULT __stdcall GetDataHere( 
+            /* [unique][in] */ FORMATETC __RPC_FAR *pformatetc,
+            /* [out][in] */ STGMEDIUM __RPC_FAR *pmedium) = 0;
+        
+        virtual HRESULT __stdcall QueryGetData( 
+            /* [unique][in] */ FORMATETC __RPC_FAR *pformatetc) = 0;
+        
+        virtual HRESULT __stdcall GetCanonicalFormatEtc( 
+            /* [unique][in] */ FORMATETC __RPC_FAR *pformatectIn,
+            /* [out] */ FORMATETC __RPC_FAR *pformatetcOut) = 0;
+        
+        virtual /* [local] */ HRESULT __stdcall SetData( 
+            /* [unique][in] */ FORMATETC __RPC_FAR *pformatetc,
+            /* [unique][in] */ STGMEDIUM __RPC_FAR *pmedium,
+            /* [in] */ BOOL fRelease) = 0;
+        
+        virtual HRESULT __stdcall EnumFormatEtc( 
+            /* [in] */ DWORD dwDirection,
+            /* [out] */ IEnumFORMATETC __RPC_FAR *__RPC_FAR *ppenumFormatEtc) = 0;
+        
+        virtual HRESULT __stdcall DAdvise( 
+            /* [in] */ FORMATETC __RPC_FAR *pformatetc,
+            /* [in] */ DWORD advf,
+            /* [unique][in] */ IAdviseSink __RPC_FAR *pAdvSink,
+            /* [out] */ DWORD __RPC_FAR *pdwConnection) = 0;
+        
+        virtual HRESULT __stdcall DUnadvise( 
+            /* [in] */ DWORD dwConnection) = 0;
+        
+        virtual HRESULT __stdcall EnumDAdvise( 
+            /* [out] */ IEnumSTATDATA __RPC_FAR *__RPC_FAR *ppenumAdvise) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IDataObjectVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IDataObject __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IDataObject __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IDataObject __RPC_FAR * This);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *GetData )( 
+            IDataObject __RPC_FAR * This,
+            /* [unique][in] */ FORMATETC __RPC_FAR *pformatetcIn,
+            /* [out] */ STGMEDIUM __RPC_FAR *pmedium);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *GetDataHere )( 
+            IDataObject __RPC_FAR * This,
+            /* [unique][in] */ FORMATETC __RPC_FAR *pformatetc,
+            /* [out][in] */ STGMEDIUM __RPC_FAR *pmedium);
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryGetData )( 
+            IDataObject __RPC_FAR * This,
+            /* [unique][in] */ FORMATETC __RPC_FAR *pformatetc);
+        
+        HRESULT ( __stdcall __RPC_FAR *GetCanonicalFormatEtc )( 
+            IDataObject __RPC_FAR * This,
+            /* [unique][in] */ FORMATETC __RPC_FAR *pformatectIn,
+            /* [out] */ FORMATETC __RPC_FAR *pformatetcOut);
+        
+        /* [local] */ HRESULT ( __stdcall __RPC_FAR *SetData )( 
+            IDataObject __RPC_FAR * This,
+            /* [unique][in] */ FORMATETC __RPC_FAR *pformatetc,
+            /* [unique][in] */ STGMEDIUM __RPC_FAR *pmedium,
+            /* [in] */ BOOL fRelease);
+        
+        HRESULT ( __stdcall __RPC_FAR *EnumFormatEtc )( 
+            IDataObject __RPC_FAR * This,
+            /* [in] */ DWORD dwDirection,
+            /* [out] */ IEnumFORMATETC __RPC_FAR *__RPC_FAR *ppenumFormatEtc);
+        
+        HRESULT ( __stdcall __RPC_FAR *DAdvise )( 
+            IDataObject __RPC_FAR * This,
+            /* [in] */ FORMATETC __RPC_FAR *pformatetc,
+            /* [in] */ DWORD advf,
+            /* [unique][in] */ IAdviseSink __RPC_FAR *pAdvSink,
+            /* [out] */ DWORD __RPC_FAR *pdwConnection);
+        
+        HRESULT ( __stdcall __RPC_FAR *DUnadvise )( 
+            IDataObject __RPC_FAR * This,
+            /* [in] */ DWORD dwConnection);
+        
+        HRESULT ( __stdcall __RPC_FAR *EnumDAdvise )( 
+            IDataObject __RPC_FAR * This,
+            /* [out] */ IEnumSTATDATA __RPC_FAR *__RPC_FAR *ppenumAdvise);
+        
+    } IDataObjectVtbl;
+    
+    interface IDataObject
+    {
+        CONST_VTBL struct IDataObjectVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IDataObject_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IDataObject_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IDataObject_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IDataObject_GetData(This,pformatetcIn,pmedium)	\
+    (This)->lpVtbl -> GetData(This,pformatetcIn,pmedium)
+
+#define IDataObject_GetDataHere(This,pformatetc,pmedium)	\
+    (This)->lpVtbl -> GetDataHere(This,pformatetc,pmedium)
+
+#define IDataObject_QueryGetData(This,pformatetc)	\
+    (This)->lpVtbl -> QueryGetData(This,pformatetc)
+
+#define IDataObject_GetCanonicalFormatEtc(This,pformatectIn,pformatetcOut)	\
+    (This)->lpVtbl -> GetCanonicalFormatEtc(This,pformatectIn,pformatetcOut)
+
+#define IDataObject_SetData(This,pformatetc,pmedium,fRelease)	\
+    (This)->lpVtbl -> SetData(This,pformatetc,pmedium,fRelease)
+
+#define IDataObject_EnumFormatEtc(This,dwDirection,ppenumFormatEtc)	\
+    (This)->lpVtbl -> EnumFormatEtc(This,dwDirection,ppenumFormatEtc)
+
+#define IDataObject_DAdvise(This,pformatetc,advf,pAdvSink,pdwConnection)	\
+    (This)->lpVtbl -> DAdvise(This,pformatetc,advf,pAdvSink,pdwConnection)
+
+#define IDataObject_DUnadvise(This,dwConnection)	\
+    (This)->lpVtbl -> DUnadvise(This,dwConnection)
+
+#define IDataObject_EnumDAdvise(This,ppenumAdvise)	\
+    (This)->lpVtbl -> EnumDAdvise(This,ppenumAdvise)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+/* [call_as] */ HRESULT __stdcall IDataObject_RemoteGetData_Proxy( 
+    IDataObject __RPC_FAR * This,
+    /* [unique][in] */ FORMATETC __RPC_FAR *pformatetcIn,
+    /* [out] */ RemSTGMEDIUM __RPC_FAR *__RPC_FAR *ppRemoteMedium);
+
+
+void __RPC_STUB IDataObject_RemoteGetData_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+/* [call_as] */ HRESULT __stdcall IDataObject_RemoteGetDataHere_Proxy( 
+    IDataObject __RPC_FAR * This,
+    /* [unique][in] */ FORMATETC __RPC_FAR *pformatetc,
+    /* [out][in] */ RemSTGMEDIUM __RPC_FAR *__RPC_FAR *ppRemoteMedium);
+
+
+void __RPC_STUB IDataObject_RemoteGetDataHere_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IDataObject_QueryGetData_Proxy( 
+    IDataObject __RPC_FAR * This,
+    /* [unique][in] */ FORMATETC __RPC_FAR *pformatetc);
+
+
+void __RPC_STUB IDataObject_QueryGetData_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IDataObject_GetCanonicalFormatEtc_Proxy( 
+    IDataObject __RPC_FAR * This,
+    /* [unique][in] */ FORMATETC __RPC_FAR *pformatectIn,
+    /* [out] */ FORMATETC __RPC_FAR *pformatetcOut);
+
+
+void __RPC_STUB IDataObject_GetCanonicalFormatEtc_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+/* [call_as] */ HRESULT __stdcall IDataObject_RemoteSetData_Proxy( 
+    IDataObject __RPC_FAR * This,
+    /* [unique][in] */ FORMATETC __RPC_FAR *pformatetc,
+    /* [unique][in] */ RemSTGMEDIUM __RPC_FAR *pmedium,
+    /* [in] */ BOOL fRelease);
+
+
+void __RPC_STUB IDataObject_RemoteSetData_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IDataObject_EnumFormatEtc_Proxy( 
+    IDataObject __RPC_FAR * This,
+    /* [in] */ DWORD dwDirection,
+    /* [out] */ IEnumFORMATETC __RPC_FAR *__RPC_FAR *ppenumFormatEtc);
+
+
+void __RPC_STUB IDataObject_EnumFormatEtc_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IDataObject_DAdvise_Proxy( 
+    IDataObject __RPC_FAR * This,
+    /* [in] */ FORMATETC __RPC_FAR *pformatetc,
+    /* [in] */ DWORD advf,
+    /* [unique][in] */ IAdviseSink __RPC_FAR *pAdvSink,
+    /* [out] */ DWORD __RPC_FAR *pdwConnection);
+
+
+void __RPC_STUB IDataObject_DAdvise_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IDataObject_DUnadvise_Proxy( 
+    IDataObject __RPC_FAR * This,
+    /* [in] */ DWORD dwConnection);
+
+
+void __RPC_STUB IDataObject_DUnadvise_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IDataObject_EnumDAdvise_Proxy( 
+    IDataObject __RPC_FAR * This,
+    /* [out] */ IEnumSTATDATA __RPC_FAR *__RPC_FAR *ppenumAdvise);
+
+
+void __RPC_STUB IDataObject_EnumDAdvise_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IDataObject_INTERFACE_DEFINED__ */
+
+
+#ifndef __IDataAdviseHolder_INTERFACE_DEFINED__
+#define __IDataAdviseHolder_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IDataAdviseHolder
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [uuid][object][local] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IDataAdviseHolder __RPC_FAR *LPDATAADVISEHOLDER;
+
+
+EXTERN_C const IID IID_IDataAdviseHolder;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IDataAdviseHolder : public IUnknown
+    {
+    public:
+        virtual HRESULT __stdcall Advise( 
+            /* [unique][in] */ IDataObject __RPC_FAR *pDataObject,
+            /* [unique][in] */ FORMATETC __RPC_FAR *pFetc,
+            /* [in] */ DWORD advf,
+            /* [unique][in] */ IAdviseSink __RPC_FAR *pAdvise,
+            /* [out] */ DWORD __RPC_FAR *pdwConnection) = 0;
+        
+        virtual HRESULT __stdcall Unadvise( 
+            /* [in] */ DWORD dwConnection) = 0;
+        
+        virtual HRESULT __stdcall EnumAdvise( 
+            /* [out] */ IEnumSTATDATA __RPC_FAR *__RPC_FAR *ppenumAdvise) = 0;
+        
+        virtual HRESULT __stdcall SendOnDataChange( 
+            /* [unique][in] */ IDataObject __RPC_FAR *pDataObject,
+            /* [in] */ DWORD dwReserved,
+            /* [in] */ DWORD advf) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IDataAdviseHolderVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IDataAdviseHolder __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IDataAdviseHolder __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IDataAdviseHolder __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *Advise )( 
+            IDataAdviseHolder __RPC_FAR * This,
+            /* [unique][in] */ IDataObject __RPC_FAR *pDataObject,
+            /* [unique][in] */ FORMATETC __RPC_FAR *pFetc,
+            /* [in] */ DWORD advf,
+            /* [unique][in] */ IAdviseSink __RPC_FAR *pAdvise,
+            /* [out] */ DWORD __RPC_FAR *pdwConnection);
+        
+        HRESULT ( __stdcall __RPC_FAR *Unadvise )( 
+            IDataAdviseHolder __RPC_FAR * This,
+            /* [in] */ DWORD dwConnection);
+        
+        HRESULT ( __stdcall __RPC_FAR *EnumAdvise )( 
+            IDataAdviseHolder __RPC_FAR * This,
+            /* [out] */ IEnumSTATDATA __RPC_FAR *__RPC_FAR *ppenumAdvise);
+        
+        HRESULT ( __stdcall __RPC_FAR *SendOnDataChange )( 
+            IDataAdviseHolder __RPC_FAR * This,
+            /* [unique][in] */ IDataObject __RPC_FAR *pDataObject,
+            /* [in] */ DWORD dwReserved,
+            /* [in] */ DWORD advf);
+        
+    } IDataAdviseHolderVtbl;
+    
+    interface IDataAdviseHolder
+    {
+        CONST_VTBL struct IDataAdviseHolderVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IDataAdviseHolder_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IDataAdviseHolder_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IDataAdviseHolder_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IDataAdviseHolder_Advise(This,pDataObject,pFetc,advf,pAdvise,pdwConnection)	\
+    (This)->lpVtbl -> Advise(This,pDataObject,pFetc,advf,pAdvise,pdwConnection)
+
+#define IDataAdviseHolder_Unadvise(This,dwConnection)	\
+    (This)->lpVtbl -> Unadvise(This,dwConnection)
+
+#define IDataAdviseHolder_EnumAdvise(This,ppenumAdvise)	\
+    (This)->lpVtbl -> EnumAdvise(This,ppenumAdvise)
+
+#define IDataAdviseHolder_SendOnDataChange(This,pDataObject,dwReserved,advf)	\
+    (This)->lpVtbl -> SendOnDataChange(This,pDataObject,dwReserved,advf)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+HRESULT __stdcall IDataAdviseHolder_Advise_Proxy( 
+    IDataAdviseHolder __RPC_FAR * This,
+    /* [unique][in] */ IDataObject __RPC_FAR *pDataObject,
+    /* [unique][in] */ FORMATETC __RPC_FAR *pFetc,
+    /* [in] */ DWORD advf,
+    /* [unique][in] */ IAdviseSink __RPC_FAR *pAdvise,
+    /* [out] */ DWORD __RPC_FAR *pdwConnection);
+
+
+void __RPC_STUB IDataAdviseHolder_Advise_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IDataAdviseHolder_Unadvise_Proxy( 
+    IDataAdviseHolder __RPC_FAR * This,
+    /* [in] */ DWORD dwConnection);
+
+
+void __RPC_STUB IDataAdviseHolder_Unadvise_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IDataAdviseHolder_EnumAdvise_Proxy( 
+    IDataAdviseHolder __RPC_FAR * This,
+    /* [out] */ IEnumSTATDATA __RPC_FAR *__RPC_FAR *ppenumAdvise);
+
+
+void __RPC_STUB IDataAdviseHolder_EnumAdvise_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IDataAdviseHolder_SendOnDataChange_Proxy( 
+    IDataAdviseHolder __RPC_FAR * This,
+    /* [unique][in] */ IDataObject __RPC_FAR *pDataObject,
+    /* [in] */ DWORD dwReserved,
+    /* [in] */ DWORD advf);
+
+
+void __RPC_STUB IDataAdviseHolder_SendOnDataChange_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IDataAdviseHolder_INTERFACE_DEFINED__ */
+
+
+#ifndef __IMessageFilter_INTERFACE_DEFINED__
+#define __IMessageFilter_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IMessageFilter
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [uuid][object][local] */ 
+
+
+			/* size is 4 */
+typedef /* [unique] */ IMessageFilter __RPC_FAR *LPMESSAGEFILTER;
+
+			/* size is 2 */
+typedef 
+enum tagCALLTYPE
+    {	CALLTYPE_TOPLEVEL	= 1,
+	CALLTYPE_NESTED	= 2,
+	CALLTYPE_ASYNC	= 3,
+	CALLTYPE_TOPLEVEL_CALLPENDING	= 4,
+	CALLTYPE_ASYNC_CALLPENDING	= 5
+    }	CALLTYPE;
+
+			/* size is 2 */
+typedef 
+enum tagSERVERCALL
+    {	SERVERCALL_ISHANDLED	= 0,
+	SERVERCALL_REJECTED	= 1,
+	SERVERCALL_RETRYLATER	= 2
+    }	SERVERCALL;
+
+			/* size is 2 */
+typedef 
+enum tagPENDINGTYPE
+    {	PENDINGTYPE_TOPLEVEL	= 1,
+	PENDINGTYPE_NESTED	= 2
+    }	PENDINGTYPE;
+
+			/* size is 2 */
+typedef 
+enum tagPENDINGMSG
+    {	PENDINGMSG_CANCELCALL	= 0,
+	PENDINGMSG_WAITNOPROCESS	= 1,
+	PENDINGMSG_WAITDEFPROCESS	= 2
+    }	PENDINGMSG;
+
+			/* size is 22 */
+typedef struct  tagINTERFACEINFO
+    {
+    IUnknown __RPC_FAR *pUnk;
+    IID iid;
+    WORD wMethod;
+    }	INTERFACEINFO;
+
+			/* size is 4 */
+typedef struct tagINTERFACEINFO __RPC_FAR *LPINTERFACEINFO;
+
+
+EXTERN_C const IID IID_IMessageFilter;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IMessageFilter : public IUnknown
+    {
+    public:
+        virtual DWORD __stdcall HandleInComingCall( 
+            /* [in] */ DWORD dwCallType,
+            /* [in] */ HTASK htaskCaller,
+            /* [in] */ DWORD dwTickCount,
+            /* [in] */ LPINTERFACEINFO lpInterfaceInfo) = 0;
+        
+        virtual DWORD __stdcall RetryRejectedCall( 
+            /* [in] */ HTASK htaskCallee,
+            /* [in] */ DWORD dwTickCount,
+            /* [in] */ DWORD dwRejectType) = 0;
+        
+        virtual DWORD __stdcall MessagePending( 
+            /* [in] */ HTASK htaskCallee,
+            /* [in] */ DWORD dwTickCount,
+            /* [in] */ DWORD dwPendingType) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IMessageFilterVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IMessageFilter __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IMessageFilter __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IMessageFilter __RPC_FAR * This);
+        
+        DWORD ( __stdcall __RPC_FAR *HandleInComingCall )( 
+            IMessageFilter __RPC_FAR * This,
+            /* [in] */ DWORD dwCallType,
+            /* [in] */ HTASK htaskCaller,
+            /* [in] */ DWORD dwTickCount,
+            /* [in] */ LPINTERFACEINFO lpInterfaceInfo);
+        
+        DWORD ( __stdcall __RPC_FAR *RetryRejectedCall )( 
+            IMessageFilter __RPC_FAR * This,
+            /* [in] */ HTASK htaskCallee,
+            /* [in] */ DWORD dwTickCount,
+            /* [in] */ DWORD dwRejectType);
+        
+        DWORD ( __stdcall __RPC_FAR *MessagePending )( 
+            IMessageFilter __RPC_FAR * This,
+            /* [in] */ HTASK htaskCallee,
+            /* [in] */ DWORD dwTickCount,
+            /* [in] */ DWORD dwPendingType);
+        
+    } IMessageFilterVtbl;
+    
+    interface IMessageFilter
+    {
+        CONST_VTBL struct IMessageFilterVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IMessageFilter_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IMessageFilter_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IMessageFilter_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IMessageFilter_HandleInComingCall(This,dwCallType,htaskCaller,dwTickCount,lpInterfaceInfo)	\
+    (This)->lpVtbl -> HandleInComingCall(This,dwCallType,htaskCaller,dwTickCount,lpInterfaceInfo)
+
+#define IMessageFilter_RetryRejectedCall(This,htaskCallee,dwTickCount,dwRejectType)	\
+    (This)->lpVtbl -> RetryRejectedCall(This,htaskCallee,dwTickCount,dwRejectType)
+
+#define IMessageFilter_MessagePending(This,htaskCallee,dwTickCount,dwPendingType)	\
+    (This)->lpVtbl -> MessagePending(This,htaskCallee,dwTickCount,dwPendingType)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+DWORD __stdcall IMessageFilter_HandleInComingCall_Proxy( 
+    IMessageFilter __RPC_FAR * This,
+    /* [in] */ DWORD dwCallType,
+    /* [in] */ HTASK htaskCaller,
+    /* [in] */ DWORD dwTickCount,
+    /* [in] */ LPINTERFACEINFO lpInterfaceInfo);
+
+
+void __RPC_STUB IMessageFilter_HandleInComingCall_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+DWORD __stdcall IMessageFilter_RetryRejectedCall_Proxy( 
+    IMessageFilter __RPC_FAR * This,
+    /* [in] */ HTASK htaskCallee,
+    /* [in] */ DWORD dwTickCount,
+    /* [in] */ DWORD dwRejectType);
+
+
+void __RPC_STUB IMessageFilter_RetryRejectedCall_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+DWORD __stdcall IMessageFilter_MessagePending_Proxy( 
+    IMessageFilter __RPC_FAR * This,
+    /* [in] */ HTASK htaskCallee,
+    /* [in] */ DWORD dwTickCount,
+    /* [in] */ DWORD dwPendingType);
+
+
+void __RPC_STUB IMessageFilter_MessagePending_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IMessageFilter_INTERFACE_DEFINED__ */
+
+
+#ifndef __IRpcChannelBuffer_INTERFACE_DEFINED__
+#define __IRpcChannelBuffer_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IRpcChannelBuffer
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [uuid][object][local] */ 
+
+
+			/* size is 4 */
+typedef unsigned long RPCOLEDATAREP;
+
+			/* size is 44 */
+typedef struct  tagRPCOLEMESSAGE
+    {
+    void __RPC_FAR *reserved1;
+    RPCOLEDATAREP dataRepresentation;
+    void __RPC_FAR *Buffer;
+    ULONG cbBuffer;
+    ULONG iMethod;
+    void __RPC_FAR *reserved2[ 5 ];
+    ULONG rpcFlags;
+    }	RPCOLEMESSAGE;
+
+			/* size is 4 */
+typedef RPCOLEMESSAGE __RPC_FAR *PRPCOLEMESSAGE;
+
+
+EXTERN_C const IID IID_IRpcChannelBuffer;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IRpcChannelBuffer : public IUnknown
+    {
+    public:
+        virtual HRESULT __stdcall GetBuffer( 
+            /* [in] */ RPCOLEMESSAGE __RPC_FAR *pMessage,
+            /* [in] */ REFIID riid) = 0;
+        
+        virtual HRESULT __stdcall SendReceive( 
+            /* [out][in] */ RPCOLEMESSAGE __RPC_FAR *pMessage,
+            /* [out] */ ULONG __RPC_FAR *pStatus) = 0;
+        
+        virtual HRESULT __stdcall FreeBuffer( 
+            /* [in] */ RPCOLEMESSAGE __RPC_FAR *pMessage) = 0;
+        
+        virtual HRESULT __stdcall GetDestCtx( 
+            /* [out] */ DWORD __RPC_FAR *pdwDestContext,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvDestContext) = 0;
+        
+        virtual HRESULT __stdcall IsConnected( void) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IRpcChannelBufferVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IRpcChannelBuffer __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IRpcChannelBuffer __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IRpcChannelBuffer __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *GetBuffer )( 
+            IRpcChannelBuffer __RPC_FAR * This,
+            /* [in] */ RPCOLEMESSAGE __RPC_FAR *pMessage,
+            /* [in] */ REFIID riid);
+        
+        HRESULT ( __stdcall __RPC_FAR *SendReceive )( 
+            IRpcChannelBuffer __RPC_FAR * This,
+            /* [out][in] */ RPCOLEMESSAGE __RPC_FAR *pMessage,
+            /* [out] */ ULONG __RPC_FAR *pStatus);
+        
+        HRESULT ( __stdcall __RPC_FAR *FreeBuffer )( 
+            IRpcChannelBuffer __RPC_FAR * This,
+            /* [in] */ RPCOLEMESSAGE __RPC_FAR *pMessage);
+        
+        HRESULT ( __stdcall __RPC_FAR *GetDestCtx )( 
+            IRpcChannelBuffer __RPC_FAR * This,
+            /* [out] */ DWORD __RPC_FAR *pdwDestContext,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvDestContext);
+        
+        HRESULT ( __stdcall __RPC_FAR *IsConnected )( 
+            IRpcChannelBuffer __RPC_FAR * This);
+        
+    } IRpcChannelBufferVtbl;
+    
+    interface IRpcChannelBuffer
+    {
+        CONST_VTBL struct IRpcChannelBufferVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IRpcChannelBuffer_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IRpcChannelBuffer_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IRpcChannelBuffer_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IRpcChannelBuffer_GetBuffer(This,pMessage,riid)	\
+    (This)->lpVtbl -> GetBuffer(This,pMessage,riid)
+
+#define IRpcChannelBuffer_SendReceive(This,pMessage,pStatus)	\
+    (This)->lpVtbl -> SendReceive(This,pMessage,pStatus)
+
+#define IRpcChannelBuffer_FreeBuffer(This,pMessage)	\
+    (This)->lpVtbl -> FreeBuffer(This,pMessage)
+
+#define IRpcChannelBuffer_GetDestCtx(This,pdwDestContext,ppvDestContext)	\
+    (This)->lpVtbl -> GetDestCtx(This,pdwDestContext,ppvDestContext)
+
+#define IRpcChannelBuffer_IsConnected(This)	\
+    (This)->lpVtbl -> IsConnected(This)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+HRESULT __stdcall IRpcChannelBuffer_GetBuffer_Proxy( 
+    IRpcChannelBuffer __RPC_FAR * This,
+    /* [in] */ RPCOLEMESSAGE __RPC_FAR *pMessage,
+    /* [in] */ REFIID riid);
+
+
+void __RPC_STUB IRpcChannelBuffer_GetBuffer_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IRpcChannelBuffer_SendReceive_Proxy( 
+    IRpcChannelBuffer __RPC_FAR * This,
+    /* [out][in] */ RPCOLEMESSAGE __RPC_FAR *pMessage,
+    /* [out] */ ULONG __RPC_FAR *pStatus);
+
+
+void __RPC_STUB IRpcChannelBuffer_SendReceive_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IRpcChannelBuffer_FreeBuffer_Proxy( 
+    IRpcChannelBuffer __RPC_FAR * This,
+    /* [in] */ RPCOLEMESSAGE __RPC_FAR *pMessage);
+
+
+void __RPC_STUB IRpcChannelBuffer_FreeBuffer_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IRpcChannelBuffer_GetDestCtx_Proxy( 
+    IRpcChannelBuffer __RPC_FAR * This,
+    /* [out] */ DWORD __RPC_FAR *pdwDestContext,
+    /* [out] */ void __RPC_FAR *__RPC_FAR *ppvDestContext);
+
+
+void __RPC_STUB IRpcChannelBuffer_GetDestCtx_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IRpcChannelBuffer_IsConnected_Proxy( 
+    IRpcChannelBuffer __RPC_FAR * This);
+
+
+void __RPC_STUB IRpcChannelBuffer_IsConnected_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IRpcChannelBuffer_INTERFACE_DEFINED__ */
+
+
+#ifndef __IRpcProxyBuffer_INTERFACE_DEFINED__
+#define __IRpcProxyBuffer_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IRpcProxyBuffer
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [uuid][object][local] */ 
+
+
+
+EXTERN_C const IID IID_IRpcProxyBuffer;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IRpcProxyBuffer : public IUnknown
+    {
+    public:
+        virtual HRESULT __stdcall Connect( 
+            /* [unique][in] */ IRpcChannelBuffer __RPC_FAR *pRpcChannelBuffer) = 0;
+        
+        virtual void __stdcall Disconnect( void) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IRpcProxyBufferVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IRpcProxyBuffer __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IRpcProxyBuffer __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IRpcProxyBuffer __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *Connect )( 
+            IRpcProxyBuffer __RPC_FAR * This,
+            /* [unique][in] */ IRpcChannelBuffer __RPC_FAR *pRpcChannelBuffer);
+        
+        void ( __stdcall __RPC_FAR *Disconnect )( 
+            IRpcProxyBuffer __RPC_FAR * This);
+        
+    } IRpcProxyBufferVtbl;
+    
+    interface IRpcProxyBuffer
+    {
+        CONST_VTBL struct IRpcProxyBufferVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IRpcProxyBuffer_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IRpcProxyBuffer_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IRpcProxyBuffer_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IRpcProxyBuffer_Connect(This,pRpcChannelBuffer)	\
+    (This)->lpVtbl -> Connect(This,pRpcChannelBuffer)
+
+#define IRpcProxyBuffer_Disconnect(This)	\
+    (This)->lpVtbl -> Disconnect(This)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+HRESULT __stdcall IRpcProxyBuffer_Connect_Proxy( 
+    IRpcProxyBuffer __RPC_FAR * This,
+    /* [unique][in] */ IRpcChannelBuffer __RPC_FAR *pRpcChannelBuffer);
+
+
+void __RPC_STUB IRpcProxyBuffer_Connect_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+void __stdcall IRpcProxyBuffer_Disconnect_Proxy( 
+    IRpcProxyBuffer __RPC_FAR * This);
+
+
+void __RPC_STUB IRpcProxyBuffer_Disconnect_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IRpcProxyBuffer_INTERFACE_DEFINED__ */
+
+
+#ifndef __IRpcStubBuffer_INTERFACE_DEFINED__
+#define __IRpcStubBuffer_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IRpcStubBuffer
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [uuid][object][local] */ 
+
+
+
+EXTERN_C const IID IID_IRpcStubBuffer;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IRpcStubBuffer : public IUnknown
+    {
+    public:
+        virtual HRESULT __stdcall Connect( 
+            /* [in] */ IUnknown __RPC_FAR *pUnkServer) = 0;
+        
+        virtual void __stdcall Disconnect( void) = 0;
+        
+        virtual HRESULT __stdcall Invoke( 
+            /* [in] */ RPCOLEMESSAGE __RPC_FAR *_prpcmsg,
+            /* [in] */ IRpcChannelBuffer __RPC_FAR *_pRpcChannelBuffer) = 0;
+        
+        virtual IRpcStubBuffer __RPC_FAR *__stdcall IsIIDSupported( 
+            /* [in] */ REFIID riid) = 0;
+        
+        virtual ULONG __stdcall CountRefs( void) = 0;
+        
+        virtual HRESULT __stdcall DebugServerQueryInterface( 
+            void __RPC_FAR *__RPC_FAR *ppv) = 0;
+        
+        virtual void __stdcall DebugServerRelease( 
+            void __RPC_FAR *pv) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IRpcStubBufferVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IRpcStubBuffer __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IRpcStubBuffer __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IRpcStubBuffer __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *Connect )( 
+            IRpcStubBuffer __RPC_FAR * This,
+            /* [in] */ IUnknown __RPC_FAR *pUnkServer);
+        
+        void ( __stdcall __RPC_FAR *Disconnect )( 
+            IRpcStubBuffer __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *Invoke )( 
+            IRpcStubBuffer __RPC_FAR * This,
+            /* [in] */ RPCOLEMESSAGE __RPC_FAR *_prpcmsg,
+            /* [in] */ IRpcChannelBuffer __RPC_FAR *_pRpcChannelBuffer);
+        
+        IRpcStubBuffer __RPC_FAR *( __stdcall __RPC_FAR *IsIIDSupported )( 
+            IRpcStubBuffer __RPC_FAR * This,
+            /* [in] */ REFIID riid);
+        
+        ULONG ( __stdcall __RPC_FAR *CountRefs )( 
+            IRpcStubBuffer __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *DebugServerQueryInterface )( 
+            IRpcStubBuffer __RPC_FAR * This,
+            void __RPC_FAR *__RPC_FAR *ppv);
+        
+        void ( __stdcall __RPC_FAR *DebugServerRelease )( 
+            IRpcStubBuffer __RPC_FAR * This,
+            void __RPC_FAR *pv);
+        
+    } IRpcStubBufferVtbl;
+    
+    interface IRpcStubBuffer
+    {
+        CONST_VTBL struct IRpcStubBufferVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IRpcStubBuffer_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IRpcStubBuffer_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IRpcStubBuffer_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IRpcStubBuffer_Connect(This,pUnkServer)	\
+    (This)->lpVtbl -> Connect(This,pUnkServer)
+
+#define IRpcStubBuffer_Disconnect(This)	\
+    (This)->lpVtbl -> Disconnect(This)
+
+#define IRpcStubBuffer_Invoke(This,_prpcmsg,_pRpcChannelBuffer)	\
+    (This)->lpVtbl -> Invoke(This,_prpcmsg,_pRpcChannelBuffer)
+
+#define IRpcStubBuffer_IsIIDSupported(This,riid)	\
+    (This)->lpVtbl -> IsIIDSupported(This,riid)
+
+#define IRpcStubBuffer_CountRefs(This)	\
+    (This)->lpVtbl -> CountRefs(This)
+
+#define IRpcStubBuffer_DebugServerQueryInterface(This,ppv)	\
+    (This)->lpVtbl -> DebugServerQueryInterface(This,ppv)
+
+#define IRpcStubBuffer_DebugServerRelease(This,pv)	\
+    (This)->lpVtbl -> DebugServerRelease(This,pv)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+HRESULT __stdcall IRpcStubBuffer_Connect_Proxy( 
+    IRpcStubBuffer __RPC_FAR * This,
+    /* [in] */ IUnknown __RPC_FAR *pUnkServer);
+
+
+void __RPC_STUB IRpcStubBuffer_Connect_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+void __stdcall IRpcStubBuffer_Disconnect_Proxy( 
+    IRpcStubBuffer __RPC_FAR * This);
+
+
+void __RPC_STUB IRpcStubBuffer_Disconnect_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IRpcStubBuffer_Invoke_Proxy( 
+    IRpcStubBuffer __RPC_FAR * This,
+    /* [in] */ RPCOLEMESSAGE __RPC_FAR *_prpcmsg,
+    /* [in] */ IRpcChannelBuffer __RPC_FAR *_pRpcChannelBuffer);
+
+
+void __RPC_STUB IRpcStubBuffer_Invoke_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+IRpcStubBuffer __RPC_FAR *__stdcall IRpcStubBuffer_IsIIDSupported_Proxy( 
+    IRpcStubBuffer __RPC_FAR * This,
+    /* [in] */ REFIID riid);
+
+
+void __RPC_STUB IRpcStubBuffer_IsIIDSupported_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+ULONG __stdcall IRpcStubBuffer_CountRefs_Proxy( 
+    IRpcStubBuffer __RPC_FAR * This);
+
+
+void __RPC_STUB IRpcStubBuffer_CountRefs_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IRpcStubBuffer_DebugServerQueryInterface_Proxy( 
+    IRpcStubBuffer __RPC_FAR * This,
+    void __RPC_FAR *__RPC_FAR *ppv);
+
+
+void __RPC_STUB IRpcStubBuffer_DebugServerQueryInterface_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+void __stdcall IRpcStubBuffer_DebugServerRelease_Proxy( 
+    IRpcStubBuffer __RPC_FAR * This,
+    void __RPC_FAR *pv);
+
+
+void __RPC_STUB IRpcStubBuffer_DebugServerRelease_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IRpcStubBuffer_INTERFACE_DEFINED__ */
+
+
+#ifndef __IPSFactoryBuffer_INTERFACE_DEFINED__
+#define __IPSFactoryBuffer_INTERFACE_DEFINED__
+
+/****************************************
+ * Generated header for interface: IPSFactoryBuffer
+ * at <generated>
+ * using MIDL 2.00.71
+ ****************************************/
+/* [uuid][object][local] */ 
+
+
+
+EXTERN_C const IID IID_IPSFactoryBuffer;
+
+#if defined(__cplusplus) && !defined(CINTERFACE)
+    
+    interface IPSFactoryBuffer : public IUnknown
+    {
+    public:
+        virtual HRESULT __stdcall CreateProxy( 
+            /* [in] */ IUnknown __RPC_FAR *pUnkOuter,
+            /* [in] */ REFIID riid,
+            /* [out] */ IRpcProxyBuffer __RPC_FAR *__RPC_FAR *ppProxy,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppv) = 0;
+        
+        virtual HRESULT __stdcall CreateStub( 
+            /* [in] */ REFIID riid,
+            /* [unique][in] */ IUnknown __RPC_FAR *pUnkServer,
+            /* [out] */ IRpcStubBuffer __RPC_FAR *__RPC_FAR *ppStub) = 0;
+        
+    };
+    
+#else 	/* C style interface */
+    
+    typedef struct IPSFactoryBufferVtbl
+    {
+        
+        HRESULT ( __stdcall __RPC_FAR *QueryInterface )( 
+            IPSFactoryBuffer __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+        
+        ULONG ( __stdcall __RPC_FAR *AddRef )( 
+            IPSFactoryBuffer __RPC_FAR * This);
+        
+        ULONG ( __stdcall __RPC_FAR *Release )( 
+            IPSFactoryBuffer __RPC_FAR * This);
+        
+        HRESULT ( __stdcall __RPC_FAR *CreateProxy )( 
+            IPSFactoryBuffer __RPC_FAR * This,
+            /* [in] */ IUnknown __RPC_FAR *pUnkOuter,
+            /* [in] */ REFIID riid,
+            /* [out] */ IRpcProxyBuffer __RPC_FAR *__RPC_FAR *ppProxy,
+            /* [out] */ void __RPC_FAR *__RPC_FAR *ppv);
+        
+        HRESULT ( __stdcall __RPC_FAR *CreateStub )( 
+            IPSFactoryBuffer __RPC_FAR * This,
+            /* [in] */ REFIID riid,
+            /* [unique][in] */ IUnknown __RPC_FAR *pUnkServer,
+            /* [out] */ IRpcStubBuffer __RPC_FAR *__RPC_FAR *ppStub);
+        
+    } IPSFactoryBufferVtbl;
+    
+    interface IPSFactoryBuffer
+    {
+        CONST_VTBL struct IPSFactoryBufferVtbl __RPC_FAR *lpVtbl;
+    };
+    
+    
+
+#ifdef COBJMACROS
+
+
+#define IPSFactoryBuffer_QueryInterface(This,riid,ppvObject)	\
+    (This)->lpVtbl -> QueryInterface(This,riid,ppvObject)
+
+#define IPSFactoryBuffer_AddRef(This)	\
+    (This)->lpVtbl -> AddRef(This)
+
+#define IPSFactoryBuffer_Release(This)	\
+    (This)->lpVtbl -> Release(This)
+
+
+#define IPSFactoryBuffer_CreateProxy(This,pUnkOuter,riid,ppProxy,ppv)	\
+    (This)->lpVtbl -> CreateProxy(This,pUnkOuter,riid,ppProxy,ppv)
+
+#define IPSFactoryBuffer_CreateStub(This,riid,pUnkServer,ppStub)	\
+    (This)->lpVtbl -> CreateStub(This,riid,pUnkServer,ppStub)
+
+#endif /* COBJMACROS */
+
+
+#endif 	/* C style interface */
+
+
+
+HRESULT __stdcall IPSFactoryBuffer_CreateProxy_Proxy( 
+    IPSFactoryBuffer __RPC_FAR * This,
+    /* [in] */ IUnknown __RPC_FAR *pUnkOuter,
+    /* [in] */ REFIID riid,
+    /* [out] */ IRpcProxyBuffer __RPC_FAR *__RPC_FAR *ppProxy,
+    /* [out] */ void __RPC_FAR *__RPC_FAR *ppv);
+
+
+void __RPC_STUB IPSFactoryBuffer_CreateProxy_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+HRESULT __stdcall IPSFactoryBuffer_CreateStub_Proxy( 
+    IPSFactoryBuffer __RPC_FAR * This,
+    /* [in] */ REFIID riid,
+    /* [unique][in] */ IUnknown __RPC_FAR *pUnkServer,
+    /* [out] */ IRpcStubBuffer __RPC_FAR *__RPC_FAR *ppStub);
+
+
+void __RPC_STUB IPSFactoryBuffer_CreateStub_Stub(
+    IRpcStubBuffer *This,
+    IRpcChannelBuffer *_pRpcChannelBuffer,
+    PRPC_MESSAGE _pRpcMessage,
+    DWORD *_pdwStubPhase);
+
+
+
+#endif 	/* __IPSFactoryBuffer_INTERFACE_DEFINED__ */
+
+
+/* Additional Prototypes for ALL interfaces */
+
+
+void __RPC_USER SNB_to_xmit( SNB __RPC_FAR *, RemSNB __RPC_FAR * __RPC_FAR * );
+void __RPC_USER SNB_from_xmit( RemSNB __RPC_FAR *, SNB __RPC_FAR * );
+void __RPC_USER SNB_free_inst( SNB __RPC_FAR * );
+void __RPC_USER SNB_free_xmit( RemSNB __RPC_FAR * );
+/* [local] */ HRESULT __stdcall IClassFactory_CreateInstance_Proxy( 
+    IClassFactory __RPC_FAR * This,
+    /* [unique][in] */ IUnknown __RPC_FAR *pUnkOuter,
+    /* [in] */ REFIID riid,
+    /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObject);
+
+
+/* [call_as] */ HRESULT __stdcall IClassFactory_CreateInstance_Stub( 
+    IClassFactory __RPC_FAR * This,
+    /* [in] */ REFIID riid,
+    /* [iid_is][out] */ IUnknown __RPC_FAR *__RPC_FAR *ppvObject);
+
+/* [local] */ HRESULT __stdcall IEnumUnknown_Next_Proxy( 
+    IEnumUnknown __RPC_FAR * This,
+    /* [in] */ ULONG celt,
+    /* [out] */ IUnknown __RPC_FAR *__RPC_FAR *rgelt,
+    /* [out] */ ULONG __RPC_FAR *pceltFetched);
+
+
+/* [call_as] */ HRESULT __stdcall IEnumUnknown_Next_Stub( 
+    IEnumUnknown __RPC_FAR * This,
+    /* [in] */ ULONG celt,
+    /* [length_is][size_is][out] */ IUnknown __RPC_FAR *__RPC_FAR *rgelt,
+    /* [out] */ ULONG __RPC_FAR *pceltFetched);
+
+/* [local] */ HRESULT __stdcall IEnumMoniker_Next_Proxy( 
+    IEnumMoniker __RPC_FAR * This,
+    /* [in] */ ULONG celt,
+    /* [out] */ IMoniker __RPC_FAR *__RPC_FAR *rgelt,
+    /* [out] */ ULONG __RPC_FAR *pceltFetched);
+
+
+/* [call_as] */ HRESULT __stdcall IEnumMoniker_Next_Stub( 
+    IEnumMoniker __RPC_FAR * This,
+    /* [in] */ ULONG celt,
+    /* [length_is][size_is][out] */ IMoniker __RPC_FAR *__RPC_FAR *rgelt,
+    /* [out] */ ULONG __RPC_FAR *pceltFetched);
+
+/* [local] */ HRESULT __stdcall IMoniker_BindToObject_Proxy( 
+    IMoniker __RPC_FAR * This,
+    /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+    /* [in] */ REFIID riidResult,
+    /* [out] */ void __RPC_FAR *__RPC_FAR *ppvResult);
+
+
+/* [call_as] */ HRESULT __stdcall IMoniker_BindToObject_Stub( 
+    IMoniker __RPC_FAR * This,
+    /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+    /* [in] */ REFIID riidResult,
+    /* [iid_is][out] */ IUnknown __RPC_FAR *__RPC_FAR *ppvResult);
+
+/* [local] */ HRESULT __stdcall IMoniker_BindToStorage_Proxy( 
+    IMoniker __RPC_FAR * This,
+    /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+    /* [in] */ REFIID riid,
+    /* [out] */ void __RPC_FAR *__RPC_FAR *ppvObj);
+
+
+/* [call_as] */ HRESULT __stdcall IMoniker_BindToStorage_Stub( 
+    IMoniker __RPC_FAR * This,
+    /* [unique][in] */ IBindCtx __RPC_FAR *pbc,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmkToLeft,
+    /* [in] */ REFIID riid,
+    /* [iid_is][out] */ IUnknown __RPC_FAR *__RPC_FAR *ppvObj);
+
+/* [local] */ HRESULT __stdcall IEnumString_Next_Proxy( 
+    IEnumString __RPC_FAR * This,
+    /* [in] */ ULONG celt,
+    /* [out] */ LPOLESTR __RPC_FAR *rgelt,
+    /* [out] */ ULONG __RPC_FAR *pceltFetched);
+
+
+/* [call_as] */ HRESULT __stdcall IEnumString_Next_Stub( 
+    IEnumString __RPC_FAR * This,
+    /* [in] */ ULONG celt,
+    /* [length_is][size_is][out] */ LPOLESTR __RPC_FAR *rgelt,
+    /* [out] */ ULONG __RPC_FAR *pceltFetched);
+
+/* [local] */ HRESULT __stdcall IStream_Read_Proxy( 
+    IStream __RPC_FAR * This,
+    /* [out] */ void __RPC_FAR *pv,
+    /* [in] */ ULONG cb,
+    /* [out] */ ULONG __RPC_FAR *pcbRead);
+
+
+/* [call_as] */ HRESULT __stdcall IStream_Read_Stub( 
+    IStream __RPC_FAR * This,
+    /* [length_is][size_is][out] */ byte __RPC_FAR *pv,
+    /* [in] */ ULONG cb,
+    /* [out] */ ULONG __RPC_FAR *pcbRead);
+
+/* [local] */ HRESULT __stdcall IStream_Write_Proxy( 
+    IStream __RPC_FAR * This,
+    /* [size_is][in] */ const void __RPC_FAR *pv,
+    /* [in] */ ULONG cb,
+    /* [out] */ ULONG __RPC_FAR *pcbWritten);
+
+
+/* [call_as] */ HRESULT __stdcall IStream_Write_Stub( 
+    IStream __RPC_FAR * This,
+    /* [size_is][in] */ const byte __RPC_FAR *pv,
+    /* [in] */ ULONG cb,
+    /* [out] */ ULONG __RPC_FAR *pcbWritten);
+
+/* [local] */ HRESULT __stdcall IStream_Seek_Proxy( 
+    IStream __RPC_FAR * This,
+    /* [in] */ LARGE_INTEGER dlibMove,
+    /* [in] */ DWORD dwOrigin,
+    /* [out] */ ULARGE_INTEGER __RPC_FAR *plibNewPosition);
+
+
+/* [call_as] */ HRESULT __stdcall IStream_Seek_Stub( 
+    IStream __RPC_FAR * This,
+    /* [in] */ LARGE_INTEGER dlibMove,
+    /* [in] */ DWORD dwOrigin,
+    /* [out] */ ULARGE_INTEGER __RPC_FAR *plibNewPosition);
+
+/* [local] */ HRESULT __stdcall IStream_CopyTo_Proxy( 
+    IStream __RPC_FAR * This,
+    /* [unique][in] */ IStream __RPC_FAR *pstm,
+    /* [in] */ ULARGE_INTEGER cb,
+    /* [out] */ ULARGE_INTEGER __RPC_FAR *pcbRead,
+    /* [out] */ ULARGE_INTEGER __RPC_FAR *pcbWritten);
+
+
+/* [call_as] */ HRESULT __stdcall IStream_CopyTo_Stub( 
+    IStream __RPC_FAR * This,
+    /* [unique][in] */ IStream __RPC_FAR *pstm,
+    /* [in] */ ULARGE_INTEGER cb,
+    /* [out] */ ULARGE_INTEGER __RPC_FAR *pcbRead,
+    /* [out] */ ULARGE_INTEGER __RPC_FAR *pcbWritten);
+
+/* [local] */ HRESULT __stdcall IEnumSTATSTG_Next_Proxy( 
+    IEnumSTATSTG __RPC_FAR * This,
+    /* [in] */ ULONG celt,
+    /* [in] */ STATSTG __RPC_FAR *rgelt,
+    /* [out] */ ULONG __RPC_FAR *pceltFetched);
+
+
+/* [call_as] */ HRESULT __stdcall IEnumSTATSTG_Next_Stub( 
+    IEnumSTATSTG __RPC_FAR * This,
+    /* [in] */ ULONG celt,
+    /* [length_is][size_is][out] */ STATSTG __RPC_FAR *rgelt,
+    /* [out] */ ULONG __RPC_FAR *pceltFetched);
+
+/* [local] */ HRESULT __stdcall IStorage_OpenStream_Proxy( 
+    IStorage __RPC_FAR * This,
+    /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName,
+    /* [unique][in] */ void __RPC_FAR *reserved1,
+    /* [in] */ DWORD grfMode,
+    /* [in] */ DWORD reserved2,
+    /* [out] */ IStream __RPC_FAR *__RPC_FAR *ppstm);
+
+
+/* [call_as] */ HRESULT __stdcall IStorage_OpenStream_Stub( 
+    IStorage __RPC_FAR * This,
+    /* [string][in] */ const OLECHAR __RPC_FAR *pwcsName,
+    /* [in] */ unsigned long cbReserved1,
+    /* [size_is][unique][in] */ byte __RPC_FAR *reserved1,
+    /* [in] */ DWORD grfMode,
+    /* [in] */ DWORD reserved2,
+    /* [out] */ IStream __RPC_FAR *__RPC_FAR *ppstm);
+
+/* [local] */ HRESULT __stdcall IStorage_EnumElements_Proxy( 
+    IStorage __RPC_FAR * This,
+    /* [in] */ DWORD reserved1,
+    /* [size_is][unique][in] */ void __RPC_FAR *reserved2,
+    /* [in] */ DWORD reserved3,
+    /* [out] */ IEnumSTATSTG __RPC_FAR *__RPC_FAR *ppenum);
+
+
+/* [call_as] */ HRESULT __stdcall IStorage_EnumElements_Stub( 
+    IStorage __RPC_FAR * This,
+    /* [in] */ DWORD reserved1,
+    /* [in] */ unsigned long cbReserved2,
+    /* [size_is][unique][in] */ byte __RPC_FAR *reserved2,
+    /* [in] */ DWORD reserved3,
+    /* [out] */ IEnumSTATSTG __RPC_FAR *__RPC_FAR *ppenum);
+
+/* [local] */ HRESULT __stdcall ILockBytes_ReadAt_Proxy( 
+    ILockBytes __RPC_FAR * This,
+    /* [in] */ ULARGE_INTEGER ulOffset,
+    /* [in] */ void __RPC_FAR *pv,
+    /* [in] */ ULONG cb,
+    /* [out] */ ULONG __RPC_FAR *pcbRead);
+
+
+/* [call_as] */ HRESULT __stdcall ILockBytes_ReadAt_Stub( 
+    ILockBytes __RPC_FAR * This,
+    /* [in] */ ULARGE_INTEGER ulOffset,
+    /* [length_is][size_is][out] */ byte __RPC_FAR *pv,
+    /* [in] */ ULONG cb,
+    /* [out] */ ULONG __RPC_FAR *pcbRead);
+
+/* [local] */ HRESULT __stdcall ILockBytes_WriteAt_Proxy( 
+    ILockBytes __RPC_FAR * This,
+    /* [in] */ ULARGE_INTEGER ulOffset,
+    /* [in] */ const void __RPC_FAR *pv,
+    /* [in] */ ULONG cb,
+    /* [out] */ ULONG __RPC_FAR *pcbWritten);
+
+
+/* [call_as] */ HRESULT __stdcall ILockBytes_WriteAt_Stub( 
+    ILockBytes __RPC_FAR * This,
+    /* [in] */ ULARGE_INTEGER ulOffset,
+    /* [size_is][in] */ const byte __RPC_FAR *pv,
+    /* [in] */ ULONG cb,
+    /* [out] */ ULONG __RPC_FAR *pcbWritten);
+
+/* [local] */ HRESULT __stdcall IEnumFORMATETC_Next_Proxy( 
+    IEnumFORMATETC __RPC_FAR * This,
+    /* [in] */ ULONG celt,
+    /* [out] */ FORMATETC __RPC_FAR *rgelt,
+    /* [out] */ ULONG __RPC_FAR *pceltFetched);
+
+
+/* [call_as] */ HRESULT __stdcall IEnumFORMATETC_Next_Stub( 
+    IEnumFORMATETC __RPC_FAR * This,
+    /* [in] */ ULONG celt,
+    /* [length_is][size_is][out] */ FORMATETC __RPC_FAR *rgelt,
+    /* [out] */ ULONG __RPC_FAR *pceltFetched);
+
+/* [local] */ HRESULT __stdcall IEnumSTATDATA_Next_Proxy( 
+    IEnumSTATDATA __RPC_FAR * This,
+    /* [in] */ ULONG celt,
+    STATDATA __RPC_FAR *rgelt,
+    /* [out] */ ULONG __RPC_FAR *pceltFetched);
+
+
+/* [call_as] */ HRESULT __stdcall IEnumSTATDATA_Next_Stub( 
+    IEnumSTATDATA __RPC_FAR * This,
+    /* [in] */ ULONG celt,
+    /* [length_is][size_is][out] */ STATDATA __RPC_FAR *rgelt,
+    /* [out] */ ULONG __RPC_FAR *pceltFetched);
+
+/* [local] */ void __stdcall IAdviseSink_OnDataChange_Proxy( 
+    IAdviseSink __RPC_FAR * This,
+    /* [unique][in] */ FORMATETC __RPC_FAR *pFormatetc,
+    /* [unique][in] */ STGMEDIUM __RPC_FAR *pStgmed);
+
+
+/* [async][call_as] */ void __stdcall IAdviseSink_OnDataChange_Stub( 
+    IAdviseSink __RPC_FAR * This,
+    /* [unique][in] */ FORMATETC __RPC_FAR *pFormatetc,
+    /* [unique][in] */ RemSTGMEDIUM __RPC_FAR *pStgmed);
+
+/* [local] */ void __stdcall IAdviseSink_OnViewChange_Proxy( 
+    IAdviseSink __RPC_FAR * This,
+    /* [in] */ DWORD dwAspect,
+    /* [in] */ LONG lindex);
+
+
+/* [async][call_as] */ void __stdcall IAdviseSink_OnViewChange_Stub( 
+    IAdviseSink __RPC_FAR * This,
+    /* [in] */ DWORD dwAspect,
+    /* [in] */ LONG lindex);
+
+/* [local] */ void __stdcall IAdviseSink_OnRename_Proxy( 
+    IAdviseSink __RPC_FAR * This,
+    /* [in] */ IMoniker __RPC_FAR *pmk);
+
+
+/* [async][call_as] */ void __stdcall IAdviseSink_OnRename_Stub( 
+    IAdviseSink __RPC_FAR * This,
+    /* [in] */ IMoniker __RPC_FAR *pmk);
+
+/* [local] */ void __stdcall IAdviseSink_OnSave_Proxy( 
+    IAdviseSink __RPC_FAR * This);
+
+
+/* [async][call_as] */ void __stdcall IAdviseSink_OnSave_Stub( 
+    IAdviseSink __RPC_FAR * This);
+
+/* [local] */ void __stdcall IAdviseSink_OnClose_Proxy( 
+    IAdviseSink __RPC_FAR * This);
+
+
+/* [async][call_as] */ void __stdcall IAdviseSink_OnClose_Stub( 
+    IAdviseSink __RPC_FAR * This);
+
+/* [local] */ void __stdcall IAdviseSink2_OnLinkSrcChange_Proxy( 
+    IAdviseSink2 __RPC_FAR * This,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmk);
+
+
+/* [async][call_as] */ void __stdcall IAdviseSink2_OnLinkSrcChange_Stub( 
+    IAdviseSink2 __RPC_FAR * This,
+    /* [unique][in] */ IMoniker __RPC_FAR *pmk);
+
+/* [local] */ HRESULT __stdcall IDataObject_GetData_Proxy( 
+    IDataObject __RPC_FAR * This,
+    /* [unique][in] */ FORMATETC __RPC_FAR *pformatetcIn,
+    /* [out] */ STGMEDIUM __RPC_FAR *pmedium);
+
+
+/* [call_as] */ HRESULT __stdcall IDataObject_GetData_Stub( 
+    IDataObject __RPC_FAR * This,
+    /* [unique][in] */ FORMATETC __RPC_FAR *pformatetcIn,
+    /* [out] */ RemSTGMEDIUM __RPC_FAR *__RPC_FAR *ppRemoteMedium);
+
+/* [local] */ HRESULT __stdcall IDataObject_GetDataHere_Proxy( 
+    IDataObject __RPC_FAR * This,
+    /* [unique][in] */ FORMATETC __RPC_FAR *pformatetc,
+    /* [out][in] */ STGMEDIUM __RPC_FAR *pmedium);
+
+
+/* [call_as] */ HRESULT __stdcall IDataObject_GetDataHere_Stub( 
+    IDataObject __RPC_FAR * This,
+    /* [unique][in] */ FORMATETC __RPC_FAR *pformatetc,
+    /* [out][in] */ RemSTGMEDIUM __RPC_FAR *__RPC_FAR *ppRemoteMedium);
+
+/* [local] */ HRESULT __stdcall IDataObject_SetData_Proxy( 
+    IDataObject __RPC_FAR * This,
+    /* [unique][in] */ FORMATETC __RPC_FAR *pformatetc,
+    /* [unique][in] */ STGMEDIUM __RPC_FAR *pmedium,
+    /* [in] */ BOOL fRelease);
+
+
+/* [call_as] */ HRESULT __stdcall IDataObject_SetData_Stub( 
+    IDataObject __RPC_FAR * This,
+    /* [unique][in] */ FORMATETC __RPC_FAR *pformatetc,
+    /* [unique][in] */ RemSTGMEDIUM __RPC_FAR *pmedium,
+    /* [in] */ BOOL fRelease);
+
+
+
+/* end of Additional Prototypes */
+
+#ifdef __cplusplus
+}
 #endif
 
-#endif /*__IExternalConnection__*/
+#endif
+// macros to define byte pattern for a GUID.
+//      Example: DEFINE_GUID(GUID_XXX, a, b, c, ...);
+//
+// Each dll/exe must initialize the GUIDs once.  This is done in one of
+// two ways.  If you are not using precompiled headers for the file(s) which
+// initializes the GUIDs, define INITGUID before including objbase.h.  This
+// is how OLE builds the initialized versions of the GUIDs which are included
+// in ole2.lib.  The GUIDs in ole2.lib are all defined in the same text
+// segment GUID_TEXT.
+//
+// The alternative (which some versions of the compiler don't handle properly;
+// they wind up with the initialized GUIDs in a data, not a text segment),
+// is to use a precompiled version of objbase.h and then include initguid.h
+// after objbase.h followed by one or more of the guid defintion files.
+
+#ifndef INITGUID
+#define DEFINE_GUID(name, l, w1, w2, b1, b2, b3, b4, b5, b6, b7, b8) \
+    EXTERN_C const GUID CDECL FAR name
+#else
+
+#define DEFINE_GUID(name, l, w1, w2, b1, b2, b3, b4, b5, b6, b7, b8) \
+        EXTERN_C const GUID CDECL name \
+                = { l, w1, w2, { b1, b2,  b3,  b4,  b5,  b6,  b7,  b8 } }
+#endif // INITGUID
+
+#define DEFINE_OLEGUID(name, l, w1, w2) \
+    DEFINE_GUID(name, l, w1, w2, 0xC0,0,0,0,0,0,0,0x46)
+
+#ifdef __cplusplus
+inline BOOL IsEqualGUID(REFGUID rguid1, REFGUID rguid2)
+{
+    return !memcmp(&rguid1, &rguid2, sizeof(GUID));
+}
+#else	//  ! __cplusplus
+#define IsEqualGUID(rguid1, rguid2) (!memcmp(rguid1, rguid2, sizeof(GUID)))
+#endif	//  __cplusplus
+
+#define IsEqualIID(riid1, riid2) IsEqualGUID(riid1, riid2)
+#define IsEqualCLSID(rclsid1, rclsid2) IsEqualGUID(rclsid1, rclsid2)
+
+#ifdef __cplusplus
+
+// because GUID is defined elsewhere in WIN32 land, the operator == and !=
+// are moved outside the class to global scope.
+
+inline BOOL operator==(const GUID& guidOne, const GUID& guidOther)
+{
+#ifdef WIN32
+    return !memcmp(&guidOne,&guidOther,sizeof(GUID));
+#else
+    return !_fmemcmp(&guidOne,&guidOther,sizeof(GUID)); }
+#endif
+}
+
+inline BOOL operator!=(const GUID& guidOne, const GUID& guidOther)
+{
+    return !(guidOne == guidOther);
+}
+
+#endif // __cpluscplus
+
 
 #ifndef INITGUID
 #include "cguid.h"
@@ -6880,94 +8951,92 @@ interface IExternalConnection
 
 /****** STD Object API Prototypes *****************************************/
 
-STDAPI_(DWORD) CoBuildVersion( VOID );
+WINOLEAPI_(DWORD) CoBuildVersion( VOID );
 
 /* init/uninit */
 
-STDAPI  CoInitialize(LPMALLOC pMalloc);
-STDAPI  CoInitializeEx(LPMALLOC pMalloc, ULONG);
-STDAPI_(void)  CoUninitialize(void);
-STDAPI  CoGetMalloc(DWORD dwMemContext, LPMALLOC FAR* ppMalloc);
-STDAPI_(DWORD) CoGetCurrentProcess(void);
-STDAPI  CoCreateStandardMalloc(DWORD memctx, IMalloc FAR* FAR* ppMalloc);
+WINOLEAPI  CoInitialize(LPMALLOC pMalloc);
+WINOLEAPI_(void)  CoUninitialize(void);
+WINOLEAPI  CoGetMalloc(DWORD dwMemContext, LPMALLOC FAR* ppMalloc);
+WINOLEAPI_(DWORD) CoGetCurrentProcess(void);
+WINOLEAPI  CoCreateStandardMalloc(DWORD memctx, IMalloc FAR* FAR* ppMalloc);
 
 #if DBG == 1
-STDAPI_(ULONG) DebugCoGetRpcFault( void );
-STDAPI_(void) DebugCoSetRpcFault( ULONG );
+WINOLEAPI_(ULONG) DebugCoGetRpcFault( void );
+WINOLEAPI_(void) DebugCoSetRpcFault( ULONG );
 #endif
 
 /* register/revoke/get class objects */
 
-STDAPI  CoGetClassObject(REFCLSID rclsid, DWORD dwClsContext, LPVOID pvReserved,
+WINOLEAPI  CoGetClassObject(REFCLSID rclsid, DWORD dwClsContext, LPVOID pvReserved,
                     REFIID riid, LPVOID FAR* ppv);
-STDAPI  CoRegisterClassObject(REFCLSID rclsid, LPUNKNOWN pUnk,
+WINOLEAPI  CoRegisterClassObject(REFCLSID rclsid, LPUNKNOWN pUnk,
                     DWORD dwClsContext, DWORD flags, LPDWORD lpdwRegister);
-STDAPI  CoRevokeClassObject(DWORD dwRegister);
+WINOLEAPI  CoRevokeClassObject(DWORD dwRegister);
 
 
 /* marshaling interface pointers */
 
-STDAPI CoGetMarshalSizeMax(ULONG *pulSize, REFIID riid, LPUNKNOWN pUnk,
+WINOLEAPI CoGetMarshalSizeMax(ULONG *pulSize, REFIID riid, LPUNKNOWN pUnk,
                     DWORD dwDestContext, LPVOID pvDestContext, DWORD mshlflags);
-STDAPI CoMarshalInterface(LPSTREAM pStm, REFIID riid, LPUNKNOWN pUnk,
+WINOLEAPI CoMarshalInterface(LPSTREAM pStm, REFIID riid, LPUNKNOWN pUnk,
                     DWORD dwDestContext, LPVOID pvDestContext, DWORD mshlflags);
-STDAPI CoUnmarshalInterface(LPSTREAM pStm, REFIID riid, LPVOID FAR* ppv);
-STDAPI CoMarshalHresult(LPSTREAM pstm, HRESULT hresult);
-STDAPI CoUnmarshalHresult(LPSTREAM pstm, HRESULT FAR * phresult);
-STDAPI CoReleaseMarshalData(LPSTREAM pStm);
-STDAPI CoDisconnectObject(LPUNKNOWN pUnk, DWORD dwReserved);
-STDAPI CoLockObjectExternal(LPUNKNOWN pUnk, BOOL fLock, BOOL fLastUnlockReleases);
-STDAPI CoGetStandardMarshal(REFIID riid, LPUNKNOWN pUnk,
+WINOLEAPI CoUnmarshalInterface(LPSTREAM pStm, REFIID riid, LPVOID FAR* ppv);
+WINOLEAPI CoMarshalHresult(LPSTREAM pstm, HRESULT hresult);
+WINOLEAPI CoUnmarshalHresult(LPSTREAM pstm, HRESULT FAR * phresult);
+WINOLEAPI CoReleaseMarshalData(LPSTREAM pStm);
+WINOLEAPI CoDisconnectObject(LPUNKNOWN pUnk, DWORD dwReserved);
+WINOLEAPI CoLockObjectExternal(LPUNKNOWN pUnk, BOOL fLock, BOOL fLastUnlockReleases);
+WINOLEAPI CoGetStandardMarshal(REFIID riid, LPUNKNOWN pUnk,
                     DWORD dwDestContext, LPVOID pvDestContext, DWORD mshlflags,
                     LPMARSHAL FAR* ppMarshal);
 
-STDAPI_(BOOL) CoIsHandlerConnected(LPUNKNOWN pUnk);
-STDAPI_(BOOL) CoHasStrongExternalConnections(LPUNKNOWN pUnk);
+WINOLEAPI_(BOOL) CoIsHandlerConnected(LPUNKNOWN pUnk);
+WINOLEAPI_(BOOL) CoHasStrongExternalConnections(LPUNKNOWN pUnk);
 
 
 /* dll loading helpers; keeps track of ref counts and unloads all on exit */
 
-STDAPI_(HINSTANCE) CoLoadLibrary(LPOLESTR lpszLibName, BOOL bAutoFree);
-STDAPI_(void) CoFreeLibrary(HINSTANCE hInst);
-STDAPI_(void) CoFreeAllLibraries(void);
-STDAPI_(void) CoFreeUnusedLibraries(void);
+WINOLEAPI_(HINSTANCE) CoLoadLibrary(LPOLESTR lpszLibName, BOOL bAutoFree);
+WINOLEAPI_(void) CoFreeLibrary(HINSTANCE hInst);
+WINOLEAPI_(void) CoFreeAllLibraries(void);
+WINOLEAPI_(void) CoFreeUnusedLibraries(void);
 
 
 /* helper for creating instances */
 
-STDAPI CoCreateInstance(REFCLSID rclsid, LPUNKNOWN pUnkOuter,
+WINOLEAPI CoCreateInstance(REFCLSID rclsid, LPUNKNOWN pUnkOuter,
                     DWORD dwClsContext, REFIID riid, LPVOID FAR* ppv);
 
 
 /* other helpers */
 
-STDAPI_(BOOL) IsEqualGUID(REFGUID rguid1, REFGUID rguid2);
-STDAPI StringFromCLSID(REFCLSID rclsid, LPOLESTR FAR* lplpsz);
-STDAPI CLSIDFromString(LPOLESTR lpsz, LPCLSID pclsid);
-STDAPI StringFromIID(REFIID rclsid, LPOLESTR FAR* lplpsz);
-STDAPI IIDFromString(LPOLESTR lpsz, LPIID lpiid);
-STDAPI_(BOOL) CoIsOle1Class(REFCLSID rclsid);
-STDAPI ProgIDFromCLSID (REFCLSID clsid, LPOLESTR FAR* lplpszProgID);
-STDAPI CLSIDFromProgID (LPCOLESTR lpszProgID, LPCLSID lpclsid);
-STDAPI_(int) StringFromGUID2(REFGUID rguid, LPOLESTR lpsz, int cbMax);
+WINOLEAPI StringFromCLSID(REFCLSID rclsid, LPOLESTR FAR* lplpsz);
+WINOLEAPI CLSIDFromString(LPOLESTR lpsz, LPCLSID pclsid);
+WINOLEAPI StringFromIID(REFIID rclsid, LPOLESTR FAR* lplpsz);
+WINOLEAPI IIDFromString(LPOLESTR lpsz, LPIID lpiid);
+WINOLEAPI_(BOOL) CoIsOle1Class(REFCLSID rclsid);
+WINOLEAPI ProgIDFromCLSID (REFCLSID clsid, LPOLESTR FAR* lplpszProgID);
+WINOLEAPI CLSIDFromProgID (LPCOLESTR lpszProgID, LPCLSID lpclsid);
+WINOLEAPI_(int) StringFromGUID2(REFGUID rguid, LPOLESTR lpsz, int cbMax);
 
-STDAPI CoCreateGuid(GUID FAR *pguid);
+WINOLEAPI CoCreateGuid(GUID FAR *pguid);
 
-STDAPI_(BOOL) CoFileTimeToDosDateTime(
+WINOLEAPI_(BOOL) CoFileTimeToDosDateTime(
                  FILETIME FAR* lpFileTime, LPWORD lpDosDate, LPWORD lpDosTime);
-STDAPI_(BOOL) CoDosDateTimeToFileTime(
+WINOLEAPI_(BOOL) CoDosDateTimeToFileTime(
                        WORD nDosDate, WORD nDosTime, FILETIME FAR* lpFileTime);
-STDAPI  CoFileTimeNow( FILETIME FAR* lpFileTime );
+WINOLEAPI  CoFileTimeNow( FILETIME FAR* lpFileTime );
 
 
-STDAPI CoRegisterMessageFilter( LPMESSAGEFILTER lpMessageFilter,
+WINOLEAPI CoRegisterMessageFilter( LPMESSAGEFILTER lpMessageFilter,
                                 LPMESSAGEFILTER FAR* lplpMessageFilter );
 
 
 /* TreatAs APIS */
 
-STDAPI CoGetTreatAsClass(REFCLSID clsidOld, LPCLSID pClsidNew);
-STDAPI CoTreatAsClass(REFCLSID clsidOld, REFCLSID clsidNew);
+WINOLEAPI CoGetTreatAsClass(REFCLSID clsidOld, LPCLSID pClsidNew);
+WINOLEAPI CoTreatAsClass(REFCLSID clsidOld, REFCLSID clsidNew);
 
 
 /* the server dlls must define their DllGetClassObject and DllCanUnloadNow
@@ -6993,54 +9062,16 @@ STDAPI  DllCanUnloadNow(void);
 
 
 /****** Default Memory Allocation ******************************************/
-STDAPI_(LPVOID) CoTaskMemAlloc(ULONG cb);
-STDAPI_(LPVOID) CoTaskMemRealloc(LPVOID pv, ULONG cb);
-STDAPI_(void)   CoTaskMemFree(LPVOID pv);
-
-
-/****** Shared Memory Allocation ******************************************/
-STDAPI_(void *) SharedMemAlloc(ULONG cNeeded, DWORD dwReserved);
-STDAPI_(void *) SharedMemReAlloc(void *pmem, ULONG cNewSize, DWORD dwReserved);
-STDAPI_(void) SharedMemFree(void *pmem, DWORD dwReserved);
-
-
-
-
-
-
-
-
-/* The persistent-instance APIs have downlevel-specific signatures (with
- * OLE1-load params) that CAIROLE's ole2com.h declares for internal use when
- * building Cairo OLE for the downlevel (Daytona) target. Skip the public
- * Cairo-native prototypes there to avoid a conflicting redeclaration; normal
- * builds (no CAIROLE_DOWNLEVEL) get them as before. */
-#ifndef CAIROLE_DOWNLEVEL
-STDAPI CoNewPersistentInstance(
-    REFCLSID rclsid,
-    REFIID riid,
-    DWORD dwCtrl,
-    DWORD grfMode,
-    WCHAR *pwszCreateFrom,
-    struct IStorage *pstgCreateFrom,
-    WCHAR *pwszNewName,
-    void **ppunk);
-
-STDAPI CoGetPersistentInstance(
-    REFIID riid,
-    DWORD dwCtrl,
-    DWORD grfMode,
-    WCHAR *pwszName,
-    struct IStorage *pstg,
-    void **ppvUnk);
-#endif
+WINOLEAPI_(LPVOID) CoTaskMemAlloc(ULONG cb);
+WINOLEAPI_(LPVOID) CoTaskMemRealloc(LPVOID pv, ULONG cb);
+WINOLEAPI_(void)   CoTaskMemFree(LPVOID pv);
 
 /****** DV APIs ***********************************************************/
 
 
-STDAPI CreateDataAdviseHolder(LPDATAADVISEHOLDER FAR* ppDAHolder);
+WINOLEAPI CreateDataAdviseHolder(LPDATAADVISEHOLDER FAR* ppDAHolder);
 
-STDAPI CreateDataCache(LPUNKNOWN pUnkOuter, REFCLSID rclsid,
+WINOLEAPI CreateDataCache(LPUNKNOWN pUnkOuter, REFCLSID rclsid,
                                         REFIID iid, LPVOID FAR* ppv);
 
 
@@ -7049,52 +9080,33 @@ STDAPI CreateDataCache(LPUNKNOWN pUnkOuter, REFCLSID rclsid,
 /****** Storage API Prototypes ********************************************/
 
 
-STDAPI StgCreateDocfile(const OLECHAR FAR* pwcsName,
+WINOLEAPI StgCreateDocfile(const OLECHAR FAR* pwcsName,
             DWORD grfMode,
             DWORD reserved,
             IStorage FAR * FAR *ppstgOpen);
 
-STDAPI StgCreateDocfileOnILockBytes(ILockBytes FAR *plkbyt,
+WINOLEAPI StgCreateDocfileOnILockBytes(ILockBytes FAR *plkbyt,
                     DWORD grfMode,
                     DWORD reserved,
                     IStorage FAR * FAR *ppstgOpen);
-STDAPI StgCreateStorage(const OLECHAR FAR* pwcsName,
-            DWORD grfMode,
-            DWORD dwStgFmt,
-            LPSECURITY_ATTRIBUTES pssSecurity,
-            IStorage FAR * FAR *ppstg);
 
-STDAPI StgOpenStorage(const OLECHAR FAR* pwcsName,
+WINOLEAPI StgOpenStorage(const OLECHAR FAR* pwcsName,
               IStorage FAR *pstgPriority,
               DWORD grfMode,
               SNB snbExclude,
               DWORD reserved,
               IStorage FAR * FAR *ppstgOpen);
-STDAPI StgOpenStorageOnILockBytes(ILockBytes FAR *plkbyt,
+WINOLEAPI StgOpenStorageOnILockBytes(ILockBytes FAR *plkbyt,
                   IStorage FAR *pstgPriority,
                   DWORD grfMode,
                   SNB snbExclude,
                   DWORD reserved,
                   IStorage FAR * FAR *ppstgOpen);
 
-STDAPI StgIsStorageFile(const OLECHAR FAR* pwcsName);
-STDAPI StgIsStorageILockBytes(ILockBytes FAR* plkbyt);
-STDAPI StgIsStorage(const OLECHAR FAR *pwcsName,
-                    DWORD *pdwStgFmt);
+WINOLEAPI StgIsStorageFile(const OLECHAR FAR* pwcsName);
+WINOLEAPI StgIsStorageILockBytes(ILockBytes FAR* plkbyt);
 
-// BUGBUG - These are obsolete APIs and should be removed as
-// soon as possible
-STDAPI StgCreateStream(const OLECHAR FAR *pwszPath,
-            DWORD grfMode,
-            DWORD reserved,
-            IStream FAR * FAR *ppstm);
-STDAPI StgOpenStream(const OLECHAR *pwszPath,
-            void *reserved1,
-            DWORD grfMode,
-            DWORD reserved2,
-            IStream FAR * FAR *ppstm);
-
-STDAPI StgSetTimes(OLECHAR const FAR* lpszName,
+WINOLEAPI StgSetTimes(OLECHAR const FAR* lpszName,
                    FILETIME const FAR* pctime,
                    FILETIME const FAR* patime,
                    FILETIME const FAR* pmtime);
@@ -7104,32 +9116,27 @@ STDAPI StgSetTimes(OLECHAR const FAR* lpszName,
 //  Moniker APIs
 //
 
-STDAPI  BindMoniker(LPMONIKER pmk, DWORD grfOpt, REFIID iidResult, LPVOID FAR* ppvResult);
-STDAPI  MkParseDisplayName(LPBC pbc, LPOLESTR szUserName,
+WINOLEAPI  BindMoniker(LPMONIKER pmk, DWORD grfOpt, REFIID iidResult, LPVOID FAR* ppvResult);
+WINOLEAPI  MkParseDisplayName(LPBC pbc, LPCOLESTR szUserName,
                 ULONG FAR * pchEaten, LPMONIKER FAR * ppmk);
-STDAPI  MonikerRelativePathTo(LPMONIKER pmkSrc, LPMONIKER pmkDest, LPMONIKER
+WINOLEAPI  MonikerRelativePathTo(LPMONIKER pmkSrc, LPMONIKER pmkDest, LPMONIKER
                 FAR* ppmkRelPath, BOOL fCalledFromMethod);
-STDAPI  MonikerCommonPrefixWith(LPMONIKER pmkThis, LPMONIKER pmkOther,
+WINOLEAPI  MonikerCommonPrefixWith(LPMONIKER pmkThis, LPMONIKER pmkOther,
                 LPMONIKER FAR* ppmkCommon);
-STDAPI  CreateBindCtx(DWORD reserved, LPBC FAR* ppbc);
-STDAPI  CreateGenericComposite(LPMONIKER pmkFirst, LPMONIKER pmkRest,
+WINOLEAPI  CreateBindCtx(DWORD reserved, LPBC FAR* ppbc);
+WINOLEAPI  CreateGenericComposite(LPMONIKER pmkFirst, LPMONIKER pmkRest,
     LPMONIKER FAR* ppmkComposite);
-STDAPI  GetClassFile (LPCOLESTR szFilename, CLSID FAR* pclsid);
+WINOLEAPI  GetClassFile (LPCOLESTR szFilename, CLSID FAR* pclsid);
 
-STDAPI  CreateFileMoniker(LPOLESTR lpszPathName, LPMONIKER FAR* ppmk);
+WINOLEAPI  CreateFileMoniker(LPCOLESTR lpszPathName, LPMONIKER FAR* ppmk);
 
-#ifdef _CAIRO_
-STDAPI  CreateFileMonikerEx(DFS_ROOT dfsRoot,
-    LPOLESTR lpszPathName, LPMONIKER FAR* ppmk);
-#endif
-
-STDAPI  CreateItemMoniker(LPOLESTR lpszDelim, LPOLESTR lpszItem,
+WINOLEAPI  CreateItemMoniker(LPCOLESTR lpszDelim, LPCOLESTR lpszItem,
     LPMONIKER FAR* ppmk);
-STDAPI  CreateAntiMoniker(LPMONIKER FAR* ppmk);
-STDAPI  CreatePointerMoniker(LPUNKNOWN punk, LPMONIKER FAR* ppmk);
+WINOLEAPI  CreateAntiMoniker(LPMONIKER FAR* ppmk);
+WINOLEAPI  CreatePointerMoniker(LPUNKNOWN punk, LPMONIKER FAR* ppmk);
 
-STDAPI  GetRunningObjectTable( DWORD reserved, LPRUNNINGOBJECTTABLE FAR* pprot);
+WINOLEAPI  GetRunningObjectTable( DWORD reserved, LPRUNNINGOBJECTTABLE FAR* pprot);
 #ifndef RC_INVOKED
-#pragma pack()
+#include "poppack.h"
 #endif // RC_INVOKED
 #endif     // __objbase_H__
