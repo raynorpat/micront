@@ -269,6 +269,65 @@ static int do_copy(int argc, char **argv)
     return rc;
 }
 
+/* do_move implements `mv`/`move SRC DST`. Like Unix mv / cmd move, DST may
+ * be a directory (a real dir, ".", or a trailing "\." / "/.") in which case
+ * SRC's basename is appended. Replaces an existing destination. The NT 3.5
+ * CAIROLE makefiles use `mv` to relocate MIDL-generated stubs into sibling
+ * build dirs; the stock cmd-stub had no such builtin. */
+static int do_move(int argc, char **argv)
+{
+    const char *src, *dst, *base, *p;
+    char dst_buf[MAX_LINE];
+    DWORD attrs;
+    int is_dir;
+    size_t dl, blen;
+    int needs_sep;
+
+    if (argc != 3) {
+        fprintf(stderr, "cmd-stub: mv: expected <src> <dst>\n");
+        return 1;
+    }
+    src = argv[1];
+    dst = argv[2];
+
+    attrs = GetFileAttributesA(dst);
+    is_dir = (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY));
+    dl = strlen(dst);
+    if (!is_dir && (strcmp(dst, ".") == 0 ||
+                    (dl >= 2 && dst[dl - 1] == '.' &&
+                     (dst[dl - 2] == '\\' || dst[dl - 2] == '/'))))
+        is_dir = 1;
+
+    if (is_dir) {
+        /* drop a trailing "." after the separator, then append basename */
+        if (dl >= 2 && dst[dl - 1] == '.' &&
+            (dst[dl - 2] == '\\' || dst[dl - 2] == '/'))
+            dl -= 1;
+        base = src;
+        for (p = src; *p; p++)
+            if (*p == '/' || *p == '\\') base = p + 1;
+        blen = strlen(base);
+        needs_sep = dl > 0 && dst[dl - 1] != '\\' && dst[dl - 1] != '/';
+        if (dl + (needs_sep ? 1 : 0) + blen >= sizeof(dst_buf)) {
+            fprintf(stderr, "cmd-stub: mv: path too long\n");
+            return 1;
+        }
+        memcpy(dst_buf, dst, dl);
+        if (needs_sep) dst_buf[dl++] = '\\';
+        memcpy(dst_buf + dl, base, blen);
+        dst_buf[dl + blen] = 0;
+        dst = dst_buf;
+    }
+
+    DeleteFileA(dst);   /* MoveFileA fails if the destination exists */
+    if (!MoveFileA(src, dst)) {
+        fprintf(stderr, "cmd-stub: mv %s -> %s failed: %lu\n",
+                src, dst, (unsigned long)GetLastError());
+        return 1;
+    }
+    return 0;
+}
+
 /* ---------- External command execution ---------- */
 
 static void rejoin_argv(int argc, char **argv, char *out, size_t outsz)
@@ -478,6 +537,8 @@ static int run_simple(char *cmdstr, HANDLE hin, HANDLE hout, HANDLE herr)
         rc = do_erase(t.argc, t.argv);
     } else if (_stricmp(cmd, "copy") == 0) {
         rc = do_copy(t.argc, t.argv);
+    } else if (_stricmp(cmd, "mv") == 0 || _stricmp(cmd, "move") == 0) {
+        rc = do_move(t.argc, t.argv);
     } else if (_stricmp(cmd, "ren") == 0 || _stricmp(cmd, "rename") == 0) {
         /* cmd.exe's ren takes src dst; destination may be a bare leaf name
          * (to rename in src's directory). We resolve that here. */

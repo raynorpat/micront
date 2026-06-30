@@ -886,7 +886,15 @@ _cairole_leaves() {
 }
 build_cairole_common() { _cairole_leaves COMMON; }
 build_cairole_ilib()   { _cairole_leaves ILIB; }
-build_cairole_com()    { _cairole_leaves COM; }
+build_cairole_com() {
+    # COM/IDL runs MIDL (NTTARGETFILE0=allidl) to generate iface.h and the
+    # other interface headers the rest of COM #includes; INC adds more shared
+    # headers. Both must precede the alphabetical leaf walk.
+    run_nmake "$BASE_D/CAIROLE/COM/IDL/DAYTONA" "CAIROLE/COM/IDL (MIDL headers)" || return 1
+    [ -f "$BASE_D/CAIROLE/COM/INC/DAYTONA/SOURCES" ] && \
+        { run_nmake "$BASE_D/CAIROLE/COM/INC/DAYTONA" "CAIROLE/COM/INC" || return 1; }
+    _cairole_leaves COM
+}
 
 # INT64.LIB — 64-bit integer helpers (LLMUL/LLDIV/...) built from the
 # MSVC 2.2 helper ASM imported into CRT32/HELPER/I386.
