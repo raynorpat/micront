@@ -11,7 +11,7 @@
 #include <devioctl.h>
 #include <ntddscsi.h>
 #include <ntdddisk.h>
-#include "nvme2k_compat.h"   /* SCSI-3 opcodes missing from NT 3.5 <scsi.h> */
+#include "compat.h"          /* SCSI-3 opcodes missing from NT 3.5 <scsi.h> */
 #include "nvme.h"
 #include "scsiext.h"
 
@@ -178,7 +178,7 @@ typedef struct _HW_DEVICE_EXTENSION {
     BOOLEAN Busy;                                   // Offset 0xB6 (182)
     BOOLEAN InitComplete;                           // Offset 0xB7 (183)
 
-    ULONG Reserved4a;                               // Offset 0xB8 (184)
+    ULONG ShuttingDown;                             // Offset 0xB8 (184) - non-zero while NvmeShutdownController is in progress; quiets NULL-SRB ERROR logs for spec-permitted post-quiesce completions (NVMe 1.4c sec 7.6.2)
     ULONG InterruptCount;                           // Offset 0xBC (188)
 
     // PRP list pages for scatter-gather (shared pool, allocated after init)
