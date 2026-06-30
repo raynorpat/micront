@@ -37,6 +37,8 @@ if [ ! -d "$OAK_DIR" ]; then
 fi
 if [ ! -f "$CRTDLL" ]; then
     echo "ERROR: CRTDLL.DLL not found: $CRTDLL"
+    echo "It's a tracked bootstrap seed (wibo loads it to run NMAKE/LINK/LIB);"
+    echo "a fresh checkout should already have it. Restore with: git checkout -- $CRTDLL"
     exit 1
 fi
 
