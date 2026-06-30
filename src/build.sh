@@ -421,7 +421,6 @@ build_msfs()   { run_nmake "$NTOS/MAILSLOT"  "MSFS - Mailslot filesystem driver"
 build_lfs()    { run_nmake "$NTOS/LFS"  "LFS - Log File Service (lfs.lib)"; }
 build_ntfs()   { build_lfs || return 1; run_nmake "$NTOS/NTFS" "NTFS - NT filesystem driver"; }
 build_hello()  { run_nmake "$NTOS/DD/HELLO"    "HELLO - MicroNT visibility driver"; }
-build_cowtest(){ KEEP_UMAPPL=1 run_nmake "$NT_ROOT/PRIVATE/TESTS/cowtest" "COWTEST - COW test program"; }
 
 # --- virtio shared lib + device drivers -------------------------------------
 # virtio.lib — shared bus / split-ring / PCI legacy transport. Every
