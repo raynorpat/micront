@@ -11,7 +11,7 @@ Implemented:
 
 Coming next:
 
-- [ ] CMake powered build system
+- [ ] Ninja powered build system
 - [ ] Modern Windows build support
 - [ ] PCI-native HAL (BAR relocation above 4 GiB, no PC/AT assumptions)
 - [ ] Fast `SYSENTER`/`SYSEXIT` & Zw* kernel service dispatch
@@ -37,7 +37,7 @@ src/NT/PUBLIC/          shipped headers + import libs + bootstrap binaries
 src/boot-efi/           UEFI loader (gnu-efi, x86_64; long-mode → 32-bit kernel)
 src/cmd-stub/           minimal cmd.exe replacement for NMAKE
 src/tools/              utility scripts (kdserial, pe2gdb, dumphive, …)
-src/wibo-tools/         symlinks into PUBLIC/OAK/BIN/I386 (built first-run)
+src/wibo-tools/         symlinks into PUBLIC/OAK/BIN/I386 for macOS/Linux building (built first-run)
 ```
 
 ## Build
