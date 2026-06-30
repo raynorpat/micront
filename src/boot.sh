@@ -16,7 +16,7 @@
 #   --vga       Open a VGA window (stdvga) in addition to serial.
 #               Default: serial-console-only (-display none).
 #   --gdb       Pause CPU at boot and listen for gdb on :1234.
-#               Connect from another shell with `make -C src gdb`
+#               Connect from another shell with `src/build.sh gdb`
 #               (loads ntoskrnl + hal .dwf, sources tools/gdb.init).
 #   --trace     Log int / cpu_reset / in_asm to ./qemu.log.
 #               Produces a large file; opt-in for exception debugging.
@@ -50,7 +50,15 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-ESP_IMG="$REPO_ROOT/build/disk/esp.img"
+# build.sh writes the image to build/<profile>/esp.img (gui or headless).
+# Honor an explicit MICRONT_ESP, else prefer the gui image, then headless.
+ESP_IMG="${MICRONT_ESP:-}"
+if [ -z "$ESP_IMG" ]; then
+    for _p in gui headless; do
+        [ -f "$REPO_ROOT/build/$_p/esp.img" ] && { ESP_IMG="$REPO_ROOT/build/$_p/esp.img"; break; }
+    done
+    : "${ESP_IMG:=$REPO_ROOT/build/gui/esp.img}"
+fi
 
 # --- Argument parsing --------------------------------------------------------
 
@@ -83,8 +91,8 @@ while [ $# -gt 0 ]; do
         --gdb)
             GDB_FLAGS="-s -S"
             echo "[boot.sh] gdb-stub on :1234, CPU frozen — in another shell:"
-            echo "          make -C $SCRIPT_DIR gdb"
-            echo "          (loads ntoskrnl + hal symbols, sources gdb.init,"
+            echo "          $SCRIPT_DIR/build.sh gdb"
+            echo "          (loads ntoskrnl + hal DWARF symbols, sources gdb.init,"
             echo "           and attaches to :1234 in one step)"
             shift
             ;;
@@ -150,7 +158,7 @@ done
 # --- Sanity --------------------------------------------------------
 
 if [ ! -f "$ESP_IMG" ]; then
-    echo "ERROR: $ESP_IMG not found. Run: src/build.sh disk" >&2
+    echo "ERROR: $ESP_IMG not found. Run: src/build.sh" >&2
     exit 1
 fi
 

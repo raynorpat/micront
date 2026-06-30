@@ -50,6 +50,16 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="$REPO/src"
 
+# build.sh writes the image to build/<profile>/esp.img (gui or headless).
+# Honor MICRONT_ESP, else prefer gui, then headless.
+ESP_IMG="${MICRONT_ESP:-}"
+if [ -z "$ESP_IMG" ]; then
+    for _p in gui headless; do
+        [ -f "$REPO/build/$_p/esp.img" ] && { ESP_IMG="$REPO/build/$_p/esp.img"; break; }
+    done
+    : "${ESP_IMG:=$REPO/build/gui/esp.img}"
+fi
+
 # ----- defaults ---------------------------------------------------------
 MACHINE=q35
 DISK=nvme
@@ -108,8 +118,8 @@ preflight_fail() {
     exit 1
 }
 
-[[ -f "$NTOSKRNL_DWF" ]] || preflight_fail "missing $NTOSKRNL_DWF (run 'src/build.sh init')"
-[[ -f "$HAL_DWF"      ]] || preflight_fail "missing $HAL_DWF (run 'src/build.sh hal')"
+[[ -f "$NTOSKRNL_DWF" ]] || preflight_fail "missing $NTOSKRNL_DWF (run 'src/build.sh --syms')"
+[[ -f "$HAL_DWF"      ]] || preflight_fail "missing $HAL_DWF (run 'src/build.sh --syms')"
 command -v gdb >/dev/null      || preflight_fail "gdb not in PATH"
 command -v qemu-system-x86_64 >/dev/null || preflight_fail "qemu-system-x86_64 not in PATH"
 command -v timeout >/dev/null  || preflight_fail "GNU coreutils 'timeout' not in PATH"
@@ -173,19 +183,19 @@ trap 'exit 143' TERM HUP
 # amount of logic but keeps the harness self-contained.
 
 case "$DISK" in
-    nvme)        STORAGE="-drive file=$REPO/build/disk/esp.img,format=raw,if=none,id=d0 -device nvme,drive=d0,serial=micront" ;;
+    nvme)        STORAGE="-drive file=$ESP_IMG,format=raw,if=none,id=d0 -device nvme,drive=d0,serial=micront" ;;
     ide)
         if [[ "$MACHINE" = q35 ]]; then
-            STORAGE="-device piix3-ide,id=ide0 -drive file=$REPO/build/disk/esp.img,format=raw,if=none,id=d0 -device ide-hd,drive=d0,bus=ide0.0,unit=0"
+            STORAGE="-device piix3-ide,id=ide0 -drive file=$ESP_IMG,format=raw,if=none,id=d0 -device ide-hd,drive=d0,bus=ide0.0,unit=0"
         else
-            STORAGE="-drive file=$REPO/build/disk/esp.img,format=raw,if=ide"
+            STORAGE="-drive file=$ESP_IMG,format=raw,if=ide"
         fi
         ;;
-    virtio-blk)  STORAGE="-drive file=$REPO/build/disk/esp.img,format=raw,if=none,id=d0 -device virtio-blk-pci,drive=d0" ;;
+    virtio-blk)  STORAGE="-drive file=$ESP_IMG,format=raw,if=none,id=d0 -device virtio-blk-pci,drive=d0" ;;
     *)           preflight_fail "unsupported --disk $DISK (want nvme/ide/virtio-blk)" ;;
 esac
 
-[[ -f "$REPO/build/disk/esp.img" ]] || preflight_fail "missing $REPO/build/disk/esp.img (run src/build.sh)"
+[[ -f "$ESP_IMG" ]] || preflight_fail "missing $ESP_IMG (run src/build.sh)"
 
 OVMF_VARS="$WORK/OVMF_VARS_4M.fd"
 cp /usr/share/OVMF/OVMF_VARS_4M.fd "$OVMF_VARS"

@@ -816,6 +816,26 @@ build_dwf() {
     _dwf_generate
 }
 
+# Attach gdb to a running `boot.sh --gdb` qemu (gdbstub on :1234), with full
+# DWARF symbols for the kernel + HAL and the `nt` command helpers loaded.
+# Symbols come from a --syms build; .dwf carry absolute VAs so no slide.
+build_gdb() {
+    local kdwf="$NTOS/INIT/UP/obj/i386/ntoskrnl.dwf"
+    local hdwf="$NTOS/NTHALS/HAL/obj/i386/hal.dwf"
+    command -v gdb >/dev/null || { echo "ERROR: gdb not in PATH"; return 1; }
+    if [ ! -f "$kdwf" ]; then
+        echo "ERROR: $kdwf not found — build symbols first:  ./build.sh --syms"
+        return 1
+    fi
+    local addhal=(); [ -f "$hdwf" ] && addhal=(-ex "add-symbol-file $hdwf")
+    exec gdb \
+        -iex 'set confirm off' -iex 'set pagination off' \
+        -ex "symbol-file $kdwf" "${addhal[@]}" \
+        -ex "source $SCRIPT_DIR/tools/gdb.init" \
+        -ex "source $SCRIPT_DIR/tools/gdb_nt.py" \
+        -ex 'target remote :1234'
+}
+
 # MC (message compiler). Two patches live in our source tree relative to
 # stock NT 3.5 mc.c:
 #   - MC.C drops user32!CharToOem (wibo has no stub; safe for ASCII .mc).
@@ -1718,6 +1738,7 @@ _dispatch_one() {
                 echo "Group targets:   ntoskrnl, drivers, drivers-gui,"
                 echo "                 userland-micront, userland, userland-gui, disk"
                 echo "Debug toolchain: debugtools (imagehlp+splitsym, dbg2dwf, cvdump, cvpack)"
+                echo "                 gdb (attach gdb to a boot.sh --gdb session w/ DWARF symbols)"
                 echo "Flags:           --syms  build NTOS with CodeView + emit .DBG/.dwf gdb"
                 echo "                         sidecars (e.g. ./build.sh --syms ntoskrnl); --no-syms"
                 echo ""
