@@ -20,6 +20,15 @@ Most debug loops are some variant of "boot a known machine config,
 stop at a known symbol, dump some state, exit cleanly."
 `tools/agent_run.sh` is the one-command harness for exactly that.
 
+> **Prerequisite — build DWARF symbols first.** The `.dwf` sidecars every
+> recipe depends on are produced by an opt-in CodeView build:
+> ```sh
+> src/build.sh --syms            # /Z7 + splitsym + dbg2dwf for kernel + drivers
+> ```
+> This emits `ntoskrnl.dwf`, `hal.dwf`, and a `.dwf` next to each driver in
+> `PUBLIC/SDK/LIB/I386`. A plain `src/build.sh` is retail (no symbols).
+> See [BUILDING.md](BUILDING.md) for the full build reference.
+
 ```sh
 src/tools/agent_run.sh \
     --machine q35 --disk nvme \
@@ -79,7 +88,7 @@ This is the contract the harness relies on.  An agent driving the
 loop just inspects `$?`:
 
 ```sh
-make -C src selftest 2>&1 | tee qemu.log
+src/boot.sh 2>&1 | tee qemu.log
 rc=${PIPESTATUS[0]}
 case $rc in
     0)    echo "PASS" ;;
@@ -117,10 +126,10 @@ or set conditional breakpoints by hand — drive gdb directly:
 
 ```sh
 src/boot.sh --gdb              # terminal 1: qemu paused on :1234
-make -C src gdb                # terminal 2: gdb attached, ntoskrnl + hal symbols loaded
+src/build.sh gdb                # terminal 2: gdb attached, ntoskrnl + hal symbols loaded
 ```
 
-`make gdb` symbol-files `ntoskrnl.dwf` and `hal.dwf` (both linked at
+`src/build.sh gdb` symbol-files `ntoskrnl.dwf` and `hal.dwf` (both linked at
 canonical bases — no slide), sources `gdb.init` + `gdb_nt.py`, and
 connects to `:1234`.  Drivers can't be loaded statically — their
 runtime VA is chosen by the kernel's loader; after the first
@@ -144,7 +153,7 @@ Context = 0x8077c100
 ### The `nt` namespace
 
 All extension commands live under one `nt` prefix in `tools/gdb_nt.py`
-(sourced automatically by `make gdb`).  Type `(gdb) nt <TAB>` to list
+(sourced automatically by `src/build.sh gdb`).  Type `(gdb) nt <TAB>` to list
 subcommands, `(gdb) help nt <name>` for usage.
 
 State walks (read NT kernel structures):
@@ -240,28 +249,30 @@ containing:
 **Symptom**: gdb shows `??` for addresses in this module; or the file
 just doesn't exist next to the `.exe`/`.dll`/`.sys`.
 
-**Cause**: the build target wired splitsym + dbg2dwf for `PUBLIC/SDK/
-LIB/I386/*` automatically, but binaries that land in their own
-`obj/i386/` (link.exe, cmd-stub, mkmsg, run.exe, …) need explicit
-wiring per target.  See `targets.link` in `src/pkg/ntosbe/build.lua`
-for the pattern.
+**Cause**: you ran a retail build. `--syms` is opt-in — a plain
+`src/build.sh` produces no symbols. The CodeView build emits a `.dwf`
+for every kernel/driver image (`ntoskrnl.exe`, `hal.dll`, and each PE
+under `PUBLIC/SDK/LIB/I386`).
 
 **Recipe**:
 
 ```sh
-# (planned) — once `make syms <component>` lands:
-make -C src syms link               # splitsym + dbg2dwf for one target
+# Rebuild the kernel + drivers with CodeView and emit every .dwf:
+src/build.sh --syms                     # whole tree
+src/build.sh --syms ntoskrnl            # or just the kernel + hal
 
-# Manual today:
+# Manual one-off for an arbitrary PE (e.g. a host tool in its own
+# obj/i386/ that --syms doesn't sweep):
 cd src/wibo-tools
-WIBO=/home/.../wibo/build/.../wibo
+WIBO="$(cd ../.. && pwd)/src/wibo-macos"
 $WIBO SPLITSYM.EXE -a 'Z:\path\to\binary.exe'
 $WIBO DBG2DWF.EXE 'Z:\path\to\binary.DBG' 'Z:\path\to\binary.dwf'
 ```
 
-**Long-term** *(planned)*: extend `nmake_target` in `build.lua` to
-auto-splitsym every PE in `<comp_dir>/obj/i386/` not just the shared
-`PUBLIC/SDK/LIB/I386` dir.  Eliminates this recipe entirely.
+> `--syms` scopes CodeView to `PRIVATE/NTOS` (kernel + drivers). Host
+> tools and the Win32 userland stay retail; `_dwf_generate` in
+> `build.sh` sweeps `PUBLIC/SDK/LIB/I386` plus `ntoskrnl`/`hal`. Use the
+> manual path above for anything outside that set.
 
 ---
 
@@ -333,7 +344,7 @@ That's a UAF, not a kernel data-corruption bug.
 `nt addsym` finds the binary (by name under `src/`, or by explicit
 path), reads its PE ImageBase, computes `slide = runtime_base - pe_base`,
 and runs `add-symbol-file`.  All commands are registered by
-`tools/gdb_nt.py`, sourced automatically by `make gdb`.
+`tools/gdb_nt.py`, sourced automatically by `src/build.sh gdb`.
 
 **Break in the right place**:
 
@@ -381,7 +392,7 @@ or any `0xXXXXXXXX` from `KeBugCheckEx`.
 src/boot.sh --gdb
 
 # In another:
-make -C src gdb
+src/build.sh gdb
 (gdb) hbreak KeBugCheckEx
 (gdb) c
 ... wait for bugcheck ...
@@ -435,15 +446,22 @@ each, with the `FirstChance` arg distinguishing.  Filter:
 
 ## Recipe 5: NTFS file invisible to enumeration
 
+> **Note:** NTFS is **not** part of this tree's default build (the NTFS
+> subsystem and the `pkg/test/` Lua harness referenced below were not
+> merged from the Lua line). This recipe is kept as reference for when
+> NTFS is brought in; the `pkg/test/fs.lua` / `dump_ntfs.py` / `ntfs_walk.py`
+> tooling does not exist here yet.
+
 **Symptom**: `CreateFile` on `\foo\bar` succeeds, the file is
 readable/writable, but `FindFirstFile` / `NtQueryDirectoryFile` walking
 `\foo` doesn't include `bar`.
 
 **Recipe**:
 
-1. Run [`pkg/test/fs.lua`](src/pkg/test/fs.lua)'s **multi-create + enumeration** test:
+1. Run `pkg/test/fs.lua`'s **multi-create + enumeration** test (requires
+   the NTFS subsystem + Lua test harness — not in this tree):
    ```sh
-   make -C src selftest TESTS=fs
+   # (NTFS line only) src/build.sh selftest TESTS=fs
    ```
    Look for `Bulk create + read-back roundtrip` and `Mixed insert/delete`
    results.  Any "missing entry" / "expected N got M" is this class.
@@ -475,7 +493,7 @@ Full writeup: [SEH-PROBLEMS.md](SEH-PROBLEMS.md).
 ```sh
 # Repro is layout-sensitive.  Don't expect determinism — re-run a few
 # times if it doesn't fire on the first selftest:
-make -C src selftest
+src/boot.sh
 
 # When it fires, the kernel calls KiSehDumpCorruption before
 # bugchecking.  Capture qemu.log and look for:
@@ -511,7 +529,7 @@ src/boot.sh --trace 2>&1 | head -200    # qemu.log will contain
 
 # 2. If boot-efi never starts: ESP layout broken, OVMF can't find BOOTX64.EFI.
 #    Check the disk image:
-tools/dump_esp.py build/disk/esp.img | grep -i bootx64
+tools/dump_esp.py build/gui/esp.img | grep -i bootx64   # (dump_esp.py planned)
 
 # 3. If boot-efi runs but kernel never starts: serial output should
 #    show "[boot-efi] entering kernel" right before the handoff.
@@ -520,7 +538,7 @@ tools/dump_esp.py build/disk/esp.img | grep -i bootx64
 # 4. If kernel runs but stalls early: attach gdb and break at
 #    Phase1Initialization or KeBugCheckEx (whichever fires first):
 src/boot.sh --gdb &
-make -C src gdb
+src/build.sh gdb
 (gdb) hbreak Phase1Initialization
 (gdb) hbreak KeBugCheckEx
 (gdb) c
@@ -548,7 +566,7 @@ make -C src gdb
 | `KiAgentExit` (NTOS) | **exists** | exported kernel function whose body is the qemu-exit OUT; gdb does `set $pc = KiAgentExit; continue` to terminate cleanly |
 | `isa-debug-exit` (boot.sh) | **exists** | qemu device wired in boot.sh; OUT to 0xf4 → qemu exits with `(val<<1)|1` |
 | **`nt process` / `thread` / `handles` / `objects` / `devstack`** | **planned** | EPROCESS / ETHREAD / object-namespace walks (subcommands stubbed in `gdb_nt.py`) |
-| **`make syms <comp>`** | **planned** | run splitsym + dbg2dwf on a target's `obj/i386/*.{exe,dll}` (today: per-target wiring in `build.lua`) |
+| `src/build.sh --syms [comp]` | **exists** | CodeView build of NTOS + splitsym/dbg2dwf; emits `.dwf` for kernel/drivers (host tools: manual, see Recipe 0) |
 | **`tools/ntfs_walk.py`** | **planned** | offline NTFS volume dumper for ghost-entry / corruption diagnosis |
 | **`tools/dump_esp.py`** | **planned** | offline ESP / FAT16 dumper |
 | **`KiDispatchException` default trap** | **planned** | always-on first-chance exception logger as `nt trap` or similar |

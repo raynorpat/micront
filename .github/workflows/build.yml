@@ -7,8 +7,12 @@ on:
   workflow_dispatch:
 
 jobs:
-  headless:
-    name: headless profile
+  build:
+    # Build-only CI: compiles the full gui profile under wibo and uploads
+    # the disk image. (The old "run cr selftest under QEMU" step was
+    # retired with the cr/LuaJIT userland — there is no lua selftest
+    # executable anymore; a non-lua boot smoke test is TODO.)
+    name: gui profile
     runs-on: ubuntu-24.04
     container:
       image: ubuntu:24.04

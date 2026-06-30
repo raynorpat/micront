@@ -75,9 +75,9 @@ MEM=128
 MACHINE="q35"
 DISK="nvme"
 
-# Honour `NETDUMP=1` from the environment so wrapper Makefiles (e.g.
-# `make selftest NETDUMP=1`) can opt into the pcap without rewriting
-# their boot.sh invocation. The --netdump flag below also turns it on.
+# Honour `NETDUMP=1` from the environment so callers can opt into the
+# pcap without rewriting their boot.sh invocation (e.g.
+# `NETDUMP=1 ./boot.sh`). The --netdump flag below also turns it on.
 if [ -n "$NETDUMP" ] && [ "$NETDUMP" != "0" ]; then
     set -- --netdump "$@"
 fi

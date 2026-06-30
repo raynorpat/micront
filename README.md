@@ -6,28 +6,35 @@ NT 3.5 "Daytona", built from source on Linux/macOS, booting under UEFI on QEMU, 
 
 Implemented:
 
-- [x] Build basic kernel and system services
+- [x] Build the kernel + system services from source (wibo-hosted MS toolchain)
 - [x] 64-bit UEFI bootloader (`BOOTX64.EFI`, OVMF on qemu)
+- [x] macOS (Apple Silicon/Intel) + Linux build support
+- [x] PCI-native HAL — bus-master DMA + BAR relocation above 4 GiB
+- [x] Fast `SYSENTER`/`SYSEXIT` user dispatch + direct kernel-mode Zw* dispatch
+- [x] VirtIO transport (modern PCI, shared `virtio.lib`)
+  - [x] virtio-net (NDIS 3 miniport)
+  - [x] virtio-input (keyboard, mouse → kbdclass + mouclass)
+  - [x] virtio-console, virtio-rng
+- [x] NDIS 3 + TDI + AFD + TCP / UDP / ICMP / IP
+- [x] NVMe + SCSI port/disk class (`scsiport.sys` / `scsidisk.sys`)
+- [x] TSC-derived HAL wall clock (seeded from UEFI `GetTime`)
+- [x] Native gdb kernel debugging — CodeView → DWARF `.dwf` pipeline
 
 Coming next:
 
 - [ ] Ninja powered build system
 - [ ] Modern Windows build support
-- [ ] PCI-native HAL (BAR relocation above 4 GiB, no PC/AT assumptions)
-- [ ] Fast `SYSENTER`/`SYSEXIT` & Zw* kernel service dispatch
-- [ ] VirtIO transport (modern PCI, shared `virtio.lib`)
-  - [ ] virtio-net (NDIS 3 miniport)
-  - [ ] virtio-input (keyboard, mouse → kbdclass + mouclass)
-  - [ ] virtio-console, virtio-rng
-- [ ] NDIS 3 + TDI + AFD + TCP / UDP / ICMP / IP
-- [ ] NVMe (SCSI miniport on top of `scsiport.sys`)
 - [ ] SATA (SCSI miniport on top of `scsiport.sys`)
 - [ ] LAPIC + IOAPIC + HPET HAL (replace i8259 + i8254)
 - [ ] SMP
 - [ ] GPT partitions (currently MBR via `mkdisk.py`)
+- [ ] NTFS (NT 3.5 + NT 4.0 backports exist on the Lua line; not merged here)
 - [ ] Modern display path (Bochs VBE miniport works; need GOP-handoff loader path)
 - [ ] OpenGL reimplementation
 - [ ] Windows NT shell (Program Manager, Control Panel, Notepad, File Browser, etc)
+
+See **[docs/BUILDING.md](docs/BUILDING.md)** for the full build reference
+and **[docs/DEBUGGING.md](docs/DEBUGGING.md)** for kernel debugging.
 
 ## Repository layout
 
@@ -36,7 +43,7 @@ src/NT/PRIVATE/         original NT source (kernel, drivers, sdktools)
 src/NT/PUBLIC/          shipped headers + import libs + bootstrap binaries
 src/boot-efi/           UEFI loader (gnu-efi, x86_64; long-mode → 32-bit kernel)
 src/cmd-stub/           minimal cmd.exe replacement for NMAKE
-src/tools/              utility scripts (kdserial, pe2gdb, dumphive, …)
+src/tools/              utility + debug scripts (gdb_nt, agent_run, decode_av, mkhive, mkdisk, …)
 src/wibo-tools/         symlinks into PUBLIC/OAK/BIN/I386 for macOS/Linux building (built first-run)
 ```
 
@@ -48,7 +55,7 @@ sudo apt install gcc gcc-multilib libc6-dev-i386 make gnu-efi \
                  qemu-system-x86 ovmf
 
 git clone --recursive
-cd nt365
+cd micront
 curl -fL https://github.com/HarryR/wibo/releases/download/v1.1.0-micront.2/wibo-x86_64 -o wibo-x86_64 && chmod +x wibo-x86_64
 cd src
 ./build.sh
@@ -59,7 +66,7 @@ On macOS (Apple Silicon or Intel):
 brew install x86_64-elf-binutils x86_64-elf-gcc cmake ninja qemu
 
 git clone --recursive
-cd nt365
+cd micront
 
 # The stock wibo-macos release mishandles redirected stdout for tools that
 # re-exec helpers (cl386->cl->c1, midl->cl), so build a patched wibo from
@@ -83,7 +90,7 @@ Two toolchains coexist:
 - **wibo** runs the original MS toolchain (CL 8.50, ML 6.11d, LINK 2.50, NMAKE) under a tiny PE loader. No Wine.
 - **gcc + gnu-efi** for the UEFI loader.
 
-Output lands in `build/disk/` (`esp.img`, `nvme.img`, `SYSTEM` hive).
+Output lands in `build/<profile>/` — e.g. `build/gui/esp.img` + the `SYSTEM` hive. A plain `./build.sh` builds the `gui` profile.
 
 ## Run
 
@@ -95,24 +102,26 @@ boot.sh --gdb                    # freeze CPU, listen on :1234 for gdb
 boot.sh --trace                  # -d int,cpu_reset,in_asm → ./qemu.log
 boot.sh --vga                    # add a VGA window
 boot.sh --mem 256                # bump guest RAM (default 128 MiB)
-debug.sh                         # one-shot: paused QEMU + gdb.script + capture
+boot.sh --disk nvme|ide|virtio-blk   # pick the boot disk controller
 ```
 
-## Iteration
+`boot.sh` auto-selects `build/gui/esp.img` (then `build/headless/`);
+override with `MICRONT_ESP=/path/to/esp.img`.
 
-- TODO
+## Debugging
 
-## Symbol lookup under gdb
+Source-level kernel debugging under gdb, via a CodeView → DWARF pipeline:
 
-`pe2gdb.py` emits `ntoskrnl.gdb` and `hal.gdb` from each PE's export
-table. Internal statics (`KiTrap*`, `MiReserveSystemPtes`, MM helpers)
-aren't exported — disassemble and identify by call shape:
+```sh
+src/build.sh --syms              # build kernel + drivers with /Z7; emit .dwf
+src/boot.sh --gdb                # terminal A: qemu frozen on :1234
+src/build.sh gdb                 # terminal B: gdb attached, symbols + `nt` helpers
+```
 
-- `mov eax, fs:0x0` / `mov fs:0x0, esp` prologue → SEH-guarded routine.
-- `cmp WORD [x], 0x5a4d` + `cmp DWORD [x+e_lfanew], 0x4550` →
-  `RtlImageNtHeader`.
-- `mov edi, ds:0xXXXXXXXX` where the constant is a list head → walking
-  `PsLoadedModuleList` or similar.
+`build.sh --syms` emits `ntoskrnl.dwf` / `hal.dwf` and a `.dwf` per
+driver (real DWARF-2 ELF gdb loads directly). `build.sh gdb` symbol-files
+them and sources the `nt` command namespace (`nt modules`, `nt bugcheck`,
+`nt trapframe`, …). For scripted/agentic debug loops use
+`tools/agent_run.sh`.
 
-Break at `KeBugCheckEx` (from `ntoskrnl.gdb`) to catch every bugcheck;
-inspect `[esp+0..20]` for the call site and five parameters.
+Full reference: **[docs/DEBUGGING.md](docs/DEBUGGING.md)**.
