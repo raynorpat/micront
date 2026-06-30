@@ -339,3 +339,23 @@ src/wibo-tools/
 
 # gnu-efi build tree (fetched + built by src/boot-efi/setup-gnu-efi.sh on macOS)
 /src/boot-efi/.gnu-efi/
+
+# CRT libraries built from source (src/NT/PRIVATE/BASE/CRT*) — produced by
+# `build.sh crt` (auto-run when missing), not shipped as prebuilt binaries.
+src/NT/PUBLIC/SDK/LIB/I386/LIBC.LIB
+src/NT/PUBLIC/SDK/LIB/I386/LIBCMT.LIB
+src/NT/PUBLIC/SDK/LIB/I386/CRTDLL.DLL
+src/NT/PUBLIC/SDK/LIB/I386/CRTDLL.LIB
+src/NT/PUBLIC/SDK/LIB/I386/LIBCNTPR.LIB
+src/NT/PUBLIC/SDK/LIB/I386/EXSUP.LIB
+src/NT/PUBLIC/SDK/LIB/I386/INT64.LIB
+
+# CRTLIB roll-up build outputs (the .X86/.DEF def-source is kept; the rest
+# is produced by `build.sh crt`).
+src/NT/PRIVATE/BASE/CRTLIB/LIB/I386/*.obj
+src/NT/PRIVATE/BASE/CRTLIB/LIB/I386/*.lib
+src/NT/PRIVATE/BASE/CRTLIB/LIB/I386/*.dll
+src/NT/PRIVATE/BASE/CRTLIB/LIB/I386/*.exp
+src/NT/PRIVATE/BASE/CRTLIB/LIB/I386/*.res
+src/NT/PRIVATE/BASE/CRTLIB/LIB/I386/*.tmp
+src/NT/PRIVATE/BASE/CRTLIB/LIB/I386/crtdll.def

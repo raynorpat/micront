@@ -56,15 +56,21 @@ ALPHA=1
 
 # single thread
 
-ROOT_SMALL=..\crt32st\small
+# MicroNT remap: we build all CRT32 variants (ST, MT, DLL, NT) from
+# ONE source tree at ..\crt32, parameterized by CRTLIBTYPE.  Outputs
+# differ by suffix (libc.lib, libcmt.lib, libcdll.lib, libcnt.lib).
+# Same story for FP32.  So the per-variant ROOT_* dirs all collapse
+# to ..\crt32 / ..\fp32 here.  (Stock NT 3.5 dev kept separate source
+# copies per variant -- crt32st, crt32, crt32dll, etc.  We don't.)
+ROOT_SMALL=..\crt32
 
 SRCDIR_SMALL=$(ROOT_SMALL)\obj\*
 
 COMPONENTS_SMALL=\
         $(SRCDIR_SMALL)\small.lib
 
-ROOT_LIBC=..\crt32st
-ROOT_FP=..\fp32st
+ROOT_LIBC=..\crt32
+ROOT_FP=..\fp32
 
 SRCDIR_LIBC=$(ROOT_LIBC)\obj\*
 SRCDIR_FP=$(ROOT_FP)\obj\*
@@ -124,8 +130,10 @@ COMPONENTS_OBJECTS=\
 
 # dll
 
-ROOT_CRTDLL=..\crt32dll
-ROOT_FPDLL=..\fp32dll
+# MicroNT remap: see comment near ROOT_LIBC above.  crt32dll/fp32dll
+# collapse to crt32/fp32 (CRTLIBTYPE=DLL output names disambiguate).
+ROOT_CRTDLL=..\crt32
+ROOT_FPDLL=..\fp32
 
 SRCDIR_CRTDLL=$(ROOT_CRTDLL)\obj\*
 SRCDIR_FPDLL=$(ROOT_FPDLL)\obj\*
@@ -224,8 +232,12 @@ LINKLIBS=$(NTLIBPATH)\kernel32.lib
 
 # include paths for rc
 
-RC_INCL=-I$(_NTDRIVE)\nt\public\oak\inc -I$(_NTDRIVE)\nt\public\sdk\inc \
-        -I$(_NTDRIVE)\nt\public\sdk\inc\crt
+# MicroNT: rewrite $(_NTDRIVE)\nt\... to $(BASEDIR)\... so wibo's
+# drive mapping resolves it (NT-tree isn't at Z:\nt, it's wherever
+# the repo lives).  Same shape as the BASEDIR-vs-_NTDRIVE switch for
+# NTLIBPATH below.
+RC_INCL=-I$(BASEDIR)\public\oak\inc -I$(BASEDIR)\public\sdk\inc \
+        -I$(BASEDIR)\public\sdk\inc\crt
 
 # command-line defs for rc
 
@@ -292,16 +304,18 @@ RELEASE_INCLUDES=\
 
 
 !IF $(386)
+# MicroNT: POSIX subsystem dropped (no CRT32PSX source imported).
+# CRTDLL deferred -- the CRTDLL.LIB lib-list step fails on _environ_dll
+# / _errno / _initterm / etc.  Needs the per-export DEF resolution to
+# work, which we haven't wired yet.  Static libs (libcntpr / libc /
+# libcmt) build fine without it.
 TARGETLIBS=$(TARGETLIBS) \
            $(RELEASE_OBJECTS:*=i386) \
            $(RELEASE_CRTNT:*=i386) \
            $(RELEASE_EXSUP:*=i386) \
            $(RELEASE_LIBC:*=i386) \
            $(RELEASE_LIBCMT:*=i386) \
-           $(RELEASE_LIBCPSX:*=i386) \
            $(RELEASE_CRTDLL:*=i386)
-
-# TARGETLIBS=$(RELEASE_CRTDLL:*=i386)
 !ENDIF
 
 !IF $(MIPS)
@@ -408,22 +422,22 @@ $(RELEASE_INCLUDES): $(COMPONENTS_INCLUDES)
 #
 
 $(RELEASE_CRTNT:*=i386): $(COMPONENTS_CRTNT:*=i386)
-    lib -out:$@ @<<
+    lib -nologo -out:$@ @<<
 $(COMPONENTS_CRTNT:*=i386)
 <<
 
 $(RELEASE_LIBC:*=i386): $(COMPONENTS_LIBC:*=i386)
-    lib -out:$@ @<<
+    lib -nologo -out:$@ @<<
 $(COMPONENTS_LIBC:*=i386)
 <<
 
 $(RELEASE_LIBCMT:*=i386): $(COMPONENTS_LIBCMT:*=i386)
-    lib -out:$@ @<<
+    lib -nologo -out:$@ @<<
 $(COMPONENTS_LIBCMT:*=i386)
 <<
 
 $(RELEASE_LIBCPSX:*=i386): $(COMPONENTS_LIBCPSX:*=i386)
-    lib -out:$@ @<<
+    lib -nologo -out:$@ @<<
 $(COMPONENTS_LIBCPSX:*=i386)
 <<
 
@@ -447,21 +461,21 @@ $(DSTDIR_OBJECTS:*=i386)\chkstk.obj: $(SRCDIR_LIBC:*=i386)\chkstk.obj
 386_DLLBASE=0x10010000
 
 lib\i386\exsup.lib: $(EXSUP_OBJECTS:*=i386)
-    lib -out:$(@R).lib $(EXSUP_OBJECTS:*=i386)
+    lib -nologo -out:$(@R).lib $(EXSUP_OBJECTS:*=i386)
 
 $(386_DEF): lib\crtdll.def $(386_DEF:.def=.x86)
     copy lib\crtdll.def+$(386_DEF:.def=.x86) $(386_DEF)
 
 $(386_DLL:.dll=.exp) $(386_DLL:.dll=.lib): $(386_DEF) $(386_OBJECTS)
-    lib -out:$(@R).lib -machine:i386 -def:$(386_DEF) $(386_LIBCDLL)
+    lib -nologo -out:$(@R).lib -machine:i386 -def:$(386_DEF) $(386_LIBCDLL)
     ren $(386_DLL:.dll=.lib) tmp.lib
-    lib -out:$(@R).lib -machine:i386 $(@D)\tmp.lib $(386_OBJECTS)
+    lib -nologo -out:$(@R).lib -machine:i386 $(@D)\tmp.lib $(386_OBJECTS)
     del $(@D)\tmp.lib
 
 $(386_DLL): $(386_DLL:.dll=.lib) $(386_DLL:.dll=.exp) $(386_LIBCDLL) $(386_LINKLIBS) crtdll.rc
     rc -l 409 -r -fo $(386_DLL:.dll=.tmp) $(RCX86_DEFS) -x $(RC_INCL) crtdll.rc
     cvtres -i386 $(386_DLL:.dll=.tmp) -r -o $(386_DLL:.dll=.res)
-    link32 @<<
+    link @<<
 -dll
 -out:$@
 -machine:i386
@@ -482,7 +496,7 @@ $(386_LINKLIBS)
 #
 
 $(RELEASE_CRTNT:*=mips): $(COMPONENTS_CRTNT:*=mips)
-    lib -out:$@ @<<
+    lib -nologo -out:$@ @<<
 $(COMPONENTS_CRTNT:*=mips)
 <<
 
@@ -490,17 +504,17 @@ $(RELEASE_SMALL:*=mips): $(COMPONENTS_SMALL:*=mips)
         copy $** $@
 
 $(RELEASE_LIBC:*=mips): $(COMPONENTS_LIBC:*=mips)
-    lib -out:$@ @<<
+    lib -nologo -out:$@ @<<
 $(COMPONENTS_LIBC:*=mips)
 <<
 
 $(RELEASE_LIBCMT:*=mips): $(COMPONENTS_LIBCMT:*=mips)
-    lib -out:$@ @<<
+    lib -nologo -out:$@ @<<
 $(COMPONENTS_LIBCMT:*=mips)
 <<
 
 $(RELEASE_LIBCPSX:*=mips): $(COMPONENTS_LIBCPSX:*=mips)
-    lib -out:$@ @<<
+    lib -nologo -out:$@ @<<
 $(COMPONENTS_LIBCPSX:*=mips)
 <<
 
@@ -525,9 +539,9 @@ MIPS_LINKLIBS=$(LINKLIBS:*=mips)
 MIPS_DLLBASE=0x10010000
 
 $(MIPS_DLL:.dll=.lib) $(MIPS_DLL:.dll=.exp): $(MIPS_DEF)
-    lib -out:$(@R).lib -machine:mips -def:$(MIPS_DEF)
+    lib -nologo -out:$(@R).lib -machine:mips -def:$(MIPS_DEF)
     ren $(MIPS_DLL:.dll=.lib) tmp.lib
-    lib -out:$(@R).lib -machine:mips $(@D)\tmp.lib $(MIPS_OBJECTS)
+    lib -nologo -out:$(@R).lib -machine:mips $(@D)\tmp.lib $(MIPS_OBJECTS)
     del $(@D)\tmp.lib
 
 $(MIPS_DEF): lib\crtdll.def $(MIPS_DEF:.def=.mip)
@@ -536,7 +550,7 @@ $(MIPS_DEF): lib\crtdll.def $(MIPS_DEF:.def=.mip)
 $(MIPS_DLL): $(MIPS_DLL:.dll=.lib) $(MIPS_DLL:.dll=.exp) $(MIPS_LIBCDLL) $(MIPS_LINKLIBS) crtdll.rc
     rc -l 409 -r -fo $(MIPS_DLL:.dll=.tmp) $(RCMIPS_DEFS) -x $(RC_INCL) crtdll.rc
     cvtres -mips $(MIPS_DLL:.dll=.tmp) -r -o $(MIPS_DLL:.dll=.res)
-    link32 @<<
+    link @<<
 -dll
 -out:$@
 -debugtype:both
@@ -557,7 +571,7 @@ $(MIPS_LINKLIBS)
 #
 
 $(RELEASE_CRTNT:*=alpha): $(COMPONENTS_CRTNT:*=alpha)
-    lib -out:$@ @<<
+    lib -nologo -out:$@ @<<
 $(COMPONENTS_CRTNT:*=alpha)
 <<
 
@@ -565,17 +579,17 @@ $(RELEASE_SMALL:*=alpha): $(COMPONENTS_SMALL:*=alpha)
     copy $** $@
 
 $(RELEASE_LIBC:*=alpha): $(COMPONENTS_LIBC:*=alpha)
-    lib -out:$@ @<<
+    lib -nologo -out:$@ @<<
 $(COMPONENTS_LIBC:*=alpha)
 <<
 
 $(RELEASE_LIBCMT:*=alpha): $(COMPONENTS_LIBCMT:*=alpha)
-    lib -out:$@ @<<
+    lib -nologo -out:$@ @<<
 $(COMPONENTS_LIBCMT:*=alpha)
 <<
 
 $(RELEASE_LIBCPSX:*=alpha): $(COMPONENTS_LIBCPSX:*=alpha)
-    lib -out:$@ @<<
+    lib -nologo -out:$@ @<<
 $(COMPONENTS_LIBCPSX:*=alpha)
 <<
 
@@ -600,16 +614,16 @@ ALPHA_LINKLIBS=$(LINKLIBS:*=alpha)
 ALPHA_DLLBASE=0x10010000
 
 $(ALPHA_DLL:.dll=.lib) $(ALPHA_DLL:.dll=.exp): $(ALPHA_DEF)
-    lib -out:$(@R).lib -machine:alpha -def:$(ALPHA_DEF)
+    lib -nologo -out:$(@R).lib -machine:alpha -def:$(ALPHA_DEF)
     ren $(ALPHA_DLL:.dll=.lib) tmp.lib
-    lib -out:$(@R).lib -machine:alpha $(@D)\tmp.lib $(ALPHA_OBJECTS)
+    lib -nologo -out:$(@R).lib -machine:alpha $(@D)\tmp.lib $(ALPHA_OBJECTS)
     del $(@D)\tmp.lib
 
 $(ALPHA_DEF): lib\crtdll.def $(ALPHA_DEF:.def=.alp)
     copy lib\crtdll.def+$(ALPHA_DEF:.def=.alp) $(ALPHA_DEF)
 
 $(ALPHA_DLL): $(ALPHA_DLL:.dll=.lib) $(ALPHA_DLL:.dll=.exp) $(ALPHA_LIBCDLL) $(ALPHA_LINKLIBS)
-    link32 @<<
+    link @<<
 -dll
 -out:$@
 -machine:alpha

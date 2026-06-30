@@ -839,6 +839,79 @@ build_gdb() {
         -ex 'target remote :1234'
 }
 
+# --- C Runtime (CRT) from source ---------------------------------------------
+# Ported from main-lua's build.lua CRT chain. The CRT (BASE/{CRT32,CRT32NT,
+# FP32,FP32NT}) builds in flavors (NT/ST/MT/DLL) that SHARE one source tree,
+# so each subdir carries a .crt-variant stamp and its obj/ is wiped on a
+# flavor change — otherwise the wrong-variant .obj re-archives (e.g.
+# _environ_dll vs _environ). CRTLIB then lib-combines the per-flavor outputs
+# into the release libs, which replace the prebuilt seeds in PUBLIC/SDK/LIB.
+BASE_D="$NT_ROOT/PRIVATE/BASE"
+
+# _crt_variant <root> <variant> <desc> <subdir>...
+_crt_variant() {
+    local root="$1" variant="$2" desc="$3"; shift 3
+    mkdir -p "$root/obj/i386"
+    local d sub stamp prev
+    for d in "$@"; do
+        sub="$root/$d"
+        [ -f "$sub/SOURCES" ] || continue
+        stamp="$sub/obj/i386/.crt-variant"
+        prev=""; [ -f "$stamp" ] && prev="$(cat "$stamp" 2>/dev/null)"
+        if [ -n "$prev" ] && [ "$prev" != "$variant" ]; then
+            echo ">>> CRT variant change ($prev -> $variant); wiping $d/obj"
+            rm -rf "$sub/obj"
+        fi
+        run_nmake "$sub" "$desc/$d" "CRTLIBTYPE=$variant" "386=1" || return 1
+        mkdir -p "$sub/obj/i386"; echo "$variant" > "$stamp"
+    done
+    # Top-level roll-up: hand-written MAKEFILE (no SOURCES) lib-archives the
+    # per-subdir .obj into the flavor's libc<suffix>.lib. Run nmake directly.
+    echo "========================================"
+    echo "Building: $desc - roll-up"
+    echo "========================================"
+    run_wibo_tool "$root" NMAKE.EXE /NOLOGO "CRTLIBTYPE=$variant" "386=1"
+}
+
+# INT64.LIB — 64-bit integer helpers (LLMUL/LLDIV/...) built from the
+# MSVC 2.2 helper ASM imported into CRT32/HELPER/I386.
+build_int64() {
+    run_nmake "$BASE_D/CRT32/HELPER" "CRT32/HELPER - INT64.LIB" "CRTLIBTYPE=ST" "386=1" || return 1
+    local src="$BASE_D/CRT32/obj/i386/helper.lib" dst="$NT_ROOT/PUBLIC/SDK/LIB/I386/INT64.LIB"
+    [ -f "$src" ] || { echo "!!! int64: missing $src"; return 1; }
+    cp "$src" "$dst" && echo ">>> installed INT64.LIB"
+}
+
+# Build the whole CRT from source and install the release libs over the
+# prebuilt seeds. Chain order matches build.lua: ends with the CRT32 MT
+# flavor so CRTLIB's client SUPPOBJS (txtmode.obj, etc.) archive MT-built.
+# crt32 "NT" flavor is intentionally omitted — the NT-subset CRT comes from
+# the separate CRT32NT tree, not CRT32-with-CRTLIBTYPE=NT.
+build_crt() {
+    local B="$BASE_D"
+    _crt_variant "$B/FP32NT"  NT  "FP32NT"    TRAN || return 1
+    _crt_variant "$B/CRT32NT" NT  "CRT32NT"   CONVERT MISC STARTUP STDIO STRING HACK || return 1
+    _crt_variant "$B/FP32"    ST  "FP32-ST"   CONV TRAN || return 1
+    _crt_variant "$B/FP32"    DLL "FP32-DLL"  CONV TRAN || return 1
+    _crt_variant "$B/FP32"    MT  "FP32-MT"   CONV TRAN || return 1
+    _crt_variant "$B/CRT32"   DLL "CRT32-DLL" CONVERT MISC STARTUP STDIO STRING TIME WINHEAP DLLSTUFF DIRECT DOS EXEC IOSTREAM LOWIO MBSTRING || return 1
+    _crt_variant "$B/CRT32"   ST  "CRT32-ST"  CONVERT MISC STARTUP STDIO STRING LINKOPTS TIME WINHEAP DIRECT DOS EXEC IOSTREAM LOWIO SMALL MBSTRING || return 1
+    _crt_variant "$B/CRT32"   MT  "CRT32-MT"  CONVERT MISC STARTUP STDIO STRING TIME WINHEAP DIRECT DOS EXEC IOSTREAM LOWIO MBSTRING || return 1
+    build_int64 || return 1
+    echo "========================================"
+    echo "Building: CRTLIB - release roll-up"
+    echo "========================================"
+    run_wibo_tool "$B/CRTLIB" NMAKE.EXE /NOLOGO "386=1" || return 1
+    # Install the release set over the prebuilt seeds (uppercase names).
+    local out="$B/CRTLIB/LIB/I386" lib="$NT_ROOT/PUBLIC/SDK/LIB/I386" pair s d
+    for pair in crtdll.dll:CRTDLL.DLL crtdll.lib:CRTDLL.LIB libcntpr.lib:LIBCNTPR.LIB \
+                libc.lib:LIBC.LIB libcmt.lib:LIBCMT.LIB exsup.lib:EXSUP.LIB; do
+        s="$out/${pair%%:*}"; d="$lib/${pair##*:}"
+        [ -f "$s" ] || { echo "!!! crtlib: missing $s"; return 1; }
+        cp "$s" "$d" && echo ">>> installed ${pair##*:}"
+    done
+}
+
 # MC (message compiler). Two patches live in our source tree relative to
 # stock NT 3.5 mc.c:
 #   - MC.C drops user32!CharToOem (wibo has no stub; safe for ASCII .mc).
@@ -1679,7 +1752,21 @@ build_disk() {
 #
 
 # Compile phases — no disk assembly, no PROFILE mutation.
+# The CRT (libcntpr/libc/libcmt/crtdll) is built from source under BASE/ and
+# linked by the host tools, the kernel, and all userland — so it must exist
+# before build_tools. It's not shipped prebuilt; build it once if missing
+# (force a rebuild after editing CRT source with `./build.sh crt`).
+_ensure_crt() {
+    local lib="$NT_ROOT/PUBLIC/SDK/LIB/I386"
+    if [ -f "$lib/LIBCNTPR.LIB" ] && [ -f "$lib/LIBC.LIB" ] && [ -f "$lib/CRTDLL.LIB" ]; then
+        return 0
+    fi
+    echo ">>> CRT libs missing — building from source (BASE/CRT*)"
+    build_crt
+}
+
 _compile_micront() {
+    _ensure_crt
     build_tools
     build_ntoskrnl
     build_drivers
@@ -1740,6 +1827,7 @@ _dispatch_one() {
                 echo "Profile targets: all (=gui), gui, headless"
                 echo "Group targets:   ntoskrnl, drivers, drivers-gui,"
                 echo "                 userland-micront, userland, userland-gui, disk"
+                echo "C runtime:       crt (build LIBC/LIBCMT/CRTDLL/LIBCNTPR/EXSUP/INT64 from BASE source)"
                 echo "Debug toolchain: debugtools (imagehlp+splitsym, dbg2dwf, cvdump, cvpack)"
                 echo "                 gdb (attach gdb to a boot.sh --gdb session w/ DWARF symbols)"
                 echo "Flags:           --syms  build NTOS with CodeView + emit .DBG/.dwf gdb"

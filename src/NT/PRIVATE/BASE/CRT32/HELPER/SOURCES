@@ -44,7 +44,21 @@ MIPS_SOURCES=   lldiv.c \
                 llshift.s
 
 
-i386_SOURCES=
+# MicroNT: NT 3.5 shipped i386 INT64.LIB prebuilt with no source
+# alongside.  These ASM files come from MSVC 2.2's CRTSRC/HELPER/I386
+# (same era, same toolchain conventions); they export the runtime
+# helpers (__alldiv, __allmul, __allshr, ...) that the linker pulls in
+# implicitly via .drectve when 64-bit ops compile to calls.  build.lua's
+# int64 target archives the resulting objs as INT64.LIB rather than
+# folding them into helper.lib, matching the existing release naming.
+i386_SOURCES=i386\lldiv.asm  \
+             i386\llmul.asm  \
+             i386\llrem.asm  \
+             i386\llshl.asm  \
+             i386\llshr.asm  \
+             i386\ulldiv.asm \
+             i386\ullrem.asm \
+             i386\ullshr.asm
 
 i860_SOURCES=
 
