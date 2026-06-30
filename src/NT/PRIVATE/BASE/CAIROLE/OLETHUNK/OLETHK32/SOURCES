@@ -41,7 +41,7 @@ TARGETLIBS=..\debnot\win32\obj\*\debnot.lib \
 
 INCLUDES=.; \
          $(BASEDIR)\public\sdk\inc; \
-         $(BASEDIR)\private\cinc; \
+         $(BASEDIR)\private\base\cinc; \
          ..\h; \
          ..\..\ih;
 

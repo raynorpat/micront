@@ -45,9 +45,12 @@
 #define WINOLEAPI_(type) STDAPI_(type)
 #endif
 
-// tagCOINIT (incl. COINIT_APARTMENTTHREADED) now lives in objbase.h, which
-// is always in scope here — defining it again gave a C2011 enum redefinition,
-// so it's dropped from this internal header.
+typedef enum tagCOINIT
+{
+  COINIT_MULTITHREADED      = 0,         // Party model threading
+  COINIT_SINGLETHREADED     = 1,         // Single threading
+  COINIT_APARTMENTTHREADED  = 2          // Apartment model threading
+} COINIT;
 
 // These API's are exposed for Cairo but not for Daytona, so we declare
 // them here for internal users

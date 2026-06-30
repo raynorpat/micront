@@ -379,3 +379,23 @@ src/NT/PRIVATE/BASE/CAIROLE/COM/IDL/DAYTONA/*.h
 src/NT/PRIVATE/BASE/CAIROLE/COM/CLASS/DAYTONA/*_[csz].c
 src/NT/PRIVATE/BASE/CAIROLE/SCM/DAYTONA/*_[csz].c
 src/NT/PRIVATE/BASE/CAIROLE/**/*.i
+
+# CAIROLE generated import libs: uuid.lib (ILIB), rpcns4.lib (empty stub).
+src/NT/PUBLIC/SDK/LIB/I386/uuid.lib
+src/NT/PUBLIC/SDK/LIB/I386/rpcns4.lib
+# CAIROLE shipped DLLs + their import libs/exports (ole32, storag32, etc.)
+src/NT/PUBLIC/SDK/LIB/I386/ole32.dll
+src/NT/PUBLIC/SDK/LIB/I386/ole32.exp
+src/NT/PUBLIC/SDK/LIB/I386/ole32.lib
+src/NT/PUBLIC/SDK/LIB/I386/storag32.dll
+src/NT/PUBLIC/SDK/LIB/I386/storag32.exp
+src/NT/PUBLIC/SDK/LIB/I386/storag32.lib
+src/NT/PUBLIC/SDK/LIB/I386/olecnv32.dll
+src/NT/PUBLIC/SDK/LIB/I386/olecnv32.exp
+src/NT/PUBLIC/SDK/LIB/I386/olethk32.dll
+src/NT/PUBLIC/SDK/LIB/I386/olethk32.exp
+src/NT/PUBLIC/SDK/LIB/I386/olethk32.lib
+
+# TYPES pass-2 compiled IID objects (build_types)
+src/NT/PRIVATE/BASE/TYPES/**/*.obj
+src/NT/PRIVATE/BASE/TYPES/**/*.exp

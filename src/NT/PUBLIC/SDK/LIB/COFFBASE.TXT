@@ -16,6 +16,7 @@ sadmin      0x13000000  0x40000000
 ;  OLE dlls
 ;
 ole32       0x19e00000  0x00a00000
+storag32    0x19a00000  0x00200000
 
 ;
 ; This section contains the Cairo images.  Free areas are labelled with

@@ -916,10 +916,25 @@ for lo, up in (("wtypes.h","WTYPES.H"),("unknwn.h","UNKNWN.H"),("com.h","COM.H")
     open(f"{inc}/{up}","w",encoding="latin-1",newline="").write(   # CRLF to match tree
         "\r\n".join(ts.sub(r'\1<generated>', l) for l in src) + "\r\n")
 PY
-    # objbase.h/ole2.h feed CAIROLE's precompiled header (com2int.pch); a stale
-    # PCH baked from old headers silently overrides these, so drop it.
+    # objbase.h/ole2.h feed CAIROLE's precompiled headers (com2int.pch for COM,
+    # le2int.pch for OLE232); a stale PCH baked from old headers silently
+    # overrides these, so drop them.
     rm -f "$BASE_D/CAIROLE/COM/INC/DAYTONA/obj/i386/com2int.pch" \
-          "$BASE_D/CAIROLE/COM/INC/DAYTONA/obj/i386/com2int.obj"
+          "$BASE_D/CAIROLE/COM/INC/DAYTONA/obj/i386/com2int.obj" \
+          "$BASE_D/CAIROLE/OLE232/INC/DAYTONA/obj/i386/le2int.pch" \
+          "$BASE_D/CAIROLE/OLE232/INC/DAYTONA/obj/i386/le2int.obj"
+    # TYPES "pass 2": build uuid.lib with the IID definitions the CAIROLE DLLs
+    # reference. The interface IIDs come from MIDL's self-contained _i.c files
+    # (com_i.c, ole2x_i.c); the internal proxy/remoting IIDs (IProxyManager,
+    # IInternalMoniker, IOlePresObj, ...) come from OLEPRX32's hand-written
+    # cguid_i.c (it #defines INITGUID then includes ole2.h, so it allocates).
+    run_wibo_tool "$TY/COMPOBJ"        cl386 -nologo -c -Fogen\\com_i.obj   com_i.c   || return 1
+    run_wibo_tool "$TY/NEW_OLE"        cl386 -nologo -c -Fogen\\ole2x_i.obj ole2x_i.c || return 1
+    run_wibo_tool "$TY/OLEPRX32/DAYTONA" cl386 -nologo -c -DWIN32=100 -D_X86_=1 -Di386=1 \
+        -Focguid_i.obj CGUID_I.C || return 1
+    run_wibo_tool "$TY/COMPOBJ" LIB.EXE -nologo -machine:ix86 -out:gen\\uuid.lib \
+        gen\\com_i.obj ..\\NEW_OLE\\gen\\ole2x_i.obj ..\\OLEPRX32\\DAYTONA\\cguid_i.obj || return 1
+    cp "$TY/COMPOBJ/gen/uuid.lib" "$NT_ROOT/PUBLIC/SDK/LIB/I386/uuid.lib" && echo ">>> installed uuid.lib (interface + internal IIDs)"
     echo ">>> TYPES: OK"
 }
 
@@ -935,7 +950,10 @@ _cairole_leaves() {
     done < <(find "$root" -name SOURCES | sort)
 }
 build_cairole_common() { _cairole_leaves COMMON; }
-build_cairole_ilib()   { _cairole_leaves ILIB; }
+# ILIB builds its own uuid.lib (OLE1/private CLSIDs from uuidole.cxx) to its obj
+# dir; ole32 links it there directly. The *standard* interface IIDs come from
+# the TYPES uuid.lib in public\sdk\lib (see build_types pass 2).
+build_cairole_ilib() { _cairole_leaves ILIB; }
 build_cairole_com() {
     # COM/IDL runs MIDL (NTTARGETFILE0=allidl) to generate iface.h and the
     # other interface headers the rest of COM #includes; INC adds more shared
@@ -944,6 +962,115 @@ build_cairole_com() {
     [ -f "$BASE_D/CAIROLE/COM/INC/DAYTONA/SOURCES" ] && \
         { run_nmake "$BASE_D/CAIROLE/COM/INC/DAYTONA" "CAIROLE/COM/INC" || return 1; }
     _cairole_leaves COM
+}
+
+# Later CAIROLE components build their shared INC/COMMON leaf first (the rest
+# #include its headers / share its precompiled header), then the LIBRARY
+# leaves, then the DYNLINK (the component DLL links the sub-libs, so it goes
+# last). PROGRAM leaves are tests/tools (DRT, UTEST, STGVIEW, ...) — skipped.
+# phase (2nd arg): "libs" builds only INC/COMMON + LIBRARY leaves; "dlls"
+# builds only the DYNLINK + PROGRAM leaves; "all" (default) does everything.
+# The split lets build_cairole interleave: STG's sub-libs must precede ole32,
+# but STG's storag32.dll links ole32 (via the compob32 alias), so it follows.
+# makedll (3rd arg, default 1): when 0, DYNLINK leaves stop at the import lib
+# (compile-verified) instead of linking the runtime .dll — used for the DLLs
+# that don't apply to 32-bit micront (storag32 is redundant with ole32's
+# embedded storage; olethk32 is a 16-bit thunk needing ntvdm/VDM).
+_cairole_comp() {
+    local comp="$1" phase="${2:-all}" makedll="${3:-1}" root="$BASE_D/CAIROLE/$1" pre s d tt
+    if [ "$phase" != dlls ]; then
+        for pre in INC COMMON; do
+            [ -f "$root/$pre/DAYTONA/SOURCES" ] && \
+                { run_nmake "$root/$pre/DAYTONA" "CAIROLE/$comp/$pre" || return 1; }
+        done
+    fi
+    local libs=() dlls=() progs=()
+    while IFS= read -r s; do
+        d="$(dirname "$s")"
+        case "$d/" in                                                      # trailing / so a
+                                                                           # dir that ENDS in the
+                                                                           # name still matches
+            "$root"/INC/DAYTONA/|"$root"/COMMON/DAYTONA/) continue ;;      # built above
+            */DRT/*|*/UTEST/*|*/UTILS/*|*/TOOLS/*)                          # tests + tools
+                echo ">>> skip (test/tool): ${d#$BASE_D/CAIROLE/}"; continue ;;
+        esac
+        tt="$(grep -ioE 'TARGETTYPE=[[:space:]]*[A-Za-z]+' "$s" | head -1 | tr -d ' \t\r' | cut -d= -f2)"
+        case "$tt" in
+            [Ll][Ii][Bb][Rr][Aa][Rr][Yy]) libs+=("$d") ;;   # sub-libs first
+            [Dd][Yy][Nn][Ll][Ii][Nn][Kk]) dlls+=("$d") ;;   # the component DLL(s)
+            *)                             progs+=("$d") ;;  # PROGRAM (scm.exe, ...)
+        esac
+    done < <(find "$root" -name SOURCES | sort)
+    # libs → DLLs (makedll=1 so LINK actually emits the .dll, not just the
+    # import lib) → programs (which link the DLLs above).
+    if [ "$phase" != dlls ]; then
+        for d in "${libs[@]}"; do run_nmake "$d" "CAIROLE/${d#$BASE_D/CAIROLE/}" || return 1; done
+    fi
+    if [ "$phase" != libs ]; then
+        local mk=(); [ "$makedll" = 1 ] && mk=(makedll=1)
+        for d in "${dlls[@]}";  do run_nmake "$d" "CAIROLE/${d#$BASE_D/CAIROLE/}" "${mk[@]}" || return 1; done
+        for d in "${progs[@]}"; do run_nmake "$d" "CAIROLE/${d#$BASE_D/CAIROLE/}"            || return 1; done
+    fi
+}
+build_cairole_ole232()   { _cairole_comp OLE232; }
+build_cairole_stg()      { _cairole_comp STG; }
+build_cairole_dll()      { _cairole_comp DLL; }
+build_cairole_scm()      { _cairole_comp SCM; }
+build_cairole_olecnv32() { _cairole_comp OLECNV32; }
+# olethk32 is the 16-bit OLE thunk; its .dll link needs ntvdm.lib (VDM), absent
+# in 32-bit micront — build the objects + import lib only.
+build_cairole_olethunk() { _cairole_comp OLETHUNK all 0; }
+
+# ole32.dll + scm link rpcns4.lib (RPC name service), but CAIROLE makes no
+# RpcNs* calls and micront doesn't build rpcns4 — provide an empty import lib
+# so the (dead) link reference resolves.
+_ensure_rpcns4_stub() {
+    local lib="$NT_ROOT/PUBLIC/SDK/LIB/I386/rpcns4.lib"
+    [ -f "$lib" ] && return 0
+    local d="$BASE_D/CAIROLE/ILIB/DAYTONA"
+    printf 'LIBRARY rpcns4\nEXPORTS\n' > "$d/rpcns4.def"
+    run_wibo_tool "$d" LIB.EXE -nologo -machine:ix86 -def:rpcns4.def -out:rpcns4.lib || return 1
+    cp "$d/rpcns4.lib" "$lib" && echo ">>> installed rpcns4.lib (empty stub)"
+    rm -f "$d/rpcns4.def" "$d/rpcns4.exp" "$d/rpcns4.lib"
+}
+
+# micront unifies COM into ole32 (no separate compob32.dll), but Daytona's
+# storag32 still links compob32.lib. ole32 exports the same CoXxx APIs, so
+# alias compob32.lib -> ole32.lib (built just before).
+_ensure_compob32_alias() {
+    local lib="$NT_ROOT/PUBLIC/SDK/LIB/I386"
+    [ -f "$lib/ole32.lib" ] || { echo "!!! compob32 alias: ole32.lib not built yet"; return 1; }
+    cp "$lib/ole32.lib" "$lib/compob32.lib" && echo ">>> aliased compob32.lib -> ole32.lib"
+}
+
+# uuid.lib (standard IIDs) + the regenerated OLE headers come from build_types;
+# build it once if uuid.lib is absent (run `./build.sh types` to force a refresh
+# after editing the TYPES .idl/.x/.y sources).
+_ensure_types() {
+    [ -f "$NT_ROOT/PUBLIC/SDK/LIB/I386/uuid.lib" ] && return 0
+    build_types
+}
+
+# Full CAIROLE build. ole32 (DLL) links the com/ole232/stg sub-libs + uuid,
+# so those precede it; storag32 (STG/DLL) and scm link ole32, so they follow.
+build_cairole() {
+    _ensure_types             || return 1
+    build_cairole_common      || return 1
+    build_cairole_ilib        || return 1
+    build_cairole_com         || return 1
+    build_cairole_ole232      || return 1
+    _cairole_comp STG libs    || return 1   # docfile/exp/msf (ole32 links these)
+    build_cairole_olecnv32    || return 1
+    _ensure_rpcns4_stub       || return 1
+    build_cairole_dll         || return 1   # ole32.dll (the unified OLE runtime)
+    _ensure_compob32_alias    || return 1
+    # storag32 is the Daytona split-model storage DLL — redundant here since
+    # ole32 embeds storage; build it import-lib-only (compile-verified).
+    _cairole_comp STG dlls 0  || return 1
+    build_cairole_scm         || return 1   # scm.exe (links ole32)
+    build_cairole_olethunk    || return 1   # olethk32: import lib only (16-bit/VDM)
+    echo ">>> CAIROLE: all components built (ole32.dll, olecnv32.dll, scm.exe;"
+    echo "    storag32/olethk32 compile-verified, runtime .dll N/A for 32-bit micront)"
 }
 
 # INT64.LIB — 64-bit integer helpers (LLMUL/LLDIV/...) built from the
