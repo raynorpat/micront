@@ -1,0 +1,11 @@
+#include <windows.h>
+
+#include <ntverp.h>
+
+#define	VER_FILETYPE	VFT_DRV
+#define	VER_FILESUBTYPE	VFT2_DRV_SYSTEM
+#define VER_FILEDESCRIPTION_STR     "MicroNT virtio-console driver"
+#define VER_INTERNALNAME_STR        "vioser.sys"
+#define VER_ORIGINALFILENAME_STR    "vioser.sys"
+
+#include "common.ver"

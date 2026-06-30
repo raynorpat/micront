@@ -383,6 +383,48 @@ build_msfs()   { run_nmake "$NTOS/MAILSLOT"  "MSFS - Mailslot filesystem driver"
 build_hello()  { run_nmake "$NTOS/DD/HELLO"    "HELLO - MicroNT visibility driver"; }
 build_cowtest(){ KEEP_UMAPPL=1 run_nmake "$NT_ROOT/PRIVATE/TESTS/cowtest" "COWTEST - COW test program"; }
 
+# --- virtio shared lib + device drivers -------------------------------------
+# virtio.lib — shared bus / split-ring / PCI legacy transport. Every
+# virtio device driver links against it. Adapted from Unikraft (BSD-3).
+build_virtio_lib() { run_nmake "$NTOS/VIRTIO" "VIRTIO - bus + ring + PCI legacy (virtio.lib)"; }
+build_viorng()   { run_nmake "$NTOS/DD/VIORNG"   "VIORNG - virtio-rng entropy driver"; }
+build_vioser()   { run_nmake "$NTOS/DD/VIOSER"   "VIOSER - virtio-console driver"; }
+build_vioinput() { run_nmake "$NTOS/DD/VIOINPUT" "VIOINPUT - virtio-input keyboard/mouse driver"; }
+# Whole virtio subsystem: shared lib + every consumer .sys. The mtime
+# prepass only sees per-component .c/.h, so a change to RING.C / BUS.C /
+# PCI.C won't relink the .sys files unless we walk consumers here.
+# vionet lives under NDIS/VIONET but links virtio.lib like the rest.
+build_virtio() {
+    build_virtio_lib   || return $?
+    build_viorng       || return $?
+    build_vioser       || return $?
+    build_vioinput     || return $?
+    build_ndis_vionet  || return $?
+}
+
+# --- SCSI subsystem ---------------------------------------------------------
+# Dependency order: class.lib -> scsiport.sys -> scsidisk.sys; nvme2k is
+# a SCSI miniport on top of scsiport. Each needs its own obj/i386 (nmake
+# won't create it when the parent dir is fresh).
+build_dd_class()    { mkdir -p "$NTOS/DD/CLASS/obj/i386";    run_nmake "$NTOS/DD/CLASS"    "CLASS - SCSI class-driver helper lib"; }
+build_dd_scsiport() { mkdir -p "$NTOS/DD/SCSIPORT/obj/i386"; run_nmake "$NTOS/DD/SCSIPORT" "SCSIPORT - SCSI miniport framework" makedll=1; }
+build_dd_scsidisk() { mkdir -p "$NTOS/DD/SCSIDISK/obj/i386"; run_nmake "$NTOS/DD/SCSIDISK" "SCSIDISK - SCSI disk class driver"; }
+build_dd_nvme2k()   { mkdir -p "$NTOS/DD/NVME2K/obj/i386";   run_nmake "$NTOS/DD/NVME2K"   "NVME2K - NVMe storage controller (SCSI miniport)"; }
+
+# --- NDIS framework + virtio-net miniport -----------------------------------
+# ndis.sys — NDIS wrapper / framework (EXPORT_DRIVER, produces ndis.lib).
+# vionet.sys — virtio-net NDIS 3.0 miniport; links virtio.lib + ndis.lib.
+build_ndis_wrapper() { mkdir -p "$NTOS/NDIS/WRAPPER/obj/i386"; run_nmake "$NTOS/NDIS/WRAPPER" "NDIS - NDIS wrapper / framework" makedll=1; }
+build_ndis_vionet()  { mkdir -p "$NTOS/NDIS/VIONET/obj/i386";  run_nmake "$NTOS/NDIS/VIONET"  "VIONET - virtio-net NDIS miniport"; }
+
+# --- TDI + TCPIP + AFD ------------------------------------------------------
+# tdi.sys -> ip.lib -> tcpip.sys (TCP/UDP transport). afd.sys is the
+# socket emulation layer above TDI; links tdi.lib so builds after it.
+build_tdi_wrapper()   { mkdir -p "$NTOS/TDI/WRAPPER/obj/i386"; run_nmake "$NTOS/TDI/WRAPPER" "TDI - TDI wrapper (tdi.sys)" makedll=1; }
+build_tdi_tcpip_ip()  { mkdir -p "$NTOS/TDI/TCPIP/IP/obj/i386"; mkdir -p "$NTOS/TDI/TCPIP/obj/i386"; run_nmake "$NTOS/TDI/TCPIP/IP" "TDI/TCPIP/IP - IP/ARP/ICMP (ip.lib)"; }
+build_tdi_tcpip_tcp() { mkdir -p "$NTOS/TDI/TCPIP/TCP/obj/i386"; run_nmake "$NTOS/TDI/TCPIP/TCP" "TDI/TCPIP/TCP - TCP/UDP transport (tcpip.sys)"; }
+build_afd()           { mkdir -p "$NTOS/AFD/obj/i386"; run_nmake "$NTOS/AFD" "AFD - socket emulation driver (afd.sys)"; }
+
 # --- RPC stack ---------------------------------------------------------------
 # NT 3.5's RPC runtime is 180k LoC across NDRLIB + NDR20 + RUNTIME.
 # Builds in dependency order: NDRLIB (NDR marshaling primitives, the
@@ -1293,6 +1335,22 @@ NTOSKRNL_TARGETS=(
 # serial (user-facing COM console + Lua I/O).
 DRIVER_TARGETS=(
     atdisk null fastfat npfs msfs serial
+    # ndis_wrapper produces ndis.lib, consumed by virtio's vionet link
+    # step — must come before `virtio`.
+    ndis_wrapper
+    virtio
+    # SCSI subsystem (class.lib -> scsiport -> scsidisk); nvme2k is a
+    # SCSI miniport on top of scsiport.
+    dd_class
+    dd_scsiport
+    dd_scsidisk
+    dd_nvme2k
+    # Network stack: tcpip.sys depends on ndis.lib + tdi.lib + ip.lib;
+    # afd depends on tdi.lib.
+    tdi_wrapper
+    tdi_tcpip_ip
+    tdi_tcpip_tcp
+    afd
 )
 
 # Drivers only useful with the GUI (input + video).

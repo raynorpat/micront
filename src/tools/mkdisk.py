@@ -476,6 +476,20 @@ _CORE_FILES: list[tuple[str, Path]] = [
     ("System32/Drivers/npfs.sys",   SDK_LIB / "npfs.sys"),
     ("System32/Drivers/msfs.sys",   SDK_LIB / "msfs.sys"),
     ("System32/Drivers/serial.sys", SDK_LIB / "serial.sys"),
+    # virtio device drivers (virtio.lib is a static lib, not loaded).
+    ("System32/Drivers/viorng.sys",   SDK_LIB / "viorng.sys"),
+    ("System32/Drivers/vioser.sys",   SDK_LIB / "vioser.sys"),
+    ("System32/Drivers/vioinput.sys", SDK_LIB / "vioinput.sys"),
+    # SCSI / NVMe storage (class.lib is a static lib, not loaded).
+    ("System32/Drivers/scsiport.sys", SDK_LIB / "scsiport.sys"),
+    ("System32/Drivers/scsidisk.sys", SDK_LIB / "scsidisk.sys"),
+    ("System32/Drivers/nvme2k.sys",   SDK_LIB / "nvme2k.sys"),
+    # NDIS + TCP/IP + AFD networking (ip.lib is a static lib, not loaded).
+    ("System32/Drivers/ndis.sys",     SDK_LIB / "ndis.sys"),
+    ("System32/Drivers/vionet.sys",   SDK_LIB / "vionet.sys"),
+    ("System32/Drivers/tdi.sys",      SDK_LIB / "tdi.sys"),
+    ("System32/Drivers/tcpip.sys",    SDK_LIB / "tcpip.sys"),
+    ("System32/Drivers/afd.sys",      SDK_LIB / "afd.sys"),
 ]
 
 # Headless adds the Win32 subsystem base.

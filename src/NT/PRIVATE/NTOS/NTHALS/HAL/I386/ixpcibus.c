@@ -24,6 +24,321 @@ VOID FASTCALL KfReleaseSpinLock(PKSPIN_LOCK SpinLock, KIRQL OldIrql);
 /* Spinlock for PCI config access serialization */
 static KSPIN_LOCK HalpPCIConfigLock;
 
+/*
+ * 32-bit MMIO window we reclaim into for BAR relocation.
+ *
+ * Floor 0xC0000000  - default i440fx pci-hole-low base. Below this is
+ *                     RAM (or the legacy ISA hole at 0xA0000-0xFFFFF)
+ *                     and the chipset's PAM region; not safe.
+ * Ceiling 0xFEC00000 - below the conventional IO-APIC (0xFEC00000),
+ *                     LAPIC (0xFEE00000) and HPET (0xFED00000) MMIO.
+ *                     Even though our HAL is PIC-only and never touches
+ *                     the IOAPIC, the chipset still claims those addresses.
+ *
+ * Plenty of room (~764 MiB) for a handful of virtio BARs that are
+ * typically 4 KiB each.
+ */
+#define HALP_PCI_LOW_BASE   0xC0000000UL
+#define HALP_PCI_LOW_TOP    0xFEC00000UL
+
+
+/*
+ * Raw CF8/CFC PCI dword access. Used only during HalpInitializePciBus
+ * (single-threaded boot context) for the BAR-relocation pass that runs
+ * before bus handlers are registered. After init, drivers call through
+ * HalGetBusData / HalSetBusData -> HalpReadPCIConfig with proper
+ * locking.
+ */
+static ULONG
+HalpRawPCIRead32(ULONG Bus, ULONG Dev, ULONG Func, ULONG RegDword)
+{
+    PCI_TYPE1_CFG_BITS cfg;
+    ULONG val;
+    cfg.u.AsULONG = 0;
+    cfg.u.bits.BusNumber = Bus;
+    cfg.u.bits.DeviceNumber = Dev;
+    cfg.u.bits.FunctionNumber = Func;
+    cfg.u.bits.RegisterNumber = RegDword;
+    cfg.u.bits.Enable = 1;
+    WRITE_PORT_ULONG(PCI_TYPE1_ADDR_PORT, cfg.u.AsULONG);
+    val = READ_PORT_ULONG((PULONG)PCI_TYPE1_DATA_PORT);
+    WRITE_PORT_ULONG(PCI_TYPE1_ADDR_PORT, 0);
+    return val;
+}
+
+static VOID
+HalpRawPCIWrite32(ULONG Bus, ULONG Dev, ULONG Func, ULONG RegDword, ULONG Value)
+{
+    PCI_TYPE1_CFG_BITS cfg;
+    cfg.u.AsULONG = 0;
+    cfg.u.bits.BusNumber = Bus;
+    cfg.u.bits.DeviceNumber = Dev;
+    cfg.u.bits.FunctionNumber = Func;
+    cfg.u.bits.RegisterNumber = RegDword;
+    cfg.u.bits.Enable = 1;
+    WRITE_PORT_ULONG(PCI_TYPE1_ADDR_PORT, cfg.u.AsULONG);
+    WRITE_PORT_ULONG((PULONG)PCI_TYPE1_DATA_PORT, Value);
+    WRITE_PORT_ULONG(PCI_TYPE1_ADDR_PORT, 0);
+}
+
+/*
+ * Probe BAR size: write all-ones, read back the mask, restore original.
+ * Caller must have already cleared PCI_ENABLE_MEMORY_SPACE / IO_SPACE
+ * in the Command register before calling.
+ *
+ * For 64-bit BARs, RegDword should be the low half; pass nonzero
+ * IsHigh64 to also probe the upper dword. Returns size in bytes
+ * (0 if BAR is unimplemented), and writes back the original value(s).
+ */
+static ULONGLONG
+HalpProbePCIBarSize(ULONG Bus, ULONG Dev, ULONG Func,
+                    ULONG RegDword, BOOLEAN Is64Bit,
+                    PULONG OrigLow, PULONG OrigHigh)
+{
+    ULONG mlow, mhi = 0;
+    ULONGLONG mask64;
+    ULONGLONG size;
+
+    *OrigLow = HalpRawPCIRead32(Bus, Dev, Func, RegDword);
+    if (Is64Bit) {
+        *OrigHigh = HalpRawPCIRead32(Bus, Dev, Func, RegDword + 1);
+    } else {
+        *OrigHigh = 0;
+    }
+
+    HalpRawPCIWrite32(Bus, Dev, Func, RegDword, 0xFFFFFFFF);
+    mlow = HalpRawPCIRead32(Bus, Dev, Func, RegDword);
+    if (Is64Bit) {
+        HalpRawPCIWrite32(Bus, Dev, Func, RegDword + 1, 0xFFFFFFFF);
+        mhi = HalpRawPCIRead32(Bus, Dev, Func, RegDword + 1);
+    }
+
+    /* Restore */
+    HalpRawPCIWrite32(Bus, Dev, Func, RegDword, *OrigLow);
+    if (Is64Bit) {
+        HalpRawPCIWrite32(Bus, Dev, Func, RegDword + 1, *OrigHigh);
+    }
+
+    /* Mask off type bits and compute size from one's-complement. */
+    if ((*OrigLow & PCI_ADDRESS_IO_SPACE) != 0) {
+        mlow &= ~0x3UL;
+        if (mlow == 0) return 0;
+        return (ULONGLONG)((~mlow + 1) & 0xFFFFUL);
+    }
+    mlow &= ~0xFUL;
+    if (Is64Bit) {
+        mask64 = ((ULONGLONG)mhi << 32) | mlow;
+        if (mask64 == 0) return 0;
+        size = (~mask64) + 1;
+    } else {
+        if (mlow == 0) return 0;
+        size = (ULONGLONG)((~mlow) + 1);
+    }
+    return size;
+}
+
+
+/*
+ * Walk every device's BARs to find the highest currently-used 32-bit
+ * MMIO end address. The relocation pass allocates above this so we
+ * don't collide with BARs the firmware already placed in the low
+ * window (e.g. transitional virtio's I/O BAR0 has a separate I/O
+ * decode and BAR2 is sometimes a 32-bit MMIO BAR; legacy VGA at
+ * 0xFE000000+ on QEMU; etc.).
+ *
+ * Returns a base aligned up to a 64 KiB boundary.
+ */
+static ULONG
+HalpFindLow32BarTop(ULONG MaxBus)
+{
+    ULONG bus, dev, func;
+    ULONG top = HALP_PCI_LOW_BASE;
+
+    for (bus = 0; bus <= MaxBus; bus++) {
+        for (dev = 0; dev < 32; dev++) {
+            for (func = 0; func < 8; func++) {
+                ULONG vd, hdr;
+                ULONG i;
+
+                vd = HalpRawPCIRead32(bus, dev, func, 0);
+                if ((vd & 0xFFFF) == 0xFFFF || (vd & 0xFFFF) == 0) {
+                    if (func == 0) break;
+                    continue;
+                }
+                hdr = HalpRawPCIRead32(bus, dev, func, 3);
+
+                /* Only Type 0 (regular endpoint) here. Type 1 bridges
+                 * use offsets 0x10/0x14 only and live elsewhere; skip. */
+                if (((hdr >> 16) & 0x7F) != PCI_DEVICE_TYPE) {
+                    continue;
+                }
+
+                for (i = 0; i < PCI_TYPE0_ADDRESSES; i++) {
+                    ULONG bar = HalpRawPCIRead32(bus, dev, func, 4 + i);
+                    BOOLEAN is64;
+                    ULONGLONG paddr, end;
+                    ULONG dummy_lo, dummy_hi;
+                    ULONGLONG bsize;
+
+                    if (bar == 0) continue;
+                    if ((bar & PCI_ADDRESS_IO_SPACE) != 0) continue;
+
+                    is64 = (bar & PCI_ADDRESS_MEMORY_TYPE_MASK) == PCI_TYPE_64BIT;
+                    if (is64) {
+                        ULONG hi = HalpRawPCIRead32(bus, dev, func, 4 + i + 1);
+                        paddr = ((ULONGLONG)hi << 32) | (bar & ~0xFUL);
+                        if (paddr >= 0x100000000ui64) {
+                            /* Lives above 4 GiB - relocation target,
+                             * doesn't constrain low free space. */
+                            i++; /* skip high half */
+                            continue;
+                        }
+                        i++; /* skip high half on next iteration */
+                    } else {
+                        paddr = (ULONGLONG)(bar & ~0xFUL);
+                    }
+
+                    if (paddr == 0) continue; /* unprogrammed */
+
+                    bsize = HalpProbePCIBarSize(bus, dev, func, 4 + (i - (is64 ? 1 : 0)),
+                                                is64, &dummy_lo, &dummy_hi);
+                    if (bsize == 0) continue;
+                    end = paddr + bsize;
+                    if (end > 0xFFFFFFFFui64) end = 0xFFFFFFFFui64;
+                    if ((ULONG)end > top) top = (ULONG)end;
+                }
+
+                if (func == 0) {
+                    /* Single-function device check */
+                    if (!((hdr >> 16) & PCI_MULTIFUNCTION)) break;
+                }
+            }
+        }
+    }
+
+    /* Round up to 64 KiB - cheap alignment, plenty of slack. */
+    top = (top + 0xFFFFUL) & ~0xFFFFUL;
+    return top;
+}
+
+
+/*
+ * BAR relocation pass: rewrite any PCI BAR placed by firmware above
+ * 4 GiB into the low 32-bit MMIO window. NT 3.5 is non-PAE; physical
+ * addresses must fit in 32 bits.
+ *
+ * On QEMU -machine pc (i440fx + PIIX3) all PCI devices sit on bus 0
+ * directly off the host bridge - no PCI-to-PCI bridges, so no bridge
+ * memory windows to widen. The host bridge accepts any address in
+ * its pci-hole. (q35 with its PCIe root ports would also need
+ * upstream-bridge Memory Base/Limit widening; not implemented.)
+ */
+static VOID
+HalpRelocateHighPciBars(ULONG MaxBus)
+{
+    ULONG bus, dev, func;
+    ULONG free_base;
+    ULONG relocated = 0;
+
+    free_base = HalpFindLow32BarTop(MaxBus);
+    DbgPrint("HAL: BAR relocation: low free starts at %08x\n", free_base);
+
+    for (bus = 0; bus <= MaxBus; bus++) {
+        for (dev = 0; dev < 32; dev++) {
+            for (func = 0; func < 8; func++) {
+                ULONG vd, hdr;
+                ULONG cmd;
+                ULONG i;
+
+                vd = HalpRawPCIRead32(bus, dev, func, 0);
+                if ((vd & 0xFFFF) == 0xFFFF || (vd & 0xFFFF) == 0) {
+                    if (func == 0) break;
+                    continue;
+                }
+                hdr = HalpRawPCIRead32(bus, dev, func, 3);
+                if (((hdr >> 16) & 0x7F) != PCI_DEVICE_TYPE) continue;
+
+                cmd = HalpRawPCIRead32(bus, dev, func, 1);
+
+                for (i = 0; i < PCI_TYPE0_ADDRESSES; i++) {
+                    ULONG bar = HalpRawPCIRead32(bus, dev, func, 4 + i);
+                    ULONG hi;
+                    BOOLEAN is64;
+                    ULONGLONG paddr;
+                    ULONGLONG bsize;
+                    ULONG orig_lo, orig_hi;
+                    ULONG new_base, mask;
+
+                    if (bar == 0) continue;
+                    if ((bar & PCI_ADDRESS_IO_SPACE) != 0) continue;
+
+                    is64 = (bar & PCI_ADDRESS_MEMORY_TYPE_MASK) == PCI_TYPE_64BIT;
+                    if (!is64) continue;  /* 32-bit BARs already addressable */
+
+                    hi = HalpRawPCIRead32(bus, dev, func, 4 + i + 1);
+                    paddr = ((ULONGLONG)hi << 32) | (bar & ~0xFUL);
+                    if (paddr < 0x100000000ui64) {
+                        /* 64-bit BAR but already in low 32 bits - leave alone */
+                        i++;
+                        continue;
+                    }
+
+                    /* Disable memory decode while we rewrite. */
+                    HalpRawPCIWrite32(bus, dev, func, 1,
+                                      cmd & ~(PCI_ENABLE_MEMORY_SPACE | PCI_ENABLE_BUS_MASTER));
+
+                    bsize = HalpProbePCIBarSize(bus, dev, func, 4 + i,
+                                                TRUE, &orig_lo, &orig_hi);
+                    if (bsize == 0 || bsize > 0x40000000ui64 /* 1 GiB sanity cap */) {
+                        DbgPrint("HAL: %d:%d.%d BAR%d sizing failed (size=%lx_%08lx), skipped\n",
+                                 bus, dev, func, i,
+                                 (ULONG)(bsize >> 32), (ULONG)bsize);
+                        HalpRawPCIWrite32(bus, dev, func, 1, cmd);
+                        i++;
+                        continue;
+                    }
+
+                    /* Align free_base up to bsize boundary. */
+                    mask = (ULONG)(bsize - 1);
+                    new_base = (free_base + mask) & ~mask;
+
+                    if ((ULONGLONG)new_base + bsize > (ULONGLONG)HALP_PCI_LOW_TOP) {
+                        DbgPrint("HAL: %d:%d.%d BAR%d (size %lx_%08lx) - low MMIO window exhausted, skipped\n",
+                                 bus, dev, func, i,
+                                 (ULONG)(bsize >> 32), (ULONG)bsize);
+                        HalpRawPCIWrite32(bus, dev, func, 1, cmd);
+                        i++;
+                        continue;
+                    }
+
+                    /* Preserve type bits (prefetch, 64-bit) from the original low half. */
+                    HalpRawPCIWrite32(bus, dev, func, 4 + i,
+                                      new_base | (orig_lo & 0xFUL));
+                    HalpRawPCIWrite32(bus, dev, func, 4 + i + 1, 0);
+
+                    DbgPrint("HAL: %d:%d.%d BAR%d relocated %08x_%08x -> %08x (size %lx_%08lx)\n",
+                             bus, dev, func, i,
+                             (ULONG)(paddr >> 32), (ULONG)paddr,
+                             new_base,
+                             (ULONG)(bsize >> 32), (ULONG)bsize);
+
+                    free_base = new_base + (ULONG)bsize;
+                    relocated++;
+
+                    /* Restore Command register (re-enable memory decode). */
+                    HalpRawPCIWrite32(bus, dev, func, 1, cmd | PCI_ENABLE_MEMORY_SPACE);
+
+                    i++; /* skip high half */
+                }
+
+                if (func == 0 && !((hdr >> 16) & PCI_MULTIFUNCTION)) break;
+            }
+        }
+    }
+
+    DbgPrint("HAL: BAR relocation: %d BAR(s) moved into low window\n", relocated);
+}
+
 /* Config I/O function type: read or write one unit at Offset */
 typedef ULONG (*FncConfigIO) (
     IN PPCIBUSDATA      BusData,
@@ -223,6 +538,12 @@ HalpInitializePciBus(VOID)
         }
     }
     WRITE_PORT_ULONG(PCI_TYPE1_ADDR_PORT, 0);
+
+    /* Pull any > 4 GiB BARs down into the low 32-bit MMIO window
+     * before drivers see them. NT 3.5 is non-PAE so high BARs are
+     * unreachable; firmware (OVMF) places virtio modern-transport
+     * BARs in the 64-bit window by default. */
+    HalpRelocateHighPciBars(MaxBus);
 
     /* Register PCI bus handlers */
     for (i = 0; i <= MaxBus; i++) {
@@ -541,6 +862,15 @@ HalpWritePCIConfig(
 
 /* ===== GetBusData / SetBusData for PCI ===== */
 
+/* Standard PCI config space is 256 bytes (CF8/CFC reaches the full
+   range — Offset register is 8 bits). The stock NT 3.5 HAL handles
+   this via a separate device-specific read path below the 64-byte
+   header; we collapse to a single clamp at MaxLen since our
+   HalpReadPCIConfig already does sub-dword chunking correctly.
+   PCIe extended config (256..4095) needs MMCONFIG which we don't
+   support — but the standard 256 bytes are enough to walk the PCI
+   capability list, which is where modern virtio caps live. */
+
 ULONG
 HalpGetPCIData(
     IN PBUSHANDLER BusHandler,
@@ -552,29 +882,28 @@ HalpGetPCIData(
     )
 {
     PCI_SLOT_NUMBER Slot;
-    UCHAR Header[PCI_COMMON_HDR_LENGTH];
-    ULONG ReadLen;
+    USHORT VendorId;
+    ULONG  Avail;
+    const ULONG MaxLen = sizeof(PCI_COMMON_CONFIG);
 
     if (Length == 0) return 0;
 
     Slot.u.AsULONG = SlotNumber;
     if (Slot.u.bits.DeviceNumber >= PCI_MAX_DEVICES) return 0;
 
-    /* Read the header to validate the device exists */
-    HalpReadPCIConfig(BusHandler, Slot, Header, 0, PCI_COMMON_HDR_LENGTH);
-    if (*((PUSHORT)Header) == 0xFFFF) {
+    /* Existence probe — cheaper than reading the whole 64-byte header. */
+    HalpReadPCIConfig(BusHandler, Slot, &VendorId, 0, sizeof(VendorId));
+    if (VendorId == 0xFFFF) {
         RtlFillMemory(Buffer, Length, 0xFF);
         return 2;  /* return 2 = device doesn't exist */
     }
 
-    /* Read requested range */
-    ReadLen = (Offset + Length > PCI_COMMON_HDR_LENGTH) ?
-              PCI_COMMON_HDR_LENGTH - Offset : Length;
-    if (ReadLen > 0 && Offset < PCI_COMMON_HDR_LENGTH) {
-        HalpReadPCIConfig(BusHandler, Slot, Buffer, Offset, ReadLen);
-    }
+    if (Offset >= MaxLen) return 0;
+    Avail = MaxLen - Offset;
+    if (Length > Avail) Length = Avail;
 
-    return ReadLen;
+    HalpReadPCIConfig(BusHandler, Slot, Buffer, Offset, Length);
+    return Length;
 }
 
 ULONG
@@ -588,20 +917,20 @@ HalpSetPCIData(
     )
 {
     PCI_SLOT_NUMBER Slot;
-    ULONG WriteLen;
+    ULONG  Avail;
+    const ULONG MaxLen = sizeof(PCI_COMMON_CONFIG);
 
     if (Length == 0) return 0;
 
     Slot.u.AsULONG = SlotNumber;
     if (Slot.u.bits.DeviceNumber >= PCI_MAX_DEVICES) return 0;
 
-    WriteLen = (Offset + Length > PCI_COMMON_HDR_LENGTH) ?
-               PCI_COMMON_HDR_LENGTH - Offset : Length;
-    if (WriteLen > 0 && Offset < PCI_COMMON_HDR_LENGTH) {
-        HalpWritePCIConfig(BusHandler, Slot, Buffer, Offset, WriteLen);
-    }
+    if (Offset >= MaxLen) return 0;
+    Avail = MaxLen - Offset;
+    if (Length > Avail) Length = Avail;
 
-    return WriteLen;
+    HalpWritePCIConfig(BusHandler, Slot, Buffer, Offset, Length);
+    return Length;
 }
 
 

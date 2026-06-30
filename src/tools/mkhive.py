@@ -583,7 +583,13 @@ def build_micront_system_hive(profile: str = "headless",
         .set_multi_sz("List", [
             "Base",
             "Extended base",
+            "Virtio",
+            "SCSI miniport",
+            "SCSI Class",
             "File System",
+            "NDIS",
+            "NDIS Miniport",
+            "TDI",
             "Video Init",
             "Video",
             "Keyboard Class",
@@ -676,6 +682,102 @@ def build_micront_system_hive(profile: str = "headless",
     # LsapDbInitializeServer(2). Missing key = null deref in kernel32.
     control["ComputerName\\ComputerName"] \
         .set_sz("ComputerName", "MICRONT")
+
+    # --- SCSI / NVMe storage stack --------------------------------------
+    # scsiport.sys is the miniport framework; nvme2k.sys registers against
+    # it; scsidisk.sys surfaces \Device\Harddisk<N>\Partition<P>.
+    # DependOnService enforces load order on top of ServiceGroupOrder.
+    services["scsiport"] \
+        .set_dword("Type",         1) \
+        .set_dword("Start",        1) \
+        .set_dword("ErrorControl", 1) \
+        .set_sz("Group", "SCSI miniport")
+    services["nvme2k"] \
+        .set_dword("Type",         1) \
+        .set_dword("Start",        1) \
+        .set_dword("ErrorControl", 1) \
+        .set_sz("Group", "SCSI miniport") \
+        .set_multi_sz("DependOnService", ["scsiport"])
+    services["scsidisk"] \
+        .set_dword("Type",         1) \
+        .set_dword("Start",        1) \
+        .set_dword("ErrorControl", 1) \
+        .set_sz("Group", "SCSI Class") \
+        .set_multi_sz("DependOnService", ["scsiport"])
+
+    # --- virtio device drivers ------------------------------------------
+    # PCI bus-walk drivers in the "Virtio" group; load once the kernel +
+    # HAL have enumerated the PCI bus. viorng -> \Device\VirtioRng0,
+    # vioser -> \Device\VirtioCon0, vioinput -> keyboard/mouse port devices.
+    services["viorng"] \
+        .set_dword("Type",         1) \
+        .set_dword("Start",        1) \
+        .set_dword("ErrorControl", 1) \
+        .set_sz("Group", "Virtio")
+    services["vioser"] \
+        .set_dword("Type",         1) \
+        .set_dword("Start",        1) \
+        .set_dword("ErrorControl", 1) \
+        .set_sz("Group", "Virtio")
+    services["vioinput"] \
+        .set_dword("Type",         1) \
+        .set_dword("Start",        1) \
+        .set_dword("ErrorControl", 1) \
+        .set_sz("Group", "Virtio")
+
+    # --- Networking: NDIS -> vionet miniport -> TDI / TCPIP / AFD --------
+    # NDIS reads <service>\Linkage\Bind to discover adapters; per-adapter
+    # config lives under Services\<adapter>\Parameters\. tcpip's Linkage\Bind
+    # names the adapter the protocol attaches to. DependOnService enforces
+    # driver load order on top of the ServiceGroupOrder bucket.
+    services["ndis"] \
+        .set_dword("Type",         1) \
+        .set_dword("Start",        1) \
+        .set_dword("ErrorControl", 1) \
+        .set_sz("Group", "NDIS")
+    vionet = services["vionet"]
+    vionet.set_dword("Type",         1) \
+          .set_dword("Start",        1) \
+          .set_dword("ErrorControl", 1) \
+          .set_sz("Group", "NDIS Miniport") \
+          .set_multi_sz("DependOnService", ["ndis"])
+    vionet["Linkage"] \
+        .set_multi_sz("Bind",   ["\\Device\\Vionet1"]) \
+        .set_multi_sz("Export", ["\\Device\\Vionet1"]) \
+        .set_multi_sz("Route",  ["\"vionet\""])
+    # NDIS-3 convention: the adapter name from Linkage\Bind doubles as a
+    # top-level Services key; NDIS reads BusType/BusNumber from its
+    # Parameters subkey. PCIBus = 5; bus 0 (QEMU -machine pc has only bus 0).
+    services["Vionet1"]["Parameters"] \
+        .set_dword("BusType",   5) \
+        .set_dword("BusNumber", 0)
+    # tcpip reads per-adapter IP config from Services\<Adapter>\Parameters\Tcpip.
+    # Static config for QEMU's -netdev user NAT (guest 10.0.2.15, gw 10.0.2.2).
+    services["Vionet1"]["Parameters"]["Tcpip"] \
+        .set_dword("EnableDHCP",     0) \
+        .set_multi_sz("IPAddress",      ["10.0.2.15"]) \
+        .set_multi_sz("SubnetMask",     ["255.255.255.0"]) \
+        .set_multi_sz("DefaultGateway", ["10.0.2.2"])
+    services["tdi"] \
+        .set_dword("Type",         1) \
+        .set_dword("Start",        1) \
+        .set_dword("ErrorControl", 1) \
+        .set_sz("Group", "TDI")
+    tcpip = services["tcpip"]
+    tcpip.set_dword("Type",         1) \
+         .set_dword("Start",        1) \
+         .set_dword("ErrorControl", 1) \
+         .set_sz("Group", "TDI") \
+         .set_multi_sz("DependOnService", ["ndis", "tdi"])
+    tcpip["Linkage"].set_multi_sz("Bind", ["\\Device\\Vionet1"])
+    tcpip["Parameters"]
+    # afd.sys - socket emulation above TDI (\Device\Afd). No static config.
+    services["afd"] \
+        .set_dword("Type",         1) \
+        .set_dword("Start",        1) \
+        .set_dword("ErrorControl", 1) \
+        .set_sz("Group", "TDI") \
+        .set_multi_sz("DependOnService", ["tcpip"])
 
     if profile == "gui":
         # Video: Bochs VGA miniport (QEMU stdvga, PCI 1234:1111).
