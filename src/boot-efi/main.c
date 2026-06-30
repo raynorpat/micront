@@ -50,23 +50,40 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
 
     if (fs_init(ImageHandle) != EFI_SUCCESS) goto halt;
 
-    /* Load only what the kernel handoff needs: the kernel itself, HAL,
-     * the boot drivers required to mount the boot volume (atdisk + fastfat),
-     * the registry hive, and the NLS tables. User-mode images (smss,
-     * ntdll, kernel32) stay on-disk — the kernel mounts the boot volume
-     * via atdisk+fastfat and reads them at runtime, just like OSLOADER. */
-    void *blob_kernel  = 0, *blob_hal    = 0;
-    void *blob_atdisk  = 0, *blob_fastfat = 0;
-    UINTN sz_kernel, sz_hal, sz_atdisk, sz_fastfat, sz_dummy;
+    /* Load what the kernel handoff needs: the kernel itself, HAL, every
+     * candidate boot-disk driver (atdisk for legacy IDE, scsiport+
+     * scsidisk+nvme2k for NVMe, vioblk for virtio-blk), the FS drivers
+     * (fastfat for FAT16, ntfs for NTFS volumes), the registry hive,
+     * and NLS.  We pre-load *all* candidate disk + FS drivers
+     * unconditionally — discovery in each driver's DriverEntry decides
+     * which one binds at runtime.  Same image boots on pc+IDE (atdisk
+     * wins, nvme2k+vioblk bail on PCI walk), q35+NVMe (nvme2k claims),
+     * q35+virtio-blk (vioblk claims).  fastfat claims FAT16 volumes;
+     * ntfs returns STATUS_UNRECOGNIZED_VOLUME on FAT BPBs (no NTFS
+     * volumes today — driver loaded but inactive).  All ErrorControl=
+     * Normal so no-hardware/no-volume returns are logged not
+     * bugchecked.  User-mode images (ntdll, kernel32) stay on disk. */
+    void *blob_kernel   = 0, *blob_hal      = 0;
+    void *blob_atdisk   = 0, *blob_scsiport = 0;
+    void *blob_scsidisk = 0, *blob_nvme2k   = 0;
+    void *blob_vioblk   = 0, *blob_fastfat  = 0;
+    void *blob_ntfs     = 0;
+    UINTN sz_kernel, sz_hal;
+    UINTN sz_atdisk, sz_scsiport, sz_scsidisk, sz_nvme2k, sz_vioblk, sz_fastfat, sz_ntfs;
     {
         void  *buf;
         UINTN  size;
-        fs_read(L"\\System32\\ntoskrnl.exe",          PK_FIRMWARE_TEMP, &blob_kernel,  &sz_kernel);
-        fs_read(L"\\System32\\hal.dll",                PK_FIRMWARE_TEMP, &blob_hal,     &sz_hal);
-        fs_read(L"\\System32\\Drivers\\atdisk.sys",    PK_FIRMWARE_TEMP, &blob_atdisk,  &sz_atdisk);
-        fs_read(L"\\System32\\Drivers\\fastfat.sys",   PK_FIRMWARE_TEMP, &blob_fastfat, &sz_fastfat);
-        fs_read(L"\\System32\\config\\SYSTEM",         PK_REGISTRY,     &buf, &size); (void)size;
-        (void)buf; (void)sz_dummy;
+        fs_read(L"\\System32\\ntoskrnl.exe",            PK_FIRMWARE_TEMP, &blob_kernel,   &sz_kernel);
+        fs_read(L"\\System32\\hal.dll",                  PK_FIRMWARE_TEMP, &blob_hal,      &sz_hal);
+        fs_read(L"\\System32\\Drivers\\atdisk.sys",      PK_FIRMWARE_TEMP, &blob_atdisk,   &sz_atdisk);
+        fs_read(L"\\System32\\Drivers\\scsiport.sys",    PK_FIRMWARE_TEMP, &blob_scsiport, &sz_scsiport);
+        fs_read(L"\\System32\\Drivers\\scsidisk.sys",    PK_FIRMWARE_TEMP, &blob_scsidisk, &sz_scsidisk);
+        fs_read(L"\\System32\\Drivers\\nvme2k.sys",      PK_FIRMWARE_TEMP, &blob_nvme2k,   &sz_nvme2k);
+        fs_read(L"\\System32\\Drivers\\vioblk.sys",      PK_FIRMWARE_TEMP, &blob_vioblk,   &sz_vioblk);
+        fs_read(L"\\System32\\Drivers\\fastfat.sys",     PK_FIRMWARE_TEMP, &blob_fastfat,  &sz_fastfat);
+        fs_read(L"\\System32\\Drivers\\ntfs.sys",        PK_FIRMWARE_TEMP, &blob_ntfs,     &sz_ntfs);
+        fs_read(L"\\System32\\config\\SYSTEM",           PK_REGISTRY,      &buf, &size); (void)size;
+        (void)buf;
     }
 
     /* NLS: NT's Phase1Initialization (NTOS/INIT/INIT.C:392) computes
@@ -112,13 +129,53 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
 
     /* Stage kernel + HAL + boot drivers via the PE loader: sections to
      * their virtual addresses, base relocations applied. Then resolve
-     * imports so calls between modules get patched to real addresses. */
+     * imports so calls between modules get patched to real addresses.
+     *
+     * Drivers staged unconditionally as a profile-agnostic candidate
+     * set: atdisk (legacy IDE), scsiport+scsidisk+nvme2k (NVMe via the
+     * SCSI miniport stack), fastfat (FS).  Each disk driver decides at
+     * DriverEntry whether its hardware is present; the losers return
+     * STATUS_NO_SUCH_DEVICE and the kernel logs + skips.  Order in the
+     * pre-load list doesn't dictate runtime load order — the kernel's
+     * IopInitializeBootDrivers walks LoadOrderList by ServiceGroupOrder
+     * and DependOnService dependencies. */
     static pe_image_t kernel, hal;
-    static pe_image_t drivers[2];
+    static pe_image_t drivers[7];   /* atdisk, scsiport, nvme2k, vioblk, scsidisk, fastfat, ntfs */
     UINTN n_drivers = 0;
     {
-        pe_image_t all[4];
+        pe_image_t all[2 + 7];      /* kernel + hal + drivers[] */
         UINTN n = 0;
+
+        /* Order matters: the kernel's IopInitializeBootDrivers walks
+         * LoaderBlock->BootDriverListHead in the order we wire it here
+         * (it does NOT re-sort by ServiceGroupOrder — real NT's
+         * OSLOADER sorted before handoff; we hand-sort instead).
+         *
+         * Constraints:
+         *   - scsiport.sys before any miniport (nvme2k / vioblk import
+         *     the framework's ScsiPortInitialize).
+         *   - All SCSI miniports (nvme2k, vioblk) before scsidisk:
+         *     scsidisk's DriverEntry eagerly walks \Device\ScsiPort0..N
+         *     and returns STATUS_NO_SUCH_DEVICE if the namespace is
+         *     empty.  Loading scsidisk before any miniport has
+         *     registered surfaces zero disks even when the hardware
+         *     is present.
+         *   - fastfat.sys at any point — it doesn't touch disk state
+         *     at DriverEntry. */
+        struct { void *blob; UINTN size; const char *name; } stage_list[] = {
+            { blob_atdisk,   sz_atdisk,   "atdisk.sys"   },
+            { blob_scsiport, sz_scsiport, "scsiport.sys" },
+            { blob_nvme2k,   sz_nvme2k,   "nvme2k.sys"   },
+            { blob_vioblk,   sz_vioblk,   "vioblk.sys"   },
+            { blob_scsidisk, sz_scsidisk, "scsidisk.sys" },
+            /* FS drivers last; they don't touch hardware at DriverEntry,
+             * just register a recognizer with the I/O manager.  fastfat
+             * before ntfs is alphabetic-ish; both probe each volume's
+             * BPB at mount time, the matching one claims it. */
+            { blob_fastfat,  sz_fastfat,  "fastfat.sys"  },
+            { blob_ntfs,     sz_ntfs,     "ntfs.sys"     },
+        };
+        const UINTN N_STAGE = sizeof(stage_list) / sizeof(stage_list[0]);
 
         if (blob_kernel && pe_stage(blob_kernel, sz_kernel,
                                     PK_KERNEL_IMAGE, "ntoskrnl.exe",
@@ -126,29 +183,50 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
         if (blob_hal && pe_stage(blob_hal, sz_hal,
                                  PK_HAL_IMAGE, "hal.dll",
                                  &hal) == EFI_SUCCESS) all[n++] = hal;
-        if (blob_atdisk && pe_stage(blob_atdisk, sz_atdisk,
-                                    PK_BOOT_DRIVER, "atdisk.sys",
-                                    &drivers[n_drivers]) == EFI_SUCCESS) {
-            all[n++] = drivers[n_drivers]; n_drivers++;
-        }
-        if (blob_fastfat && pe_stage(blob_fastfat, sz_fastfat,
-                                     PK_BOOT_DRIVER, "fastfat.sys",
-                                     &drivers[n_drivers]) == EFI_SUCCESS) {
-            all[n++] = drivers[n_drivers]; n_drivers++;
+
+        for (UINTN i = 0; i < N_STAGE; i++) {
+            if (!stage_list[i].blob) {
+                BXLOG(L"%a: missing blob, skipping", stage_list[i].name);
+                continue;
+            }
+            if (pe_stage(stage_list[i].blob, stage_list[i].size,
+                         PK_BOOT_DRIVER, stage_list[i].name,
+                         &drivers[n_drivers]) == EFI_SUCCESS) {
+                all[n++] = drivers[n_drivers];
+                n_drivers++;
+            } else {
+                BXLOG(L"%a: pe_stage failed", stage_list[i].name);
+            }
         }
 
         /* Two passes for ntoskrnl<->hal circular dep: both are staged
-         * before any import resolution. */
+         * before any import resolution.  scsidisk imports scsiport,
+         * nvme2k imports scsiport — same pre-stage-then-resolve pattern
+         * handles those naturally. */
         for (UINTN i = 0; i < n; i++) pe_resolve_imports(&all[i], all, n);
     }
 
-    /* Query boot disk geometry + MBR signature/checksum while UEFI is
-     * still up. Geometry feeds atdisk's INT13 table (hwtree); MBR
-     * sig/checksum feeds the kernel's IopCreateArcNames matching (lpb). */
+    /* Query boot disk geometry + MBR signature/checksum + partition
+     * layout while UEFI is still up.  Geometry feeds atdisk's INT13
+     * table (hwtree); MBR sig/checksum + partition numbers feed the
+     * kernel's IopCreateArcNames matching + ArcBootDeviceName /
+     * ArcHalDeviceName (lpb).
+     *
+     * Partition selection (single rule for all layouts):
+     *   - Walk the 4 MBR partition entries in slot order.
+     *   - If exactly one slot has type != 0 → that's both boot + HAL
+     *     (single-partition layout).
+     *   - Otherwise → HAL = first slot with type 0xEF (the UEFI ESP);
+     *                 boot = first non-empty slot that isn't HAL.
+     *     Fallback when there's no 0xEF slot (some firmware boots
+     *     plain FAT type 0x06): HAL = first non-empty slot, boot =
+     *     next non-empty slot. */
     UINT64 total_blocks = 0;
     UINT32 block_size   = 0;
     UINT32 mbr_sig      = 0;
     UINT32 mbr_neg_sum  = 0;
+    UINT8  boot_part    = 1;
+    UINT8  hal_part     = 1;
     if (fs_boot_disk_size(&total_blocks, &block_size) == EFI_SUCCESS) {
         /* Read MBR (sector 0). FAT/MBR sectors are 512 B; pad for safety. */
         static UINT8 mbr[4096] __attribute__((aligned(4)));
@@ -160,12 +238,73 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
             /* Disk signature lives at MBR offset 0x1B8 (4 bytes, LE). */
             mbr_sig = *(UINT32 *)(mbr + 0x1B8);
             BXLOG(L"MBR signature=0x%x sum=0x%x negsum=0x%x", mbr_sig, sum, mbr_neg_sum);
+
+            /* Walk 4 partition entries at offset 0x1BE; type byte is
+             * at entry[+4].  Slot index in MBR maps 1:1 onto NT's
+             * partition(N) numbering. */
+            UINT8 esp_slot      = 0;
+            UINT8 first_used    = 0;
+            UINT8 second_used   = 0;
+            UINT8 first_non_esp = 0;
+            int   n_used        = 0;
+            for (int i = 0; i < 4; i++) {
+                UINT8 *e = mbr + 0x1BE + i * 16;
+                UINT8 type = e[4];
+                if (type == 0) continue;
+                UINT8 slot = (UINT8)(i + 1);
+                n_used++;
+                if (!first_used) first_used = slot;
+                else if (!second_used) second_used = slot;
+                if (type == 0xEF && !esp_slot) esp_slot = slot;
+                if (type != 0xEF && !first_non_esp) first_non_esp = slot;
+            }
+            if (n_used == 0) {
+                BXLOG(L"MBR has no usable partitions — boot will fail");
+            } else if (n_used == 1) {
+                boot_part = hal_part = first_used;
+            } else if (esp_slot && first_non_esp) {
+                hal_part  = esp_slot;
+                boot_part = first_non_esp;
+            } else if (esp_slot) {
+                /* All non-empty slots are 0xEF — degenerate, treat
+                 * the first as both. */
+                boot_part = hal_part = esp_slot;
+            } else {
+                /* No 0xEF slot: assume firmware booted from slot 1
+                 * (typical for raw-FAT bootable layouts), system on
+                 * slot 2. */
+                hal_part  = first_used;
+                boot_part = second_used ? second_used : first_used;
+            }
+            BXLOG(L"layout: %d partitions, ArcBoot=partition(%d) ArcHal=partition(%d)",
+                  n_used, boot_part, hal_part);
         } else {
             BXLOG(L"MBR read failed — ARC name match will fail");
         }
-        lpb_set_boot_disk(mbr_sig, mbr_neg_sum);
+        lpb_set_boot_disk(mbr_sig, mbr_neg_sum, boot_part, hal_part);
     } else {
         BXLOG(L"boot disk size query failed — atdisk may not mount");
+    }
+
+    /* Wall-clock seed.  RT->GetTime() is a UEFI Runtime Service — it
+     * doesn't allocate and Runtime Services survive ExitBootServices,
+     * so timing is flexible.  HAL converts EFI_TIME → 100-ns since
+     * 1601 at HAL init and anchors KeBootTime against the boot-time
+     * TSC.  Year==0 sentinel = no seed (RT->GetTime failed); HAL falls
+     * back to the old "1601" zero-time behaviour gracefully
+     * (HalQueryRealTimeClock returns FALSE).  qemu / EC2 / GCE / Azure
+     * all return UTC. */
+    {
+        EFI_TIME t = { 0 };
+        EFI_STATUS s = uefi_call_wrapper(RT->GetTime, 2, &t, NULL);
+        if (!EFI_ERROR(s)) {
+            lpb_set_boot_time(&t);
+            BXLOG(L"UEFI time: %u-%02u-%02u %02u:%02u:%02u tz=%d",
+                  t.Year, t.Month, t.Day,
+                  t.Hour, t.Minute, t.Second, t.TimeZone);
+        } else {
+            BXLOG(L"RT->GetTime failed: 0x%lx", (UINT64)s);
+        }
     }
 
     /* Pre-exit: reserve the machine-state pages (PD, PCR, TSS, stacks). */

@@ -38,9 +38,9 @@ include mac386.inc
         EXTRNP  _KeUpdateSystemTime,0
         EXTRNP  Kei386EoiHelper,0,IMPORT
         EXTRNP  _HalBeginSystemInterrupt,3
+        EXTRNP  _HalpClockTickIncrement,0
 
 CLOCK_VECTOR            EQU     030H    ; IRQ0 = PRIMARY_VECTOR_BASE + 0
-CLOCK_INCREMENT         EQU     100000  ; 10ms in 100ns units (100Hz)
 
 _TEXT   SEGMENT DWORD PUBLIC 'CODE'
         ASSUME  DS:FLAT, ES:FLAT, SS:NOTHING, FS:NOTHING, GS:NOTHING
@@ -85,7 +85,14 @@ cPublicProc _HalpClockInterrupt     ,0
 ; Hand off to KeUpdateSystemTime with eax = tick increment. It returns
 ; to our caller via INTERRUPT_EXIT → HalEndSystemInterrupt → Kei386EoiHelper.
 ;
-        mov     eax, CLOCK_INCREMENT
+; Compute the increment dynamically from the TSC delta since the
+; previous tick (HalpClockTickIncrement → eax in 100-ns units). This
+; replaces the original fixed 100000 so SystemTime tracks invariant-
+; TSC accuracy rather than PIT crystal drift.  __stdcall preserves
+; ebp / ebx / esi / edi, so the trap-frame pointer in ebp survives
+; the call.
+;
+        stdCall _HalpClockTickIncrement
         jmp     _KeUpdateSystemTime@0
 
 Hci_spurious:

@@ -46,8 +46,25 @@ void lpb_set_nls(EFI_PHYSICAL_ADDRESS base_phys,
  * needed to satisfy IopCreateArcNames (NTOS/IO/IOINIT.C:1355):
  *   mbr_signature : DWORD at MBR offset 0x1B8.
  *   mbr_checksum  : two's complement of the sum of the first 128 DWORDs
- *                   of the MBR (kernel adds its own sum and expects 0). */
-void lpb_set_boot_disk(UINT32 mbr_signature, UINT32 mbr_checksum);
+ *                   of the MBR (kernel adds its own sum and expects 0).
+ *   boot_part     : 1-based partition number for ArcBootDeviceName —
+ *                   where \SystemRoot resolves.  Caller probes the MBR
+ *                   partition table to choose this (typically the
+ *                   first non-empty non-ESP slot, or the only slot for
+ *                   single-partition layouts).
+ *   hal_part      : 1-based partition number for ArcHalDeviceName —
+ *                   where HAL was loaded from (the ESP, or the only
+ *                   slot for single-partition layouts).
+ * Either part number may equal the other; both must be in 1..4. */
+void lpb_set_boot_disk(UINT32 mbr_signature, UINT32 mbr_checksum,
+                       UINT8 boot_part, UINT8 hal_part);
+
+/* Optional.  Latches a UEFI gRT->GetTime() result for HAL to consume
+ * as a wall-clock seed.  If never called (or if the EFI_TIME's Year
+ * is zero), lpb_build won't allocate a seed struct and Spare1 stays
+ * 0 — HAL detects that and reports "no UEFI time seed", leaving
+ * KeBootTime at the 1601 zero point. */
+void lpb_set_boot_time(const EFI_TIME *t);
 
 /* Store the ConfigurationRoot KSEG0 VA. Call with the return value of
  * hwtree_build() before `lpb_build`. */

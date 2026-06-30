@@ -1,0 +1,26 @@
+# MicroNT — gdb global config.
+#
+# All command extensions live in `gdb_nt.py` under the `nt` namespace
+# (`nt regs`, `nt seh`, `nt status`, `nt modules`, ...).  This file
+# only does session-level config that has to happen before extensions
+# load — it doesn't define any user commands of its own.
+#
+# Source manually with `(gdb) source src/tools/gdb.init` if you've
+# launched gdb yourself.
+#
+# Don't `set architecture i386` here — qemu-system-x86_64 (we always
+# use the x86_64 binary regardless of guest mode) reports its target
+# description as i386:x86-64, and a forced i386 setting makes gdb
+# reject the description and drop the connection with "Remote 'g'
+# packet reply is too long (expected 312 bytes, got 608 bytes)".
+# Letting auto-detection take QEMU's tdesc gives us 64-bit register
+# layout but the i386 symbols still resolve and disassembly switches
+# to 32-bit when CS points at a 32-bit segment (which it always does
+# in NT kernel mode).
+set disassembly-flavor intel
+
+# KPCR convenience variable for ad-hoc gdb expressions.  The Python
+# `nt pcr` / `nt seh` commands carry their own copy of this constant
+# (KPCR_VA in gdb_nt.py); kept here too so a hand-typed expression
+# like `x/4xw $kpcr+0x20` works without sourcing the Python module.
+set $kpcr = 0xFFDFF000

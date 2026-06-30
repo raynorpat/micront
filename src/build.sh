@@ -683,6 +683,55 @@ build_link() {
     echo ">>> LINK.EXE rebuilt with error message resources"
 }
 
+# --- Debug toolchain: CV4 -> DWARF host tools --------------------------------
+# Ported from main-lua. imagehlp.dll exposes splitsym (CV -> .DBG sidecar
+# extractor) + MapDebugInformation (consumed by dbg2dwf); dbg2dwf converts
+# the .DBG sidecar to a DWARF-2 ELF gdb loads via add-symbol-file. cvpack
+# consolidates CodeView post-link (mkmsg builds its message resources);
+# cvdump inspects raw CV4 records. All host EXEs installed into wibo-tools.
+build_mkmsg() {
+    local dir="$NT_ROOT/PRIVATE/SDKTOOLS/VCTOOLS/MSG"
+    run_nmake "$dir" "MKMSG - message-resource compiler" || return 1
+    install_host_tool "$dir/obj/i386/mkmsg.exe" "MKMSG.EXE"
+}
+build_imagehlp() {
+    # IMAGEHLP/MAKEFILE.INC pulls rtl_user's imagedir.obj — build it first.
+    build_rtl_user || return 1
+    local dir="$NT_ROOT/PRIVATE/SDKTOOLS/IMAGEHLP"
+    KEEP_UMAPPL=1 run_nmake "$dir" "IMAGEHLP - imagehlp.dll + splitsym + binplace" makedll=1 || return 1
+    install_host_tool "$NT_ROOT/PUBLIC/SDK/LIB/I386/imagehlp.dll" "IMAGEHLP.DLL" || return 1
+    install_host_tool "$dir/obj/i386/splitsym.exe" "SPLITSYM.EXE" || return 1
+    install_host_tool "$dir/obj/i386/binplace.exe" "BINPLACE.EXE"
+}
+build_cvpack() {
+    build_mkmsg || return 1
+    run_nmake "$NT_ROOT/PRIVATE/SDKTOOLS/VCTOOLS/PDB/DBI" "pdb/dbi.lib" || return 1
+    local dir="$NT_ROOT/PRIVATE/SDKTOOLS/VCTOOLS/CVPACK"
+    run_nmake "$dir" "CVPACK - CodeView packer" || return 1
+    install_host_tool "$dir/obj/i386/cvpack.exe" "CVPACK.EXE" || return 1
+    install_host_tool "$dir/obj/i386/cvpack.err" "cvpack.err"
+}
+build_cvdump() {
+    build_imagehlp || return 1
+    local dir="$NT_ROOT/PRIVATE/SDKTOOLS/VCTOOLS/CVDUMP"
+    run_nmake "$dir" "CVDUMP - CodeView inspector" || return 1
+    install_host_tool "$dir/obj/i386/cvdump.exe" "CVDUMP.EXE"
+}
+build_dbg2dwf() {
+    build_imagehlp || return 1
+    local dir="$NT_ROOT/PRIVATE/SDKTOOLS/VCTOOLS/DBG2DWF"
+    run_nmake "$dir" "DBG2DWF - .DBG to DWARF ELF" || return 1
+    install_host_tool "$dir/obj/i386/dbg2dwf.exe" "DBG2DWF.EXE"
+}
+# Whole debug host-tool set. imagehlp built once up front; the leaf tools
+# re-check it (nmake no-ops when current).
+build_debugtools() {
+    build_imagehlp || return $?
+    build_dbg2dwf  || return $?
+    build_cvdump   || return $?
+    build_cvpack   || return $?
+}
+
 # MC (message compiler). Two patches live in our source tree relative to
 # stock NT 3.5 mc.c:
 #   - MC.C drops user32!CharToOem (wibo has no stub; safe for ASCII .mc).
@@ -1574,6 +1623,7 @@ _dispatch_one() {
                 echo "Profile targets: all (=gui), gui, headless"
                 echo "Group targets:   ntoskrnl, drivers, drivers-gui,"
                 echo "                 userland-micront, userland, userland-gui, disk"
+                echo "Debug toolchain: debugtools (imagehlp+splitsym, dbg2dwf, cvdump, cvpack)"
                 echo ""
                 echo "Individual components (in build order):"
                 echo "  ntoskrnl:          ${NTOSKRNL_TARGETS[*]}"

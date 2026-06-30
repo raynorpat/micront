@@ -138,6 +138,31 @@ Return Value:
             return FALSE;
         } else {
 
+#if NTOS_KERNEL_RUNTIME
+            //
+            // SEH chain integrity guard — paired with the chain walker
+            // in KE/I386/EXCEPTN.C.  Default OFF; flip the macro below
+            // (or pass -DKI_SEH_VALIDATE_CHAIN=1) to enable both halves.
+            // See SEH-PROBLEMS.md for the recipe.  When ON: handler must
+            // point into kernel code (or HAL/driver code).  Anything at
+            // or above 0xFB000000 is heap data masquerading as code -
+            // catch it here rather than letting
+            // RtlpExecuteHandlerForException do `call ecx` against pool
+            // and #UD into KiSystemFatalException.
+            //
+#ifndef KI_SEH_VALIDATE_CHAIN
+#define KI_SEH_VALIDATE_CHAIN 0
+#endif
+#if KI_SEH_VALIDATE_CHAIN
+            if ((ULONG)RegistrationPointer->Handler >= 0xFB000000) {
+                KeBugCheckEx(0xCAFE5E1F,
+                             (ULONG)RegistrationPointer, 5,
+                             (ULONG)RegistrationPointer->Handler,
+                             ExceptionRecord->ExceptionCode);
+            }
+#endif
+#endif
+
             //
             // The handler must be executed by calling another routine
             // that is written in assembler. This is required because
