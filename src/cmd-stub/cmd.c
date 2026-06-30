@@ -319,6 +319,14 @@ static int do_move(int argc, char **argv)
         dst = dst_buf;
     }
 
+    /* Idempotency for re-runs: if the source is already gone but the
+     * destination exists, a prior build already moved it — succeed quietly.
+     * (NT makefiles `mv` generated files unconditionally even when the
+     * generator step was skipped as up-to-date.) */
+    if (GetFileAttributesA(src) == INVALID_FILE_ATTRIBUTES &&
+        GetFileAttributesA(dst) != INVALID_FILE_ATTRIBUTES)
+        return 0;
+
     DeleteFileA(dst);   /* MoveFileA fails if the destination exists */
     if (!MoveFileA(src, dst)) {
         fprintf(stderr, "cmd-stub: mv %s -> %s failed: %lu\n",

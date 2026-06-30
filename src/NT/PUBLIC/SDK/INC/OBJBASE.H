@@ -7010,6 +7010,12 @@ STDAPI_(void) SharedMemFree(void *pmem, DWORD dwReserved);
 
 
 
+/* The persistent-instance APIs have downlevel-specific signatures (with
+ * OLE1-load params) that CAIROLE's ole2com.h declares for internal use when
+ * building Cairo OLE for the downlevel (Daytona) target. Skip the public
+ * Cairo-native prototypes there to avoid a conflicting redeclaration; normal
+ * builds (no CAIROLE_DOWNLEVEL) get them as before. */
+#ifndef CAIROLE_DOWNLEVEL
 STDAPI CoNewPersistentInstance(
     REFCLSID rclsid,
     REFIID riid,
@@ -7027,6 +7033,7 @@ STDAPI CoGetPersistentInstance(
     WCHAR *pwszName,
     struct IStorage *pstg,
     void **ppvUnk);
+#endif
 
 /****** DV APIs ***********************************************************/
 
