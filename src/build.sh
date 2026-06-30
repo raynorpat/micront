@@ -9,8 +9,10 @@
 #   component:  ke, rtl, ex, ob, se, ps, mm, cache, config, init, hal, all
 #   If no component specified, builds all
 #
-# Prerequisites: wibo-x86_64 binary at repo root, src/wibo-tools/ populated
-# with symlinks to PUBLIC/OAK/BIN/I386 + CRTDLL.DLL.
+# Prerequisites: a wibo binary — wibo-macos on macOS,
+# wibo-x86_64 at the repo root on Linux. The src/wibo-tools/
+# directory (symlinks to PUBLIC/OAK/BIN/I386 + CRTDLL.DLL) is provisioned
+# automatically on first run via setup-wibo-tools.sh.
 #
 
 set -e
@@ -19,7 +21,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 NT_ROOT="$SCRIPT_DIR/NT"
 NTOS="$NT_ROOT/PRIVATE/NTOS"
 
-WIBO_BIN="$(dirname "$SCRIPT_DIR")/wibo-x86_64"
+# Pick the right wibo binary for the host OS: wibo-macos on macOS,
+# wibo-x86_64 on Linux.
+case "$(uname -s)" in
+    Darwin) WIBO_BIN="$SCRIPT_DIR/wibo-macos" ;;
+    *)      WIBO_BIN="$(dirname "$SCRIPT_DIR")/wibo-x86_64" ;;
+esac
 WIBO_TOOLS="$SCRIPT_DIR/wibo-tools"
 
 if [ ! -x "$WIBO_BIN" ]; then
@@ -35,14 +42,7 @@ fi
 # cmd.exe / MC.EXE we rebuild later (via build_cmdstub / build_mc).
 if [ ! -d "$WIBO_TOOLS" ]; then
     echo ">>> setting up $WIBO_TOOLS (first-time)"
-    mkdir -p "$WIBO_TOOLS"
-    for f in "$NT_ROOT"/PUBLIC/OAK/BIN/I386/*; do
-        ln -srf "$f" "$WIBO_TOOLS/$(basename "$f")"
-    done
-    # CRTDLL.DLL lives in the SDK LIB tree, not in OAK/BIN. NMAKE and most
-    # MSVC-era tools import from it, so wibo needs to find it alongside
-    # the host binaries (via WIBO_PATH or cwd).
-    ln -srf "$NT_ROOT/PUBLIC/SDK/LIB/I386/CRTDLL.DLL" "$WIBO_TOOLS/CRTDLL.DLL"
+    "$SCRIPT_DIR/setup-wibo-tools.sh"
 fi
 
 # Wibo only strips "Z:" and "C:" prefixes — everything is routed through Z: as
@@ -604,7 +604,8 @@ install_host_tool() {
         # Ensure wibo-tools has a symlink — the tool may not have existed
         # when wibo-tools was first provisioned (e.g. MC.EXE, midl, gensrv
         # are built from source and only appear after their build step).
-        ln -srf "$NT_ROOT/PUBLIC/OAK/BIN/I386/$name" "$WIBO_TOOLS/$name"
+        # Relative target (../NT/...) since `ln -r` is GNU-only (no macOS).
+        ln -sf "../NT/PUBLIC/OAK/BIN/I386/$name" "$WIBO_TOOLS/$name"
         echo ">>> installed $name"
     else
         echo "!!! $name: expected output $built not found" >&2
@@ -631,8 +632,7 @@ build_link() {
     run_nmake "$link_dir/DISASM68"  "link/disasm68.lib"     || return 1
     run_nmake "$link_dir/COFF"      "link/coff (link.exe)"  || return 1
     install_host_tool "$link_dir/COFF/obj/i386/link.exe" "LINK.EXE"
-    # Refresh wibo-tools symlink.
-    ln -srf "$NT_ROOT/PUBLIC/OAK/BIN/I386/LINK.EXE" "$WIBO_TOOLS/LINK.EXE"
+    # install_host_tool already refreshed the wibo-tools/LINK.EXE symlink.
     echo ">>> LINK.EXE rebuilt with error message resources"
 }
 
@@ -672,10 +672,14 @@ build_cmdstub() {
         "WIBO_PATH=${WIBO_TOOLS}" \
         "$WIBO_BIN" --chdir "$src_dir" \
             "${WIBO_TOOLS}/CL.EXE" -nologo cmd.c \
-            -link -subsystem:console -out:cmd.exe \
+            -link -subsystem:console -out:cmd.exe -nodefaultlib:oldnames \
             "${NT_ROOT_WIN}\\PUBLIC\\SDK\\LIB\\I386\\libc.lib" \
             "${NT_ROOT_WIN}\\PUBLIC\\SDK\\LIB\\I386\\kernel32.lib" \
         || { echo ">>> cmd-stub: FAILED"; return 1; }
+    # -nodefaultlib:oldnames: cmd.c uses the _-prefixed CRT names (_stricmp,
+    # etc.), so it needs no OLDNAMES.lib aliases. The MS SDK's OLDNAMES.lib
+    # isn't part of this tree, and CL emits a -defaultlib:OLDNAMES directive
+    # that would otherwise make LINK fail with LNK1104.
 
     cp "$src_dir/cmd.exe" "$WIBO_TOOLS/cmd.exe"
     echo ">>> cmd-stub: $(ls -l "$WIBO_TOOLS/cmd.exe" | awk '{print $5}') bytes -> wibo-tools/cmd.exe"
@@ -846,6 +850,13 @@ build_shell32(){
     build_userpri  || return 1
     run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/LIBRARY" "SHELL/LIBRARY - shell32.dll" makedll=1
 }
+build_comdlg32(){
+    # Common dialogs (File Open/Save, Color, Font, Print). progman LoadLibrary's
+    # it at runtime for the Browse button; links kernel32/user32/gdi32/shell32/
+    # advapi32, all built earlier in the gui tier.
+    build_shell32 || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/COMDLG" "SHELL/COMDLG - comdlg32.dll" makedll=1
+}
 build_progman(){
     build_shell32  || return 1
     # SOURCES builds progman.lib first then UMAPPL links to progman.exe —
@@ -977,7 +988,7 @@ build_gui_import_stubs() {
     # NT generates user32p.def from USER32.DEF via `cl -EP -DPRIVATE=`,
     # stripping the PRIVATE keyword so those exports become normal import
     # stubs. Without this, `lib -def:` skips PRIVATE exports entirely.
-    sed 's/  *PRIVATE\b//' "$USER/CLIENT/USER32.DEF" > "$USER/CLIENT/user32p.def"
+    sed -E 's/[[:space:]]+PRIVATE([[:space:]]|$)/\1/' "$USER/CLIENT/USER32.DEF" > "$USER/CLIENT/user32p.def"
     _lib_from_def user32p.lib "$USER/CLIENT/user32p.def" "$user_obj" || return 1
     _lib_from_def gdi32p.lib "$GDI/CLIENT/gdi32p.def"  "$gdi_obj"  || return 1
 }
@@ -1373,6 +1384,8 @@ USERLAND_GUI_TARGETS=(
     # pulls it), userpri (unicrt.obj for shell32), shell32 (ShellExecute/
     # DragAcceptFiles/env helpers used by progman and most classic apps).
     pwin32 userpri shell32
+    # Common dialogs DLL — progman loads it for the Browse file picker.
+    comdlg32
     # Login + shell
     winlogon userinit
     # Program Manager (the default NT 3.5 shell) and cmd.exe.
@@ -1406,20 +1419,6 @@ build_efi() {
     make -C "$SCRIPT_DIR/boot-efi" BOOTX64.EFI
 }
 
-# cr — LuaJIT-on-NT runtime. Builds three subsystem-specialised .exes
-# from the same VM source: run.exe (native, Control\InitExe-direct),
-# runc.exe (console, csrss-allocated console), runw.exe (windows GUI,
-# csrss-registered for user32/gdi32 access). All staged at
-# \SystemRoot\lua\ by mkdisk's _lua_tree_files(). gui profile's
-# Winlogon\Shell points at runw.exe (Lua-based shell replacing progman).
-build_cr() {
-    echo ""
-    echo "========================================"
-    echo "Building: cr (LuaJIT runtime + lua/ tree)"
-    echo "========================================"
-    make -C "$SCRIPT_DIR/cr"
-}
-
 build_disk() {
     local profile="${1:-${PROFILE:-headless}}"
     local out_dir="$(dirname "$SCRIPT_DIR")/build/$profile"
@@ -1446,7 +1445,7 @@ build_disk() {
 # then assembles the disk with the matching profile. Disk assembly
 # respects the $PROFILE env var — see boot-efi/Makefile and
 # tools/mkhive.py --profile. A previous `./build.sh gui` + later
-# `PROFILE=micront ./build.sh disk` is a valid flow (compile once,
+# `PROFILE=headless ./build.sh disk` is a valid flow (compile once,
 # assemble many ways), but the top-level targets set PROFILE for you.
 #
 
@@ -1456,7 +1455,6 @@ _compile_micront() {
     build_ntoskrnl
     build_drivers
     build_userland_micront
-    build_cr
 }
 
 _compile_headless() {
@@ -1472,12 +1470,6 @@ _compile_gui() {
 
 # Profile builders — compile everything needed, then assemble the disk
 # with the correct PROFILE. Each is the single entry point users invoke.
-build_micront() {
-    export PROFILE=micront
-    _compile_micront
-    build_disk
-}
-
 build_headless() {
     export PROFILE=headless
     _compile_headless
@@ -1501,7 +1493,6 @@ _dispatch_one() {
         all)               build_all ;;
         gui)               build_gui ;;
         headless)          build_headless ;;
-        micront)           build_micront ;;
         ntoskrnl)          build_ntoskrnl ;;
         drivers)           build_drivers ;;
         drivers-gui)       build_drivers_gui ;;
@@ -1511,14 +1502,13 @@ _dispatch_one() {
         disk)              build_disk ;;
         disk-gui)          build_disk gui ;;
         disk-headless)     build_disk headless ;;
-        disk-micront)      build_disk micront ;;
         *)
             if declare -F "build_$comp" > /dev/null; then
                 "build_$comp"
             else
                 echo "Unknown component: $comp"
                 echo ""
-                echo "Profile targets: all (=gui), gui, headless, micront"
+                echo "Profile targets: all (=gui), gui, headless"
                 echo "Group targets:   ntoskrnl, drivers, drivers-gui,"
                 echo "                 userland-micront, userland, userland-gui, disk"
                 echo ""

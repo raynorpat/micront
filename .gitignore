@@ -9,6 +9,9 @@
 # IDE
 .vscode/
 
+# macOS
+.DS_Store
+
 # Build artifacts in NT source tree
 **/obj/
 _objects.mac
@@ -280,6 +283,10 @@ src/NT/PUBLIC/SDK/LIB/I386/pwin32.lib
 src/NT/PUBLIC/SDK/LIB/I386/shell32.dll
 src/NT/PUBLIC/SDK/LIB/I386/shell32.exp
 src/NT/PUBLIC/SDK/LIB/I386/shell32.lib
+# comdlg32 — built from WINDOWS/SHELL/COMDLG (common dialogs)
+src/NT/PUBLIC/SDK/LIB/I386/comdlg32.dll
+src/NT/PUBLIC/SDK/LIB/I386/comdlg32.exp
+src/NT/PUBLIC/SDK/LIB/I386/comdlg32.lib
 
 # OVMF NVRAM scratch file (per-checkout copy of /usr/share OVMF_VARS_4M.fd)
 /src/OVMF_VARS_4M.fd
@@ -310,6 +317,7 @@ src/ntoskrnl.gdb
 # Old HAL (preserved for reference, not built)
 src/NT/PRIVATE/NTOS/NTHALS.old/
 
+# TODO file that is local
 TODO.md
 README-UEFI.md
 
@@ -319,11 +327,15 @@ README-UEFI.md
 
 # wibo PE runner (downloaded binary + source checkout + auto-provisioned tools)
 /wibo/
+/src/wibo-macos
 /wibo-x86_64
 /wibo-x86_64.stock
 /wibo-i686
 src/wibo-tools/
 
-
+# bash and Python history
 .bash_history
 .python_history
+
+# gnu-efi build tree (fetched + built by src/boot-efi/setup-gnu-efi.sh on macOS)
+/src/boot-efi/.gnu-efi/

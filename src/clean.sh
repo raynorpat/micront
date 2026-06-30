@@ -124,11 +124,35 @@ rm -f "$NT_ROOT/PRIVATE/WINDOWS/USER/INC/callback.h" \
       "$NT_ROOT/PRIVATE/WINDOWS/USER/CLIENT/user32p.def" 2>/dev/null
 
 # Profile-specific disk images (under build/)
-for profile in micront headless gui; do
+for profile in headless gui; do
     if [ -d "$(dirname "$SCRIPT_DIR")/build/$profile" ]; then
         rm -rf "$(dirname "$SCRIPT_DIR")/build/$profile"
         echo "  cleaned build/$profile/"
     fi
 done
+
+# Restore tracked binaries the build overwrites in place. Unlike the obj/
+# trees above (pure build output, safe to delete), these are committed files:
+#   PUBLIC/SDK/LIB/I386 — seed import libs (KERNEL32.LIB, NTDLL.LIB,
+#       ADVAPI32.LIB, HAL.LIB, ...) that tools link against before the real
+#       DLLs exist; the build then overwrites them with the freshly built
+#       import libs. A re-run must start from the pristine seeds or early
+#       links (e.g. the cmd-stub) pick up a half-built lib.
+#   PUBLIC/OAK/BIN/I386 — original MS tool binaries, a few of which the build
+#       rebuilds in place (LINK.EXE, RC.EXE, MC.EXE, midl, gensrv, ...).
+# git checkout touches only the modified ones, leaving everything else alone.
+repo_root="$(cd "$SCRIPT_DIR/.." && pwd)"
+if git -C "$repo_root" rev-parse --git-dir > /dev/null 2>&1; then
+    for d in src/NT/PUBLIC/SDK/LIB/I386 src/NT/PUBLIC/OAK/BIN/I386; do
+        modified="$(git -C "$repo_root" diff --name-only -- "$d")" || modified=""
+        if [ -n "$modified" ]; then
+            git -C "$repo_root" checkout -- "$d"
+            n="$(printf '%s\n' "$modified" | grep -c .)"
+            echo "  restored $n seed file(s) under ${d#src/NT/PUBLIC/}"
+        fi
+    done
+else
+    echo "  (not a git checkout — skipping seed-lib restore)"
+fi
 
 echo "Clean complete."

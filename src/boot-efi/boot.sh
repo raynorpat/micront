@@ -2,7 +2,7 @@
 #
 # Boot MicroNT UEFI loader under OVMF64 in QEMU.
 # Usage: boot.sh [profile]   (default: headless)
-# Profiles: micront, headless, gui
+# Profiles: headless, gui
 #
 # Runs under the default -machine pc (i440fx + PIIX3); OVMF64 works on
 # both i440fx and q35, and our NT 3.5 atdisk.sys only speaks legacy IDE
@@ -20,16 +20,36 @@ if [ ! -f "$ESP_IMG" ]; then
     exit 1
 fi
 
-# Display: GUI profile gets a window, others run headless.
-if [ "$PROFILE" = "gui" ]; then
-    DISPLAY_FLAGS="-display gtk -vga std"
+# Firmware + GUI display backend differ by host. macOS gets QEMU's edk2
+# firmware from Homebrew and has no GTK (uses cocoa); Linux uses the distro
+# OVMF package + GTK. Override either path via the OVMF_CODE / OVMF_VARS env.
+case "$(uname -s)" in
+Darwin)
+    OVMF_CODE="${OVMF_CODE:-/opt/homebrew/share/qemu/edk2-x86_64-code.fd}"
+    OVMF_VARS_SRC="${OVMF_VARS:-/opt/homebrew/share/qemu/edk2-i386-vars.fd}"
+    GUI_DISPLAY="-display cocoa -vga std"
+    ;;
+*)
+    OVMF_CODE="${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE_4M.fd}"
+    OVMF_VARS_SRC="${OVMF_VARS:-/usr/share/OVMF/OVMF_VARS_4M.fd}"
+    GUI_DISPLAY="-display gtk -vga std"
+    ;;
+esac
+
+# Display: GUI profile gets a window, others run headless. QEMU_DISPLAY
+# overrides both (e.g. QEMU_DISPLAY="-display none" for an automated,
+# serial-only boot test).
+if [ -n "${QEMU_DISPLAY:-}" ]; then
+    DISPLAY_FLAGS="$QEMU_DISPLAY"
+elif [ "$PROFILE" = "gui" ]; then
+    DISPLAY_FLAGS="$GUI_DISPLAY"
 else
     DISPLAY_FLAGS="-display none"
 fi
 
-cp /usr/share/OVMF/OVMF_VARS_4M.fd OVMF_VARS_4M.fd
+cp "$OVMF_VARS_SRC" OVMF_VARS_4M.fd
 
-# Guest RAM size. Override via env: MEM=512 boot.sh micront
+# Guest RAM size. Override via env: MEM=512 boot.sh headless
 # Default keeps parity with the old behaviour (qemu-system-i386 default
 # is ~128 MB). The loader's identity map scales with registered ranges,
 # not a blanket constant, so any size UEFI's allocator can place our
@@ -62,7 +82,7 @@ fi
 # -device piix3-ide needed. NT 3.5's atdisk.sys speaks IDE/ATA and
 # OVMF64's IdeBusDxe handles the firmware-side enumeration fine.
 exec qemu-system-x86_64 -m "$MEM" \
-    -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
+    -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
     -drive if=pflash,format=raw,file=./OVMF_VARS_4M.fd \
     -drive file="$ESP_IMG",format=raw,if=ide \
     -chardev stdio,id=serialmux,mux=on \

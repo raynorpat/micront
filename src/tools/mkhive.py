@@ -412,7 +412,7 @@ class Hive:
 # Minimal boot hive for MicroNT
 # ============================================================================
 
-PROFILES = ("micront", "headless", "gui")
+PROFILES = ("headless", "gui")
 
 
 def build_micront_system_hive(profile: str = "headless",
@@ -423,13 +423,14 @@ def build_micront_system_hive(profile: str = "headless",
 
     `profile` selects how much of the Win32 subsystem gets wired up:
 
-      micront   — no Win32 subsystem at all. smss comes up but has
-                  nothing to hand off to. Any init program is a
-                  native NT binary (linked against nt.lib).
       headless  — Win32 base: csrss + basesrv (kernel32-only, no
                   user32/gdi32/console).
       gui       — headless + winsrv (USER, GDI, console servers) +
                   winlogon.
+
+    `init_exe`/`init_args`/`init_stdio` optionally write Control\\Init\\*
+    to override the kernel's initial user-mode process (default smss.exe).
+    A generic kernel facility; unused by the standard profiles.
 
     The kernel searches this hive during Phase 0/1 for:
       Select\\{current,default,lastknowngood,failed}
@@ -481,8 +482,7 @@ def build_micront_system_hive(profile: str = "headless",
     # Session Manager\Execute: smss reads this as REG_MULTI_SZ and the
     # LAST entry becomes InitialCommand (see SMINIT.C:718-726). Empty list
     # → smss defaults to "winlogon.exe" (line 753), which then launches
-    # lsass.exe via the SOFTWARE hive Winlogon\System value. Irrelevant to
-    # micront (bypasses smss entirely via Control\InitExe).
+    # lsass.exe via the SOFTWARE hive Winlogon\System value.
     sm.set_multi_sz("Execute", [])
 
     # SystemDrive gets set by the full NTLDR/OSLOADER at boot time from
@@ -515,51 +515,45 @@ def build_micront_system_hive(profile: str = "headless",
     sm_sub = sm["SubSystems"]
 
     # Required subsystems: smss loads these by name before any app runs.
-    # Micront profile has none — smss just sails past SmpLoadSubSystems
-    # and falls straight through to Execute/InitialCommand.
-    if profile == "micront":
-        sm_sub.set_multi_sz("Required", [])
-    else:
-        sm_sub.set_multi_sz("Required", ["Windows"])
+    sm_sub.set_multi_sz("Required", ["Windows"])
     sm_sub.set_multi_sz("Optional", [])
 
-    if profile != "micront":
-        # Win32 subsystem registration. The launch string's first token
-        # is the image path; the rest are arguments csrsrv parses:
-        #   ObjectDirectory  — NT object-namespace dir for csrss's LPC
-        #                       ports (unrelated to filesystem layout)
-        #   SharedSection    — three sizes (KB) for the 3 shared sections
-        #   ServerDll=N,I    — per-server DLL; basesrv owns slot 1. GUI
-        #                       profile adds winsrv with slots 2+3 for
-        #                       USER and Console.
-        # IMPORTANT: these indices are ABI constants, not arbitrary. They
-        # must match the #defines in WINSS.H:
-        #   BASESRV_SERVERDLL_INDEX  = 1
-        #   CONSRV_SERVERDLL_INDEX   = 2
-        #   USERSRV_SERVERDLL_INDEX  = 3
-        #   GDISRV_SERVERDLL_INDEX   = 4
-        # Client DLLs (user32, kernel32) use these hardcoded indices to
-        # look up per-process and per-thread data. If the indices here
-        # don't match, the server DLL writes sizeof(PROCESSINFO) bytes
-        # into a smaller slot's allocation — silent heap corruption.
-        server_dlls = "ServerDll=basesrv,1 "
-        if profile == "gui":
-            server_dlls += (
-                "ServerDll=winsrv:ConServerDllInitialization,2 "
-                "ServerDll=winsrv:UserServerDllInitialization,3 "
-                "ServerDll=winsrv:GdiServerDllInitialization,4 "
-            )
-        sm_sub.set_expand_sz(
-            "Windows",
-            "%SystemRoot%\\system32\\csrss.exe "
-            "ObjectDirectory=\\Windows "
-            "SharedSection=1024,3072,512 "
-            "Windows=On "
-            "SubSystemType=Windows "
-            + server_dlls +
-            "ProfileControl=Off "
-            "MaxRequestThreads=16"
+    # Win32 subsystem registration. The launch string's first token
+    # is the image path; the rest are arguments csrsrv parses:
+    #   ObjectDirectory  — NT object-namespace dir for csrss's LPC
+    #                       ports (unrelated to filesystem layout)
+    #   SharedSection    — three sizes (KB) for the 3 shared sections
+    #   ServerDll=N,I    — per-server DLL; basesrv owns slot 1. GUI
+    #                       profile adds winsrv with slots 2+3 for
+    #                       USER and Console.
+    # IMPORTANT: these indices are ABI constants, not arbitrary. They
+    # must match the #defines in WINSS.H:
+    #   BASESRV_SERVERDLL_INDEX  = 1
+    #   CONSRV_SERVERDLL_INDEX   = 2
+    #   USERSRV_SERVERDLL_INDEX  = 3
+    #   GDISRV_SERVERDLL_INDEX   = 4
+    # Client DLLs (user32, kernel32) use these hardcoded indices to
+    # look up per-process and per-thread data. If the indices here
+    # don't match, the server DLL writes sizeof(PROCESSINFO) bytes
+    # into a smaller slot's allocation — silent heap corruption.
+    server_dlls = "ServerDll=basesrv,1 "
+    if profile == "gui":
+        server_dlls += (
+            "ServerDll=winsrv:ConServerDllInitialization,2 "
+            "ServerDll=winsrv:UserServerDllInitialization,3 "
+            "ServerDll=winsrv:GdiServerDllInitialization,4 "
         )
+    sm_sub.set_expand_sz(
+        "Windows",
+        "%SystemRoot%\\system32\\csrss.exe "
+        "ObjectDirectory=\\Windows "
+        "SharedSection=1024,3072,512 "
+        "Windows=On "
+        "SubSystemType=Windows "
+        + server_dlls +
+        "ProfileControl=Off "
+        "MaxRequestThreads=16"
+    )
 
     # DOS Devices — smss creates \DosDevices\<Name> symlinks pointing at the
     # given NT device path. Without a C: symlink, RtlDosPathNameToNtPathName_U
@@ -656,33 +650,32 @@ def build_micront_system_hive(profile: str = "headless",
         .set_dword("ErrorControl", 1) \
         .set_sz("Group", "Extended base")
 
-    if profile != "micront":
-        # LSA configuration — auth packages list and product options.
-        # LsapConfigurePackages reads Control\Lsa\Authentication Packages.
-        # msv1_0 is the standard NT LAN Manager auth package.
-        control["Lsa"] \
-            .set_multi_sz("Authentication Packages", ["msv1_0"])
+    # LSA configuration — auth packages list and product options.
+    # LsapConfigurePackages reads Control\Lsa\Authentication Packages.
+    # msv1_0 is the standard NT LAN Manager auth package.
+    control["Lsa"] \
+        .set_multi_sz("Authentication Packages", ["msv1_0"])
 
-        # LanmanWorkstation\Parameters — LsapDbSetDomainInfo (Pass 2 of
-        # LSA auto-install) reads the Account Domain SID from here.
-        # No Domain/DomainId (primary domain) — MicroNT is standalone,
-        # never domain-joined. LsapDbSetDomainInfo is patched to skip
-        # primary domain setup when these are absent.
-        # AccountDomainId format: space-separated decimal, 6 authority
-        # bytes then sub-authorities (tokenized by LsapDbGetNextValueToken).
-        # S-1-5-21-1-2-3 = authority 0 0 0 0 0 5, sub-auths 21 1 2 3.
-        services["LanmanWorkstation\\Parameters"] \
-            .set_sz("AccountDomainId", "0 0 0 0 0 5 21 1 2 3")
+    # LanmanWorkstation\Parameters — LsapDbSetDomainInfo (Pass 2 of
+    # LSA auto-install) reads the Account Domain SID from here.
+    # No Domain/DomainId (primary domain) — MicroNT is standalone,
+    # never domain-joined. LsapDbSetDomainInfo is patched to skip
+    # primary domain setup when these are absent.
+    # AccountDomainId format: space-separated decimal, 6 authority
+    # bytes then sub-authorities (tokenized by LsapDbGetNextValueToken).
+    # S-1-5-21-1-2-3 = authority 0 0 0 0 0 5, sub-auths 21 1 2 3.
+    services["LanmanWorkstation\\Parameters"] \
+        .set_sz("AccountDomainId", "0 0 0 0 0 5 21 1 2 3")
 
-        # ProductOptions — LsapDbInitializeServer reads ProductType.
-        # "WinNt" = standalone workstation, "LanManNt" = domain controller.
-        control["ProductOptions"] \
-            .set_sz("ProductType", "WinNt")
+    # ProductOptions — LsapDbInitializeServer reads ProductType.
+    # "WinNt" = standalone workstation, "LanManNt" = domain controller.
+    control["ProductOptions"] \
+        .set_sz("ProductType", "WinNt")
 
-        # ComputerName — GetComputerNameW reads this; lsass calls it during
-        # LsapDbInitializeServer(2). Missing key = null deref in kernel32.
-        control["ComputerName\\ComputerName"] \
-            .set_sz("ComputerName", "MICRONT")
+    # ComputerName — GetComputerNameW reads this; lsass calls it during
+    # LsapDbInitializeServer(2). Missing key = null deref in kernel32.
+    control["ComputerName\\ComputerName"] \
+        .set_sz("ComputerName", "MICRONT")
 
     if profile == "gui":
         # Video: Bochs VGA miniport (QEMU stdvga, PCI 1234:1111).
@@ -754,46 +747,32 @@ def build_micront_software_hive(profile: str = "headless") -> Hive:
       .set_sz("CurrentType", "Uniprocessor Free") \
       .set_sz("SystemRoot", "C:\\")
 
-    if profile != 'micront':
-        # Winlogon configuration — winlogon reads these via GetProfileString
-        # (WINLOGON section → IniFileMapping → this registry path).
-        wl = cv["Winlogon"]
+    # NOTE: the win.ini [windows] "programs" value lives in the per-user
+    # DEFAULT hive (HKCU), NOT here — its IniFileMapping prefix is USR:.
+    # See build_micront_default_hive().
 
-        # "System" is the list of processes winlogon starts before auth init.
-        # lsass.exe is the security subsystem; must be running before
-        # LsaRegisterLogonProcess can succeed.
-        wl.set_sz("System", "lsass.exe")
+    # Winlogon configuration — winlogon reads these via GetProfileString
+    # (WINLOGON section → IniFileMapping → this registry path).
+    wl = cv["Winlogon"]
 
-        # "Userinit" runs after a successful logon to set up the user env.
-        wl.set_sz("Userinit", "userinit.exe,")
+    # "System" is the list of processes winlogon starts before auth init.
+    # lsass.exe is the security subsystem; must be running before
+    # LsaRegisterLogonProcess can succeed.
+    wl.set_sz("System", "lsass.exe")
 
-        # "Shell" is what userinit launches as the user's desktop shell.
-        # Points at the cr Lua runtime's Win32-GUI stub (runw.exe,
-        # subsystem=windows). The native-subsystem run.exe is rejected
-        # by kernel32!CreateProcess with ERROR_CHILD_NOT_COMPLETE
-        # (PROCESS.C:1141 — Win32 only accepts WINDOWS_GUI / WINDOWS_CUI
-        # subsystems). runw.exe has the same Lua VM and lua/ surface;
-        # only its PE subsystem field differs, so csrss registers it
-        # as a GUI process and chunks can ffi.load("user32"/"gdi32").
-        # All three (run/runc/runw) are staged at \SystemRoot\lua\ by
-        # mkdisk's _lua_tree_files().
-        # Note the asymmetry between the two paths in the value:
-        #   - EXE path uses C:\ — CreateProcess (kernel32) needs Win32-
-        #     style paths to find the image to load.
-        #   - Script-arg path uses \SystemRoot\ — argv[1] gets fed to
-        #     cr's fopen, which calls NtCreateFile verbatim (no DOS
-        #     path translation, per cr's NOTES.md "DosDevices — not
-        #     used"). NtCreateFile wants NT-namespace paths.
-        # Once shell.lua is loaded, require() uses package.path which
-        # defaults to \SystemRoot\lua\?.lua (LuaJIT fork patch), so
-        # all subsequent module loads stay on NT paths.
-        wl.set_sz("Shell",
-                  "C:\\lua\\runw.exe \\SystemRoot\\lua\\shell.lua")
+    # "Userinit" runs after a successful logon to set up the user env.
+    wl.set_sz("Userinit", "userinit.exe,")
 
-        # ServiceControllerStart — winlogon starts this before lsass.
-        # We don't have services.exe yet; winlogon logs a warning but
-        # continues.
-        wl.set_sz("ServiceControllerStart", "")
+    # "Shell" is what userinit launches as the user's desktop shell.
+    # progman.exe is the NT 3.5 Program Manager — the classic GUI shell.
+    # Staged at C:\System32\progman.exe by mkdisk; its Program Groups
+    # (the "Main" group) are seeded below under the gui profile.
+    wl.set_sz("Shell", "progman.exe")
+
+    # ServiceControllerStart — winlogon starts this before lsass.
+    # We don't have services.exe yet; winlogon logs a warning but
+    # continues.
+    wl.set_sz("ServiceControllerStart", "")
 
     if profile == "gui":
         # GRE_Initialize — font file paths for the GDI engine.
@@ -826,16 +805,17 @@ def build_micront_software_hive(profile: str = "headless") -> Hive:
             "NT" / "PRIVATE" / "WINDOWS" / "SHELL" / "PROGMAN" / "MAIN.GRP"
         h["Program Groups\\Main"].set_binary("", main_grp.read_bytes())
 
-    if profile != 'micront':
-        # IniFileMapping — BaseSrvInitializeIniFileMappings reads this tree
-        # to map GetProfileString("section","key") calls to registry paths.
-        # Format: value "" (default) = "SYS:registrypath" maps the whole
-        # section. SYS: = HKLM, USR: = HKCU.
-        ifm = h["Microsoft\\Windows NT\\CurrentVersion\\IniFileMapping\\win.ini"]
-        ifm["windows"] \
-            .set_sz("", "SYS:Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows")
-        ifm["WINLOGON"] \
-            .set_sz("", "SYS:Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon")
+    # IniFileMapping — BaseSrvInitializeIniFileMappings reads this tree
+    # to map GetProfileString("section","key") calls to registry paths.
+    # Format: value "" (default) = "<prefix>:registrypath" maps the whole
+    # section. SYS: = HKLM, USR: = HKCU. The prefixes/paths match NT 3.5's
+    # PUBLIC/OAK/BIN/SOFTWARE.INI: the [windows] section is per-user (USR:),
+    # but [WINLOGON] is machine-wide (SYS:).
+    ifm = h["Microsoft\\Windows NT\\CurrentVersion\\IniFileMapping\\win.ini"]
+    ifm["windows"] \
+        .set_sz("", "USR:Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows")
+    ifm["WINLOGON"] \
+        .set_sz("", "SYS:Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon")
 
     return h
 
@@ -880,9 +860,19 @@ def build_micront_default_hive(profile: str = "headless") -> Hive:
     h = Hive("DEFAULT")
 
     if profile != "gui":
-        # Only GUI profile needs these — headless/micront never touches
+        # Only GUI profile needs these — headless never touches
         # PMAP_COLORS / PMAP_DESKTOP and so never mounts .Default.
         return h
+
+    # ---- win.ini [windows] programs (per-user; USR: prefix) ----
+    # shell32 IsProgram() reads this via GetProfileString("windows","programs")
+    # → IniFileMapping → USR:Software\Microsoft\Windows NT\CurrentVersion\Windows.
+    # It's the whitelist of extensions Program Manager treats as directly
+    # executable; an empty list makes even cmd.exe "no association". This is the
+    # HKCU half — before logon HKCU == .Default, and our standalone Administrator
+    # keeps .Default as its profile, so it's live for progman too.
+    h["Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows"] \
+        .set_sz("programs", "com exe bat pif cmd")
 
     # ---- Control Panel\Colors ----
     # Classic Windows 3.1 / NT 3.5 "Windows Default" scheme. Values are
@@ -954,20 +944,6 @@ def main() -> None:
                     help="path to write the hive to")
     ap.add_argument("--profile", choices=PROFILES, default="headless",
                     help="which registry layout to emit (default: headless)")
-    ap.add_argument("--init-exe", default=None, metavar="PATH",
-                    help="micront only: SystemRoot-relative path to the "
-                         "initial user-mode process exe (e.g. "
-                         "'lua\\jit.exe'). Control\\InitExe is written as "
-                         "\\SystemRoot\\<PATH>.")
-    ap.add_argument("--init-args", default=None, metavar="ARGS",
-                    help="micront only: Control\\Init\\Args — argv tail "
-                         "appended to Exe's command line, whitespace-"
-                         "separated. Only meaningful with --init-exe.")
-    ap.add_argument("--init-stdio", default=None, metavar="NTPATH",
-                    help="micront only: Control\\Init\\Stdio — NT device "
-                         "path (e.g. \\Device\\Serial0) opened inheritable "
-                         "by the kernel and wired into the init process's "
-                         "stdin/stdout/stderr handles.")
     args = ap.parse_args()
 
     # Banner the stamp we're building against so CI logs pin hive <-> binary
@@ -981,19 +957,15 @@ def main() -> None:
     except Exception as e:
         print(f"build stamp: unavailable ({e})")
 
-    h = build_micront_system_hive(profile=args.profile,
-                                  init_exe=args.init_exe,
-                                  init_args=args.init_args,
-                                  init_stdio=args.init_stdio)
+    h = build_micront_system_hive(profile=args.profile)
     size = h.write(args.output)
     print(f"SYSTEM hive ({args.profile}): {size} bytes -> {args.output}")
 
-    # SOFTWARE hive is Win32-userland only; micront has no consumer of it.
-    if args.profile != "micront":
-        sw = build_micront_software_hive(profile=args.profile)
-        sw_path = args.output.replace("SYSTEM", "SOFTWARE") if "SYSTEM" in args.output else "SOFTWARE"
-        size = sw.write(sw_path)
-        print(f"SOFTWARE hive ({args.profile}): {size} bytes -> {sw_path}")
+    # SOFTWARE hive — winlogon/csrss config; both Win32 profiles need it.
+    sw = build_micront_software_hive(profile=args.profile)
+    sw_path = args.output.replace("SYSTEM", "SOFTWARE") if "SYSTEM" in args.output else "SOFTWARE"
+    size = sw.write(sw_path)
+    print(f"SOFTWARE hive ({args.profile}): {size} bytes -> {sw_path}")
 
     # DEFAULT hive is what gets mounted at \Registry\User\.Default before
     # any interactive logon — USERSRV's PMAP_COLORS/PMAP_DESKTOP/etc.
