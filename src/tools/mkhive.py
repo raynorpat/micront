@@ -415,6 +415,86 @@ class Hive:
 PROFILES = ("headless", "gui")
 
 
+# ----------------------------------------------------------------------------
+# OLE/COM registry — ported from CAIROLE's authentic NT2OLE.REG
+# ----------------------------------------------------------------------------
+# NT2OLE.REG holds both the SCM service entry (the COM Service Control Manager,
+# scm.exe) and the HKCR Classes tree (CLSID/Interface/ProxyStubClsid). We parse
+# it directly so the registry stays in lockstep with the shipped binaries.
+# Real OLE objects use GUIDs ending "-0000-0000-C000-000000000046"; the sample/
+# test objects (BasicSrv, testsrv.exe, .bb*/.ut* progids, …) use "-0008-" data3
+# or 47/48/49 suffixes and are dropped.
+_NT2OLE_TAG = "-0000-0000-C000-000000000046}"
+
+def _nt2ole_path() -> "str":
+    import os
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "NT", "PRIVATE", "BASE", "CAIROLE", "IH", "NT2OLE.REG")
+
+def _parse_nt2ole() -> "tuple[list, list]":
+    """Return (system_keys, software_keys); each a list of
+    (relative_path, [(value_name, kind, value), ...]). kind in sz/expand/dword."""
+    sys_keys: list = []
+    sw_keys: list = []
+    vals = None
+    PFX = "\\Registry\\MACHINE\\"
+    with open(_nt2ole_path(), encoding="latin-1") as fh:
+        for raw in fh:
+            line = raw.rstrip("\n")
+            if line.startswith(PFX):
+                vals = None
+                p = line[len(PFX):]
+                if p.startswith("SYSTEM\\"):
+                    rel = p[len("SYSTEM\\"):].replace(
+                        "CurrentControlSet\\", "ControlSet001\\", 1)
+                    if not rel.startswith("ControlSet001\\Services\\SCM"):
+                        continue
+                    bucket = sys_keys
+                elif p.startswith("SOFTWARE\\"):
+                    rel = p[len("SOFTWARE\\"):]
+                    if rel.startswith("Classes\\CLSID\\") or \
+                       rel.startswith("Classes\\Interface\\"):
+                        if _NT2OLE_TAG not in rel:
+                            continue                       # sample/test GUID
+                    elif rel not in ("Classes", "Classes\\CLSID",
+                                     "Classes\\Interface"):
+                        continue                           # ProgID*/PBrush/.ext
+                    bucket = sw_keys
+                else:
+                    continue
+                vals = []
+                bucket.append((rel, vals))
+            elif vals is not None:
+                s = line.strip()
+                if not s:
+                    continue
+                if s.startswith("="):
+                    name, rest = "", s[1:].strip()
+                elif "=" in s:
+                    name, rest = (x.strip() for x in s.split("=", 1))
+                else:
+                    continue
+                if rest.startswith("REG_DWORD"):
+                    vals.append((name, "dword", int(rest.split()[1], 0)))
+                elif rest.startswith("REG_EXPAND_SZ"):
+                    vals.append((name, "expand",
+                                 rest[len("REG_EXPAND_SZ"):].strip()))
+                else:
+                    vals.append((name, "sz", rest))
+    return sys_keys, sw_keys
+
+def _apply_ole_keys(hive: "Hive", keys: "list") -> None:
+    for rel, vals in keys:
+        k = hive[rel]
+        for name, kind, val in vals:
+            if kind == "dword":
+                k.set_dword(name, val)
+            elif kind == "expand":
+                k.set_expand_sz(name, val)
+            else:
+                k.set_sz(name, val)
+
+
 def build_micront_system_hive(profile: str = "headless",
                               init_exe: str | None = None,
                               init_args: str | None = None,
@@ -835,6 +915,11 @@ def build_micront_system_hive(profile: str = "headless",
             .set_sz("Group", "Pointer Class")
         services["mouclass\\Parameters"]
 
+        # OLE/COM Service Control Manager (scm.exe). ole32 + scm.exe ship only
+        # in the gui profile (they import USER32/GDI32), so register the SCM
+        # service here. Ported from CAIROLE NT2OLE.REG.
+        _apply_ole_keys(h, _parse_nt2ole()[0])
+
     return h
 
 
@@ -926,6 +1011,15 @@ def build_micront_software_hive(profile: str = "headless") -> Hive:
         main_grp = _Path(__file__).resolve().parent.parent / \
             "NT" / "PRIVATE" / "WINDOWS" / "SHELL" / "PROGMAN" / "MAIN.GRP"
         h["Program Groups\\Main"].set_binary("", main_grp.read_bytes())
+
+        # OLE/COM class registry (HKCR == HKLM\SOFTWARE\Classes): CLSID entries
+        # for the ole32-provided objects (StdOleLink, monikers, StdMem*),
+        # Interface metadata (NumMethods/BaseInterface), and ProxyStubClsid32
+        # marshalers. Ported from CAIROLE NT2OLE.REG (test objects filtered).
+        # The ProxyStubClsid entries point at oleprx32.dll (the marshaling
+        # proxy DLL, a separate TYPES build not yet shipped) — benign until
+        # cross-apartment marshaling is exercised; in-proc OLE works on ole32.
+        _apply_ole_keys(h, _parse_nt2ole()[1])
 
     # IniFileMapping — BaseSrvInitializeIniFileMappings reads this tree
     # to map GetProfileString("section","key") calls to registry paths.

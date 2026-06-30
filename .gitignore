@@ -399,3 +399,5 @@ src/NT/PUBLIC/SDK/LIB/I386/olethk32.lib
 # TYPES pass-2 compiled IID objects (build_types)
 src/NT/PRIVATE/BASE/TYPES/**/*.obj
 src/NT/PRIVATE/BASE/TYPES/**/*.exp
+# compob32.lib — alias of ole32.lib created during build_cairole
+src/NT/PUBLIC/SDK/LIB/I386/compob32.lib

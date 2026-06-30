@@ -568,6 +568,13 @@ _GUI_FILES: list[tuple[str, Path]] = [
     ("System32/sserife.fon",        FONTS / "SSERIFE.FON"),   # MS Sans Serif
     ("System32/coure.fon",          FONTS / "COURE.FON"),     # Courier (fixed)
     ("System32/smalle.fon",         FONTS / "SMALLE.FON"),    # Small Fonts
+    # OLE/COM (CAIROLE). ole32 is the unified COM+OLE2+storage runtime; scm.exe
+    # is its Service Control Manager (registered as the SCM service); olecnv32
+    # converts OLE1 objects. All three import USER32/GDI32, so OLE is GUI-only.
+    # The matching registry (SCM service + HKCR Classes) is in the gui hives.
+    ("System32/ole32.dll",          SDK_LIB / "ole32.dll"),
+    ("System32/scm.exe",            OBJ("BASE/CAIROLE/SCM/DAYTONA") / "scm.exe"),
+    ("System32/olecnv32.dll",       OBJ("BASE/CAIROLE/OLECNV32/DAYTONA") / "olecnv32.dll"),
 ]
 
 
