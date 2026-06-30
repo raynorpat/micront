@@ -473,6 +473,7 @@ _CORE_FILES: list[tuple[str, Path]] = [
     ("System32/Drivers/atdisk.sys", SDK_LIB / "atdisk.sys"),
     ("System32/Drivers/null.sys",   SDK_LIB / "null.sys"),
     ("System32/Drivers/fastfat.sys",SDK_LIB / "fastfat.sys"),
+    ("System32/Drivers/ntfs.sys",   SDK_LIB / "ntfs.sys"),
     ("System32/Drivers/npfs.sys",   SDK_LIB / "npfs.sys"),
     ("System32/Drivers/msfs.sys",   SDK_LIB / "msfs.sys"),
     ("System32/Drivers/serial.sys", SDK_LIB / "serial.sys"),

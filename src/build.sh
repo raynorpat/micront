@@ -416,6 +416,10 @@ build_null()   { run_nmake "$NTOS/DD/NULL"     "NULL - null device driver"; }
 build_fastfat(){ run_nmake "$NTOS/FASTFAT"     "FASTFAT - FAT filesystem driver"; }
 build_npfs()   { run_nmake "$NTOS/NPFS"       "NPFS - Named Pipe filesystem driver"; }
 build_msfs()   { run_nmake "$NTOS/MAILSLOT"  "MSFS - Mailslot filesystem driver"; }
+# NTFS: lfs.lib (Log File Service, LIBRARY) is linked into ntfs.sys, so
+# build it first. ntfs.sys declines FAT volumes and mounts NTFS ones.
+build_lfs()    { run_nmake "$NTOS/LFS"  "LFS - Log File Service (lfs.lib)"; }
+build_ntfs()   { build_lfs || return 1; run_nmake "$NTOS/NTFS" "NTFS - NT filesystem driver"; }
 build_hello()  { run_nmake "$NTOS/DD/HELLO"    "HELLO - MicroNT visibility driver"; }
 build_cowtest(){ KEEP_UMAPPL=1 run_nmake "$NT_ROOT/PRIVATE/TESTS/cowtest" "COWTEST - COW test program"; }
 
@@ -1502,7 +1506,7 @@ NTOSKRNL_TARGETS=(
 # Drivers needed regardless of mode — disk, FS, visibility/null stubs,
 # serial (user-facing COM console + Lua I/O).
 DRIVER_TARGETS=(
-    atdisk null fastfat npfs msfs serial
+    atdisk null fastfat ntfs npfs msfs serial
     # ndis_wrapper produces ndis.lib, consumed by virtio's vionet link
     # step — must come before `virtio`.
     ndis_wrapper

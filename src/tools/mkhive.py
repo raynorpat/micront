@@ -623,6 +623,14 @@ def build_micront_system_hive(profile: str = "headless",
         .set_dword("Type",         2) \
         .set_dword("Start",        0) \
         .set_dword("ErrorControl", 1)
+    # NTFS — boot-start FS recognizer like fastfat. It declines the FAT16
+    # boot volume (fastfat claims it) and mounts NTFS volumes when present.
+    # SERVICE_FILE_SYSTEM_DRIVER=2, SERVICE_BOOT_START=0.
+    services["ntfs"] \
+        .set_dword("Type",         2) \
+        .set_dword("Start",        0) \
+        .set_dword("ErrorControl", 1) \
+        .set_sz("Group", "File System")
     npfs = services["npfs"]
     npfs.set_dword("Type",         2) \
         .set_dword("Start",        1) \
