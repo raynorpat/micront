@@ -873,8 +873,20 @@ _crt_variant() {
     run_wibo_tool "$root" NMAKE.EXE /NOLOGO "CRTLIBTYPE=$variant" "386=1"
 }
 
-# CAIROLE (OLE2/COM) — incremental: foundational common.lib (more to follow).
-build_cairole_common() { run_nmake "$BASE_D/CAIROLE/COMMON/DAYTONA" "CAIROLE/COMMON - common.lib"; }
+# CAIROLE (OLE2/COM) — built incrementally from source under BASE/CAIROLE.
+# Each component is a DIRS tree whose leaves (mostly <comp>/<sub>/DAYTONA)
+# carry a SOURCES; _cairole_leaves builds every leaf under a component dir.
+_cairole_leaves() {
+    local root="$BASE_D/CAIROLE/$1"
+    local s d
+    while IFS= read -r s; do
+        d="$(dirname "$s")"
+        run_nmake "$d" "CAIROLE/${d#$BASE_D/CAIROLE/}" || return 1
+    done < <(find "$root" -name SOURCES | sort)
+}
+build_cairole_common() { _cairole_leaves COMMON; }
+build_cairole_ilib()   { _cairole_leaves ILIB; }
+build_cairole_com()    { _cairole_leaves COM; }
 
 # INT64.LIB — 64-bit integer helpers (LLMUL/LLDIV/...) built from the
 # MSVC 2.2 helper ASM imported into CRT32/HELPER/I386.

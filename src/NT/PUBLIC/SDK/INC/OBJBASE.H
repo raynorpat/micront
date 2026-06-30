@@ -351,7 +351,8 @@ typedef enum tagREGCLS
 typedef enum tagCOINIT
 {
   COINIT_MULTITHREADED = 0,      // OLE calls objects on any thread.
-  COINIT_SINGLETHREADED = 1        // OLE calls objects on single thread.
+  COINIT_SINGLETHREADED = 1,       // OLE calls objects on single thread.
+  COINIT_APARTMENTTHREADED = 2     // Apartment model (used by CAIROLE COM).
 } COINIT;
 
 // interface marshaling definitions
