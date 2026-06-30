@@ -371,8 +371,13 @@ _ensure_serlog() {
         || { echo "!!! mc on SERLOG.MC failed"; return 1; }
     # mc.exe emits case-matching names on Windows; normalise for our
     # case-sensitive Linux FS so #include "serlog.rc" / "serlog.h" resolve.
-    [ -f "$dir/SERLOG.rc" ] && cp -f "$dir/SERLOG.rc" "$dir/serlog.rc"
-    [ -f "$dir/SERLOG.h" ]  && cp -f "$dir/SERLOG.h"  "$dir/serlog.h"
+    # On a case-insensitive FS (macOS) SERLOG.rc and serlog.rc are the same
+    # file, so skip the copy there — cp -f onto itself errors and returns 1.
+    [ -f "$dir/SERLOG.rc" ] && ! [ "$dir/SERLOG.rc" -ef "$dir/serlog.rc" ] \
+        && cp -f "$dir/SERLOG.rc" "$dir/serlog.rc"
+    [ -f "$dir/SERLOG.h" ] && ! [ "$dir/SERLOG.h" -ef "$dir/serlog.h" ] \
+        && cp -f "$dir/SERLOG.h" "$dir/serlog.h"
+    return 0
 }
 build_atdisk() { run_nmake "$NTOS/DD/HARDDISK" "ATDISK - IDE disk driver"; }
 build_serial() { _ensure_serlog && run_nmake "$NTOS/DD/SERIAL" "SERIAL - NT 3.5 serial port driver"; }
