@@ -16,7 +16,10 @@
 //
 //--------------------------------------------------------------------------
 
-extern "C" BOOL  __stdcall IsEqualGUID(GUID &guid1, GUID &guid2)
+// Signature matches objbase.h's STDAPI_(BOOL) IsEqualGUID(REFGUID, REFGUID)
+// declaration (REFGUID == const GUID&); the original GUID& form gave a
+// second-C-linkage overload error against the public prototype.
+extern "C" BOOL  __stdcall IsEqualGUID(REFGUID guid1, REFGUID guid2)
 {
     return !memcmp((void *)&guid1,(void *)&guid2,sizeof(GUID));
 }

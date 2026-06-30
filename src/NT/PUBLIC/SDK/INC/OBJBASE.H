@@ -3897,12 +3897,18 @@ typedef unsigned short wchar_t;
 typedef unsigned long RPCOLEDATAREP;
 
 
+/* RPCFLG_* are also #defined by rpcdcep.h; when that header is in scope
+ * (e.g. the CAIROLE OLE build) this enum's members collide with the macros.
+ * Guard it — NT 3.5 (build 782) objbase.h has no tagRPCFLG enum; the values
+ * come from rpcdcep.h and the RPCFLG type from CAIROLE's own EXTENS.H. */
+#ifndef RPCFLG_ASYNCHRONOUS
 typedef enum tagRPCFLG
   {
 	RPCFLG_ASYNCHRONOUS = 1073741824,
 	RPCFLG_INPUT_SYNCHRONOUS = 536870912
   }
 RPCFLG;
+#endif
 
 
 typedef struct tagRPCOLEMESSAGE

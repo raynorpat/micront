@@ -873,6 +873,9 @@ _crt_variant() {
     run_wibo_tool "$root" NMAKE.EXE /NOLOGO "CRTLIBTYPE=$variant" "386=1"
 }
 
+# CAIROLE (OLE2/COM) — incremental: foundational common.lib (more to follow).
+build_cairole_common() { run_nmake "$BASE_D/CAIROLE/COMMON/DAYTONA" "CAIROLE/COMMON - common.lib"; }
+
 # INT64.LIB — 64-bit integer helpers (LLMUL/LLDIV/...) built from the
 # MSVC 2.2 helper ASM imported into CRT32/HELPER/I386.
 build_int64() {
