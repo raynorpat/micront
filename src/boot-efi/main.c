@@ -184,6 +184,29 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle,
                                  PK_HAL_IMAGE, "hal.dll",
                                  &hal) == EFI_SUCCESS) all[n++] = hal;
 
+        /* Reserve ONE contiguous sub-16 MiB block for every boot driver and
+         * have pe_stage pack them into it. The drivers all share ImageBase
+         * 0x10000, so without this only the first gets its preferred slot and
+         * the rest scatter via AllocateMaxAddress — nondeterministic placement
+         * that depends on the firmware's free-memory layout and interleaves
+         * driver images with the LPB arena / machine-state pages. One block
+         * makes staging deterministic and firmware-independent. */
+        {
+            UINTN drv_total = 0;
+            for (UINTN i = 0; i < N_STAGE; i++)
+                if (stage_list[i].blob)
+                    drv_total += pe_image_pages(stage_list[i].blob, stage_list[i].size);
+            EFI_PHYSICAL_ADDRESS drv_base = 0;
+            if (drv_total &&
+                mmu_alloc_below(drv_total, PK_BOOT_DRIVER, 0x01000000, &drv_base) == EFI_SUCCESS) {
+                pe_set_driver_arena(drv_base, drv_total);
+                BXLOG(L"driver arena: %u pages at phys 0x%lx", (UINT32)drv_total, (UINT64)drv_base);
+            } else {
+                BXLOG(L"driver arena reserve failed (%u pages) — per-image fallback",
+                      (UINT32)drv_total);
+            }
+        }
+
         for (UINTN i = 0; i < N_STAGE; i++) {
             if (!stage_list[i].blob) {
                 BXLOG(L"%a: missing blob, skipping", stage_list[i].name);

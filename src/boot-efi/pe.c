@@ -142,6 +142,33 @@ static void memzero(void *dst, UINTN n) {
 }
 
 /*----------------------------------------------------------------------------
+ * Contiguous boot-driver staging block (see pe.h / pe_set_driver_arena).
+ *---------------------------------------------------------------------------*/
+
+static EFI_PHYSICAL_ADDRESS g_drv_arena_base  = 0;
+static UINTN                g_drv_arena_pages  = 0;   /* capacity, pages */
+static UINTN                g_drv_arena_used   = 0;   /* pages consumed */
+
+void pe_set_driver_arena(EFI_PHYSICAL_ADDRESS base, UINTN pages) {
+    g_drv_arena_base = base;
+    g_drv_arena_pages = pages;
+    g_drv_arena_used  = 0;
+}
+
+UINTN pe_image_pages(const void *blob, UINTN blob_size) {
+    const UINT8 *file = blob;
+    const image_dos_header_t   *dos;
+    const image_nt_headers32_t *nt;
+    if (blob_size < sizeof(*dos)) return 0;
+    dos = (const image_dos_header_t *)file;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return 0;
+    if (dos->e_lfanew + sizeof(*nt) > blob_size) return 0;
+    nt = (const image_nt_headers32_t *)(file + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) return 0;
+    return (nt->OptionalHeader.SizeOfImage + 0xFFF) >> 12;
+}
+
+/*----------------------------------------------------------------------------
  * pe_stage
  *---------------------------------------------------------------------------*/
 
@@ -189,7 +216,20 @@ EFI_STATUS pe_stage(const void *blob, UINTN blob_size,
      * relocations, we still try the preferred address first so no
      * rebasing is needed; fall back to AnyPages if the preferred range
      * is occupied AND there are relocations to fix things up. */
-    {
+    if (kind == PK_BOOT_DRIVER && g_drv_arena_base) {
+        /* Sub-allocate from the pre-reserved contiguous driver block (one
+         * mmu_alloc, already registered for identity + KSEG0 mapping).
+         * Deterministic packing — no preferred-address contention, no
+         * scatter into the arena/machine-state region. All boot drivers
+         * carry relocations, so the non-zero delta below rebases them. */
+        if (g_drv_arena_used + pages > g_drv_arena_pages) {
+            BXLOG(L"driver arena OOM for %a (need %u, %u/%u used)",
+                  name, (UINT32)pages, (UINT32)g_drv_arena_used, (UINT32)g_drv_arena_pages);
+            return EFI_OUT_OF_RESOURCES;
+        }
+        phys = g_drv_arena_base + (g_drv_arena_used << 12);
+        g_drv_arena_used += pages;
+    } else {
         UINT32 preferred_phys = opt->ImageBase & ~KSEG0_BASE;
         int    has_relocs     = opt->DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size != 0;
 

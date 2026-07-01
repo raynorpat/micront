@@ -40,4 +40,17 @@ EFI_STATUS pe_stage(const void *blob, UINTN blob_size,
 EFI_STATUS pe_resolve_imports(pe_image_t *img,
                               const pe_image_t *modules, UINTN n_modules);
 
+/* Number of 4 KiB pages SizeOfImage rounds up to (0 on a bad PE). Lets the
+ * caller size a contiguous staging block before staging. */
+UINTN pe_image_pages(const void *blob, UINTN blob_size);
+
+/* Boot drivers are all linked at the same ImageBase (0x10000), so only the
+ * first could ever get its preferred phys; the rest used to fall back to
+ * AllocateMaxAddress and scatter — nondeterministic, firmware-dependent
+ * placement interleaved with the LPB arena / machine-state pages. Instead,
+ * main.c reserves one contiguous block (registered PK_BOOT_DRIVER) and
+ * pe_stage sub-allocates PK_BOOT_DRIVER images from it — deterministic and
+ * firmware-independent. base=0 disables (per-image fallback). */
+void pe_set_driver_arena(EFI_PHYSICAL_ADDRESS base, UINTN pages);
+
 #endif
