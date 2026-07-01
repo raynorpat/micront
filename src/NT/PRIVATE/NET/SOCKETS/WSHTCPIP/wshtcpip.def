@@ -1,0 +1,19 @@
+;
+;         File: wshtcpip.def
+;      Summary: Module definition file for TCP/IP helper DLL for the
+;               WinSock API DLL (wsock32).
+;
+
+LIBRARY         WSHTCPIP
+
+DESCRIPTION     'TCP/IP Windows Sockets Helper DLL'
+
+EXPORTS
+        WSHGetSockaddrType
+        WSHGetWildcardSockaddr
+        WSHGetSocketInformation
+        WSHGetWinsockMapping
+        WSHNotify
+        WSHOpenSocket
+        WSHSetSocketInformation
+        WSHEnumProtocols

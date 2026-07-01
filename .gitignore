@@ -401,3 +401,18 @@ src/NT/PRIVATE/BASE/TYPES/**/*.obj
 src/NT/PRIVATE/BASE/TYPES/**/*.exp
 # compob32.lib — alias of ole32.lib created during build_cairole
 src/NT/PUBLIC/SDK/LIB/I386/compob32.lib
+
+# Networking (NET/SOCKETS) — mc-generated message catalogs + DLL outputs.
+# wsock32.lib / wshtcpip.lib import stubs stay tracked (wshtcpip links
+# wsock32.lib); the .dll/.exp are regenerated each build.
+src/NT/PRIVATE/NET/SOCKETS/LIBUEMUL/libuemul.h
+src/NT/PRIVATE/NET/SOCKETS/LIBUEMUL/libuemul.rc
+src/NT/PRIVATE/NET/SOCKETS/LIBUEMUL/MSG00001.bin
+src/NT/PRIVATE/NET/SOCKETS/WINSOCK/nlstxt.h
+src/NT/PRIVATE/NET/SOCKETS/WINSOCK/nlstxt.rc
+src/NT/PRIVATE/NET/SOCKETS/WINSOCK/nlstxt.mc
+src/NT/PRIVATE/NET/SOCKETS/WINSOCK/MSG00001.bin
+src/NT/PUBLIC/SDK/LIB/I386/wsock32.dll
+src/NT/PUBLIC/SDK/LIB/I386/wsock32.exp
+src/NT/PUBLIC/SDK/LIB/I386/wshtcpip.dll
+src/NT/PUBLIC/SDK/LIB/I386/wshtcpip.exp

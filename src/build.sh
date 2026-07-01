@@ -665,6 +665,72 @@ build_lsasrv() {
 build_msv1_0() { run_nmake "$NT_ROOT/PRIVATE/LSA/MSV1_0" "MSV1_0 - NT LAN Manager auth package" makedll=1; }
 build_advapi32() { build_rpcutil || return 1; run_nmake "$NT_ROOT/PRIVATE/WINDOWS/BASE/ADVAPI" "advapi32.dll" makedll=1; }
 
+# --- Winsock / TCP-IP userland (PRIVATE/NET/SOCKETS) --------------------------
+# wsock32.dll — the Win32 sockets DLL, layered on afd.sys. Three helper libs
+# build first: libuemul (BSD compat: getopt/getpass/nls), sockreg (winsock
+# registry helpers), sockutil (gethostbyname/rcmd/rexec). libuemul and winsock
+# each ship a message catalog that mc.exe compiles into a .h/.rc before the C
+# sources build — same pre-pass pattern as _ensure_bugcodes.
+NET="$NT_ROOT/PRIVATE/NET"
+# Run mc on <dir>/<MCFILE>, then normalise the emitted <stem>.h/.rc to
+# lowercase so #include "stem.h" resolves on a case-sensitive FS (Linux).
+# On macOS the copies are no-ops (same file).
+_mc_gen() {
+    local dir="$1" mcfile="$2" stem="$3"
+    run_wibo_tool "$dir" mc -v "$mcfile" \
+        || { echo "!!! mc on $mcfile failed"; return 1; }
+    [ -f "$dir/$stem.h" ]  || { [ -f "$dir/${stem^^}.h" ]  && cp -f "$dir/${stem^^}.h"  "$dir/$stem.h"; }
+    [ -f "$dir/$stem.rc" ] || { [ -f "$dir/${stem^^}.rc" ] && cp -f "$dir/${stem^^}.rc" "$dir/$stem.rc"; }
+    return 0
+}
+build_libuemul() {
+    local dir="$NET/SOCKETS/LIBUEMUL"
+    if [ ! -f "$dir/libuemul.h" ] || [ "$dir/LIBUEMUL.MC" -nt "$dir/libuemul.h" ]; then
+        echo ">>> mc LIBUEMUL.MC -> libuemul.h/.rc"
+        _mc_gen "$dir" LIBUEMUL.MC libuemul || return 1
+    fi
+    run_nmake "$dir" "NET/LIBUEMUL - BSD compat lib (libuemul.lib)"
+}
+build_sockreg()  { run_nmake "$NET/SOCKETS/SOCKREG"  "NET/SOCKREG - winsock registry helper (sockreg.lib)"; }
+build_sockutil() { run_nmake "$NET/SOCKETS/SOCKUTIL" "NET/SOCKUTIL - winsock util lib (sockutil.lib)"; }
+# wsock32's catalog is libuemul.mc + localmsg.mc concatenated into nlstxt.mc,
+# then compiled by mc (per WINSOCK/MAKEFILE.INC).
+_ensure_winsock_nlstxt() {
+    local dir="$NET/SOCKETS/WINSOCK"
+    if [ -f "$dir/nlstxt.h" ] && [ "$dir/nlstxt.h" -nt "$dir/LOCALMSG.MC" ] \
+       && [ "$dir/nlstxt.h" -nt "$NET/SOCKETS/LIBUEMUL/LIBUEMUL.MC" ]; then
+        return 0
+    fi
+    echo ">>> winsock: concat libuemul.mc + localmsg.mc -> nlstxt.mc; mc"
+    cat "$NET/SOCKETS/LIBUEMUL/LIBUEMUL.MC" "$dir/LOCALMSG.MC" > "$dir/nlstxt.mc"
+    _mc_gen "$dir" nlstxt.mc nlstxt
+}
+build_wsock32() {
+    build_libuemul || return 1
+    build_sockreg  || return 1
+    build_sockutil || return 1
+    _ensure_winsock_nlstxt || return 1
+    run_nmake "$NET/SOCKETS/WINSOCK" "NET/WINSOCK - wsock32.dll" makedll=1
+}
+# wshtcpip.dll — the TCP/IP Winsock helper. wsock32 LoadLibrary()'s it at
+# socket() time to map AF_INET triples to \Device\Tcp / \Device\Udp. The NT
+# 3.5 tree shipped it only as a prebuilt lib, so this is a minimal source
+# reimplementation (see WSHTCPIP/wshtcpip.c). Links wsock32.lib, so build
+# wsock32 first.
+build_wshtcpip() {
+    build_wsock32 || return 1
+    run_nmake "$NET/SOCKETS/WSHTCPIP" "NET/WSHTCPIP - wshtcpip.dll (TCP/IP Winsock helper)" makedll=1
+}
+
+# --- TCP/IP command-line utilities (NTOS/TDI/TCPIP/UTILS) --------------------
+# arp.exe / route.exe query and manage the kernel TCP/IP stack directly via
+# TDI IOCTLs (not Winsock). Both link tcpinfo.lib, a shared helper that talks
+# to \Device\Tcp. These are UMAPPL console apps, so KEEP_UMAPPL=1.
+TCPUTILS="$NTOS/TDI/TCPIP/UTILS"
+build_tcpinfo_lib() { mkdir -p "$TCPUTILS/obj/i386"; run_nmake "$TCPUTILS/TCPINFO" "TCPIP/UTILS/TCPINFO - tcpinfo.lib (TDI query helper)"; }
+build_arp()   { build_tcpinfo_lib || return 1; KEEP_UMAPPL=1 run_nmake "$TCPUTILS/ARP/ARP" "TCPIP/UTILS/ARP - arp.exe"; }
+build_route() { build_tcpinfo_lib || return 1; KEEP_UMAPPL=1 run_nmake "$TCPUTILS/IP/ROUTE" "TCPIP/UTILS/ROUTE - route.exe"; }
+
 # --- Host tools (sdktools bootstrap phase) -----------------------------------
 # These are wine-executable host tools consumed by later build steps — not
 # targets shipped in the disk image. They land in PUBLIC/OAK/BIN/I386 so
@@ -1885,6 +1951,10 @@ USERLAND_TARGETS=(
     nlrepl
     samlib samsrv
     lsasrv msv1_0
+    # Winsock: wsock32.dll (+ libuemul/sockreg/sockutil helper libs) on top
+    # of afd.sys, plus wshtcpip.dll (the TCP/IP transport helper wsock32
+    # loads at socket() time). User-mode sockets — useful headless.
+    wsock32 wshtcpip
 )
 
 # GUI userland: pulls in the whole Win32 window/drawing stack. advapi32
@@ -1930,6 +2000,8 @@ USERLAND_GUI_TARGETS=(
     winlogon userinit
     # Program Manager (the default NT 3.5 shell) and cmd.exe.
     progman cmd
+    # TCP/IP command-line utilities (arp, route) — console apps run from cmd.
+    arp route
 )
 
 build_group() {

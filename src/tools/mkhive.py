@@ -867,6 +867,30 @@ def build_micront_system_hive(profile: str = "headless",
         .set_sz("Group", "TDI") \
         .set_multi_sz("DependOnService", ["tcpip"])
 
+    # --- Winsock (user mode): wsock32.dll + wshtcpip.dll -----------------
+    # wsock32 enumerates transports from Winsock\Parameters:Transports, then
+    # for each opens <Transport>\Parameters\Winsock to learn the triple
+    # Mapping + which helper DLL (wshtcpip) services it. Setup normally
+    # writes these; we stamp them statically since there's no Setup.
+    services["Winsock"]["Parameters"] \
+        .set_multi_sz("Transports", ["Tcpip"])
+    # WINSOCK_MAPPING: Rows, Columns(=3), then Rows*(AddrFamily,SockType,Proto)
+    # DWORDs. Must list every triple wshtcpip's WSHGetWinsockMapping returns
+    # (5 TCP + 5 UDP). AF_INET=2, AF_UNSPEC=0, SOCK_STREAM=1, SOCK_DGRAM=2,
+    # IPPROTO_TCP=6, IPPROTO_UDP=17.
+    _winsock_triples = [
+        (2, 1, 6), (2, 1, 0), (2, 0, 6), (0, 0, 6), (0, 1, 6),   # TCP
+        (2, 2, 17), (2, 2, 0), (2, 0, 17), (0, 0, 17), (0, 2, 17),  # UDP
+    ]
+    _winsock_mapping = struct.pack("<II", len(_winsock_triples), 3)
+    for _t in _winsock_triples:
+        _winsock_mapping += struct.pack("<III", *_t)
+    tcpip["Parameters"]["Winsock"] \
+        .set_binary("Mapping", _winsock_mapping) \
+        .set_dword("MinSockaddrLength", 16) \
+        .set_dword("MaxSockaddrLength", 16) \
+        .set_expand_sz("HelperDllName", "%SystemRoot%\\System32\\wshtcpip.dll")
+
     if profile == "gui":
         # Video: Bochs VGA miniport (QEMU stdvga, PCI 1234:1111).
         # videoprt.sys is the video port framework loaded implicitly.

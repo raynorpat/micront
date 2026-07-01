@@ -518,6 +518,9 @@ _HEADLESS_FILES: list[tuple[str, Path]] = [
     ("System32/netapi32.dll",       SDK_LIB / "NETAPI32.DLL"),  # XXX: pre-built
     ("System32/netrap.dll",         SDK_LIB / "NETRAP.DLL"),    # XXX: pre-built
     ("System32/lsass.exe",          OBJ("LSA/SERVER") / "lsass.exe"),
+    # Winsock: user-mode sockets DLL + its TCP/IP transport helper.
+    ("System32/wsock32.dll",        SDK_LIB / "wsock32.dll"),
+    ("System32/wshtcpip.dll",       SDK_LIB / "wshtcpip.dll"),
 ]
 
 FONTS = NT / "PRIVATE/WINDOWS/GDI/FONTS"
@@ -559,6 +562,11 @@ _GUI_FILES: list[tuple[str, Path]] = [
     ("System32/progman.exe",         OBJ("WINDOWS/SHELL/PROGMAN") / "progman.exe"),
     # cmd.exe — Console shell. Reachable via progman File → Run → cmd.exe.
     ("System32/cmd.exe",             OBJ("WINDOWS/CMD") / "cmd.exe"),
+    # TCP/IP utilities — arp / route query the kernel stack via TDI IOCTLs.
+    # Console apps, so GUI-only (need cmd.exe + the console server). Built as
+    # newarp/newroute (UMAPPL name); staged under their canonical names.
+    ("System32/arp.exe",             OBJ("NTOS/TDI/TCPIP/UTILS/ARP/ARP") / "newarp.exe"),
+    ("System32/route.exe",           OBJ("NTOS/TDI/TCPIP/UTILS/IP/ROUTE") / "newroute.exe"),
     # Login
     ("System32/winlogon.exe",       OBJ("WINDOWS/USER/WINLOGON/DAYTONA") / "winlogon.exe"),
     ("System32/userinit.exe",       OBJ("WINDOWS/USER/USERINIT") / "userinit.exe"),
