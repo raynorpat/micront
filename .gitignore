@@ -418,3 +418,8 @@ src/NT/PUBLIC/SDK/LIB/I386/wshtcpip.dll
 src/NT/PUBLIC/SDK/LIB/I386/wshtcpip.exp
 src/NT/PUBLIC/SDK/LIB/I386/icmp.dll
 src/NT/PUBLIC/SDK/LIB/I386/icmp.exp
+
+# SMB redirector helper libs — built from source into public/sdk/lib,
+# consumed only by rdr.sys (like nbt.lib). Not seed import stubs.
+src/NT/PUBLIC/SDK/LIB/I386/bowser.lib
+src/NT/PUBLIC/SDK/LIB/I386/smbtrsup.lib

@@ -476,6 +476,19 @@ build_netbt()   { build_nbt_lib || return 1; mkdir -p "$NTOS/NBT/NT/obj/i386"; r
 # binds netbt directly), but makes user-mode NetBIOS work.
 build_netbios() { mkdir -p "$NTOS/NETBIOS/obj/i386"; run_nmake "$NTOS/NETBIOS" "NETBIOS - NetBIOS interface driver (netbios.sys)" makedll=1; }
 
+# --- SMB redirector (client) ------------------------------------------------
+# rdr.sys — the SMB client / network filesystem. Links two helper libs:
+# smbtrsup (SMB transport support) + bowser (Computer Browser support). Rides
+# on netbt (TDI). LanmanWorkstation service points at it.
+build_smbtrsup() { mkdir -p "$NTOS/SMBTRSUP/obj/i386"; run_nmake "$NTOS/SMBTRSUP" "SMBTRSUP - SMB transport support (smbtrsup.lib)"; }
+build_bowser()   { mkdir -p "$NTOS/BOWSER/obj/i386"; run_nmake "$NTOS/BOWSER" "BOWSER - Computer Browser support (bowser.lib)"; }
+build_rdr() {
+    build_smbtrsup || return 1
+    build_bowser   || return 1
+    mkdir -p "$NTOS/RDR/DAYTONA/obj/i386"
+    run_nmake "$NTOS/RDR/DAYTONA" "RDR - SMB redirector (rdr.sys)" makedll=1
+}
+
 # --- RPC stack ---------------------------------------------------------------
 # NT 3.5's RPC runtime is 180k LoC across NDRLIB + NDR20 + RUNTIME.
 # Builds in dependency order: NDRLIB (NDR marshaling primitives, the
@@ -549,13 +562,36 @@ build_localreg() { build_winreg_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/WIN
 build_winreg()   { build_winreg_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SCREG/WINREG/CLIENT"   "WINREG/CLIENT - winreg.lib"; }
 build_winregsrv(){ build_winreg_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SCREG/WINREG/SERVER"   "WINREG/SERVER - winreg.lib (server)"; }
 build_sc_idl()   {
-    _midl_advapi_idl "$NT_ROOT/PRIVATE/WINDOWS/SCREG/SC" "/I inc" svcctl || return 1
+    # -oldnames so MIDL emits svcctl_ServerIfHandle (not svcctl_v1_0_s_ifspec),
+    # which SC/SERVER/svcctrl.c references. The client doesn't name the ifspec.
+    local dir="$NT_ROOT/PRIVATE/WINDOWS/SCREG/SC"
+    run_wibo_tool "$dir" midl /ms_ext /c_ext /app_config /D MIDL_PASS /D _M_IX86 /D _X86_ \
+        -oldnames /I inc svcctl.idl || return 1
     # sclib + svcctrl #include <svcctl.h>; their INCLUDES point at SC/INC but
     # midl emits into SC/ — copy the header over.
     cp -f "$NT_ROOT/PRIVATE/WINDOWS/SCREG/SC/svcctl.h" "$NT_ROOT/PRIVATE/WINDOWS/SCREG/SC/INC/"
+    # The SCM server (SC/SERVER/DAYTONA) compiles ..\svcctl_s.c — i.e.
+    # SC/SERVER/svcctl_s.c — so drop the generated server stub there too
+    # (MAKEFIL0 did this via `copy svcctl_s.c .\server`).
+    cp -f "$NT_ROOT/PRIVATE/WINDOWS/SCREG/SC/svcctl_s.c" "$NT_ROOT/PRIVATE/WINDOWS/SCREG/SC/SERVER/"
 }
 build_sclib()    { build_sc_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SCREG/SC/LIB"    "SC/LIB - sclib.lib"; }
 build_svcctrl()  { build_sc_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SCREG/SC/CLIENT" "SC/CLIENT - svcctrl.lib"; }
+# Service Control Manager *server* — services.exe. Hosts service DLLs
+# (wkssvc, etc.) and starts drivers per the registry. winlogon execs it
+# during system startup. svcslib is its shared helper; the SERVER/DAYTONA
+# SOURCES is a LIBRARY+UMAPPL (svcctrl.lib + services.exe), same pattern as
+# lsass, so KEEP_UMAPPL=1.
+build_svcslib()  { run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SCREG/SC/SVCSLIB" "SC/SVCSLIB - svcslib.lib"; }
+build_scserver() {
+    build_sc_idl     || return 1
+    build_sclib      || return 1
+    build_svcslib    || return 1
+    build_winregsrv  || return 1
+    build_wrlib      || return 1
+    build_rpcutil    || return 1
+    KEEP_UMAPPL=1 run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SCREG/SC/SERVER/DAYTONA" "SC/SERVER - services.exe (SCM)" makedll=1
+}
 build_elf_idl()  { _midl_advapi_idl "$NT_ROOT/PRIVATE/EVENTLOG" "" elf; }
 build_elfapi()   { build_elf_idl || return 1; run_nmake "$NT_ROOT/PRIVATE/EVENTLOG/ELFCLNT" "EVENTLOG/ELFCLNT - elfapi.lib"; }
 build_lsa_idl()  {
@@ -1933,6 +1969,8 @@ DRIVER_TARGETS=(
     # (the \Device\Netbios NCB interface). SMB (rdr/srv) rides on netbt.
     netbt
     netbios
+    # SMB redirector (client). rdr.sys mounts remote shares over netbt.
+    rdr
 )
 
 # Drivers only useful with the GUI (input + video).

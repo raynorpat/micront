@@ -494,6 +494,8 @@ _CORE_FILES: list[tuple[str, Path]] = [
     # NetBIOS over TCP/IP: netbt.sys (SMB transport) + netbios.sys (NCB API).
     ("System32/Drivers/netbt.sys",    SDK_LIB / "netbt.sys"),
     ("System32/Drivers/netbios.sys",  SDK_LIB / "netbios.sys"),
+    # SMB redirector (client) — mounts remote shares over netbt.
+    ("System32/Drivers/rdr.sys",      SDK_LIB / "rdr.sys"),
 ]
 
 # Headless adds the Win32 subsystem base.
