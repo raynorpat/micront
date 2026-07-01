@@ -8,6 +8,14 @@ File Manager (WinFile), Clock, and the Control Panel (launcher + Main applet)**
 Source disk: `/Users/raynorpat/Projects/NT782Source/SOURCE1B.782_disc1`
 (everything below is under `PRIVATE/WINDOWS/SHELL` unless noted).
 
+**Status: Tiers 1–3 built, staged, and committed.** Notepad, Task Manager,
+Clock, the Control Panel launcher, File Manager (+comctl32), and the Main
+Control Panel applet (+lz32/version/prsinf/t1instal) all build under
+`./build.sh` and stage into the `gui` image. None are boot-tested yet. Phase 4
+(additional `.cpl` applets) is the remaining optional work. Tier 2 needed
+substantial header reconstruction (see its section); Tiers 1 and 3 were
+straight wiring.
+
 ## Why this is mostly wiring, not porting
 
 The whole Win32 window/drawing stack already builds: `USERLAND_GUI_TARGETS`
@@ -130,7 +138,27 @@ needing common controls. Build `comctl32` first, then `winfile`. Stage both
 **Verify:** `./build.sh comctl32 winfile`; launch File Manager, browse the FAT
 volume.
 
-## Tier 3 — Control Panel applet (+4 libs)
+## Tier 3 — Control Panel applet (+4 libs) ✅
+
+**Built and staged — and, unlike Tier 2, this really was mostly wiring.**
+`main.cpl` compiled first try once its four support libs existed; no header
+reconstruction was needed. Copied `SHELL/LZ`, `SHELL/VERSION`, `WINDOWS/PRSINF`,
+`SHELL/CONTROL/{T1INSTAL,MAIN}`. Two adjustments beyond the plan:
+
+- **`lz32` has a sub-lib**: `SHELL/LZ/LIBS` → `winlza.lib`, which `LZEXPAND`
+  links. Added `build_winlza`; `build_lz32` depends on it. Both `LZ/LIBS` and
+  `LZEXPAND` `SOURCES` had a hardcoded `TARGETPATH=\nt\public\sdk\lib` (absolute
+  DOS path) → changed to `$(BASEDIR)\public\sdk\lib`.
+- **`version` links `fdi.lib` + `mdi.lib`** (cabinet/diamond decompression),
+  which ship only as prebuilt libs. Seeded both from the disc into
+  `PUBLIC/SDK/LIB/I386`.
+
+`build_{winlza,lz32,version,prsinf,t1instal,main_cpl}` wired into
+`USERLAND_GUI_TARGETS`; `lz32.dll`/`version.dll`/`t1instal.dll`/`main.cpl`
+staged in `_GUI_FILES` (prsinf is a static lib, not staged). control.exe
+auto-discovers `main.cpl` in System32. Not yet boot-tested.
+
+## Tier 3 — Control Panel applet (+4 libs): original notes
 
 The launcher is empty without an applet. `MAIN.CPL` (color, date/time, mouse,
 keyboard, ports, fonts, international) pulls a small sub-chain. Build order:
@@ -212,9 +240,9 @@ land binaries first (File→Run works at once), add icons as a follow-up.
 
 ## Execution order
 
-1. Tier 1 (4 apps) — proves the pattern end to end.
-2. Tier 2 (comctl32 → winfile).
-3. Tier 3 (lz32/version/prsinf/t1instal → main.cpl → control panel).
+1. ✅ Tier 1 (4 apps) — proves the pattern end to end.
+2. ✅ Tier 2 (comctl32 → winfile).
+3. ✅ Tier 3 (lz32/version/prsinf/t1instal → main.cpl → control panel).
 4. Phase 4a (cursors/profile/display/ups/screensavers).
 5. Phase 4b (sound/midi/multimed/drivers) — only after Plan B multimedia.
 6. Optional follow-up: Program Manager group icons via `mkhive.py`.

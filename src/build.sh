@@ -1739,6 +1739,41 @@ build_winfile(){
     build_shell32  || return 1
     KEEP_UMAPPL=1 run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/WINFILE" "SHELL/WINFILE - winfile.exe"
 }
+# --- Control Panel applet (Tier 3: main.cpl + its 4-lib sub-chain) -----------
+# lz32/version/t1instal are DYNLINK DLLs (→ makedll=1, land in SDK_LIB);
+# prsinf is a plain LIBRARY; main.cpl is a DYNLINK with TARGETEXT=cpl.
+build_winlza(){
+    # LZ core routines (winlza.lib) — the LZEXPAND DLL links this static lib.
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/LZ/LIBS" "SHELL/LZ/LIBS - winlza.lib"
+}
+build_lz32(){
+    # LZ decompression DLL. main.cpl links lz32.lib for font/driver install.
+    build_winlza || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/LZ/LZEXPAND" "SHELL/LZ - lz32.dll" makedll=1
+}
+build_version(){
+    # Version-resource DLL (GetFileVersionInfo). main.cpl links version.lib.
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/VERSION" "SHELL/VERSION - version.dll" makedll=1
+}
+build_prsinf(){
+    # INF-file parser (prsinf.lib) — used by main.cpl's driver/font install.
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/PRSINF" "WINDOWS/PRSINF - prsinf.lib"
+}
+build_t1instal(){
+    # Type-1 font installer DLL (Adobe .pfb/.pfm → .ttf). main.cpl links it.
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/CONTROL/T1INSTAL" "SHELL/CONTROL/T1INSTAL - t1instal.dll" makedll=1
+}
+build_main_cpl(){
+    # Main Control Panel applet (Color/Date-Time/Mouse/Keyboard/Ports/Fonts/
+    # International). DYNLINK with TARGETEXT=cpl → main.cpl. Links the four libs
+    # above plus user32/kernel32/advapi32/gdi32/comdlg32/shell32/libc + userpri.
+    build_lz32     || return 1
+    build_version  || return 1
+    build_prsinf   || return 1
+    build_t1instal || return 1
+    build_comdlg32 || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/CONTROL/MAIN" "SHELL/CONTROL/MAIN - main.cpl" makedll=1
+}
 # --- GUI userland (USER + GDI + console + winsrv + winlogon) ----------------
 #
 # GDI dependency chain: efloat (FP math) + font drivers (fscaler, ttfd, bmfd,
@@ -2315,6 +2350,9 @@ USERLAND_GUI_TARGETS=(
     # controls DLL. All reachable via Progman → File → Run.
     notepad taskman clock control
     comctl32 winfile
+    # Control Panel applet (Tier 3) — the four support libs then main.cpl,
+    # which makes control.exe functional (Color / Date-Time / Mouse / etc.).
+    lz32 version prsinf t1instal main_cpl
     # TCP/IP command-line utilities (arp, route, ping, tracert) — console
     # apps run from cmd. ping/tracert pull in icmp.dll (ICMP Echo API).
     arp route ping tracert
