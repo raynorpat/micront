@@ -588,6 +588,18 @@ _GUI_FILES: list[tuple[str, Path]] = [
     ("System32/version.dll",         SDK_LIB / "version.dll"),
     ("System32/t1instal.dll",        OBJ("WINDOWS/SHELL/CONTROL/T1INSTAL") / "t1instal.dll"),
     ("System32/main.cpl",            OBJ("WINDOWS/SHELL/CONTROL/MAIN") / "main.cpl"),
+    # Phase 4a — additional Control Panel applets (auto-discovered by control.exe).
+    ("System32/cursors.cpl",         OBJ("WINDOWS/SHELL/CONTROL/CURSORS") / "cursors.cpl"),
+    ("System32/profile.cpl",         OBJ("WINDOWS/SHELL/CONTROL/PROFILE") / "profile.cpl"),
+    ("System32/display.cpl",         OBJ("WINDOWS/SHELL/CONTROL/VIDEO") / "display.cpl"),
+    ("System32/ups.cpl",             OBJ("WINDOWS/SHELL/CONTROL/UPS") / "ups.cpl"),
+    # Screen savers — selectable from the Desktop applet.
+    ("System32/scrnsave.scr",        OBJ("WINDOWS/SHELL/CONTROL/SCRNSAVE/DEFAULT") / "scrnsave.scr"),
+    ("System32/ssbezier.scr",        OBJ("WINDOWS/SHELL/CONTROL/SCRNSAVE/BEZIER") / "ssbezier.scr"),
+    ("System32/ssmarque.scr",        OBJ("WINDOWS/SHELL/CONTROL/SCRNSAVE/MARQUEE") / "ssmarque.scr"),
+    ("System32/ssmyst.scr",          OBJ("WINDOWS/SHELL/CONTROL/SCRNSAVE/MYSTIFY") / "ssmyst.scr"),
+    ("System32/ssstars.scr",         OBJ("WINDOWS/SHELL/CONTROL/SCRNSAVE/STARS") / "ssstars.scr"),
+    ("System32/logon.scr",           OBJ("WINDOWS/SHELL/CONTROL/SCRNSAVE/LOGON") / "logon.scr"),
     # TCP/IP utilities — arp / route query the kernel stack via TDI IOCTLs.
     # Console apps, so GUI-only (need cmd.exe + the console server). Built as
     # newarp/newroute (UMAPPL name); staged under their canonical names.

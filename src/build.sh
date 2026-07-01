@@ -1774,6 +1774,40 @@ build_main_cpl(){
     build_comdlg32 || return 1
     run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/CONTROL/MAIN" "SHELL/CONTROL/MAIN - main.cpl" makedll=1
 }
+# --- Phase 4a: self-contained Control Panel applets -------------------------
+# Each is DYNLINK + TARGETEXT=cpl + DllInitialize → makedll=1. They link only
+# libs already built in Tiers 1-3; control.exe auto-discovers the *.cpl.
+build_cursors(){
+    build_shell32 || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/CONTROL/CURSORS" "SHELL/CONTROL/CURSORS - cursors.cpl" makedll=1
+}
+build_profile(){
+    build_shell32 || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/CONTROL/PROFILE" "SHELL/CONTROL/PROFILE - profile.cpl" makedll=1
+}
+build_display(){
+    # Display applet (VIDEO → display.cpl) — resolution/color depth. Links
+    # prsinf (from Tier 3) for driver-INF parsing.
+    build_shell32 || return 1
+    build_prsinf  || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/CONTROL/VIDEO" "SHELL/CONTROL/VIDEO - display.cpl" makedll=1
+}
+build_ups(){
+    build_shell32 || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/CONTROL/UPS" "SHELL/CONTROL/UPS - ups.cpl" makedll=1
+}
+build_scrnsavers(){
+    # Screen savers (SCRNSAVE DIRS): the scrnsave.lib framework (COMMON) then
+    # each saver (UMAPPL_NOLIB + UMAPPLEXT=.scr → <name>.scr). Savers link
+    # scrnsave.lib, which COMMON stages into SDK_LIB.
+    local SS="$NT_ROOT/PRIVATE/WINDOWS/SHELL/CONTROL/SCRNSAVE"
+    build_shell32 || return 1
+    run_nmake "$SS/COMMON" "SCRNSAVE/COMMON - scrnsave.lib" || return 1
+    local s
+    for s in DEFAULT BEZIER MARQUEE MYSTIFY STARS LOGON; do
+        KEEP_UMAPPL=1 run_nmake "$SS/$s" "SCRNSAVE/$s - .scr" || return 1
+    done
+}
 # --- GUI userland (USER + GDI + console + winsrv + winlogon) ----------------
 #
 # GDI dependency chain: efloat (FP math) + font drivers (fscaler, ttfd, bmfd,
@@ -2353,6 +2387,8 @@ USERLAND_GUI_TARGETS=(
     # Control Panel applet (Tier 3) — the four support libs then main.cpl,
     # which makes control.exe functional (Color / Date-Time / Mouse / etc.).
     lz32 version prsinf t1instal main_cpl
+    # Phase 4a — self-contained Control Panel applets + screen savers.
+    cursors profile display ups scrnsavers
     # TCP/IP command-line utilities (arp, route, ping, tracert) — console
     # apps run from cmd. ping/tracert pull in icmp.dll (ICMP Echo API).
     arp route ping tracert

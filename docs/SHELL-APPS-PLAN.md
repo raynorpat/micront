@@ -8,13 +8,14 @@ File Manager (WinFile), Clock, and the Control Panel (launcher + Main applet)**
 Source disk: `/Users/raynorpat/Projects/NT782Source/SOURCE1B.782_disc1`
 (everything below is under `PRIVATE/WINDOWS/SHELL` unless noted).
 
-**Status: Tiers 1–3 built, staged, and committed.** Notepad, Task Manager,
-Clock, the Control Panel launcher, File Manager (+comctl32), and the Main
-Control Panel applet (+lz32/version/prsinf/t1instal) all build under
-`./build.sh` and stage into the `gui` image. None are boot-tested yet. Phase 4
-(additional `.cpl` applets) is the remaining optional work. Tier 2 needed
-substantial header reconstruction (see its section); Tiers 1 and 3 were
-straight wiring.
+**Status: Tiers 1–3 and Phase 4a built, staged, and committed.** Notepad, Task
+Manager, Clock, the Control Panel launcher, File Manager (+comctl32), the Main
+Control Panel applet (+lz32/version/prsinf/t1instal), the Cursors / Hardware
+Profiles / Display / UPS applets, and six screen savers all build under
+`./build.sh` and stage into the `gui` image. None are boot-tested yet. Only
+Phase 4b (sound/MIDI/multimedia/drivers applets) remains — gated on the
+multimedia stack (`MEDIA-PRINT-GL-PLAN.md`). Tier 2 needed substantial header
+reconstruction (see its section); everything else was straight wiring.
 
 ## Why this is mostly wiring, not porting
 
@@ -202,7 +203,18 @@ launcher change needed. Each applet is `TARGETTYPE=DYNLINK` (mostly with
 
 All applets live under `SHELL/CONTROL/<dir>`.
 
-### Phase 4a — self-contained applets (no new subsystem)
+### Phase 4a — self-contained applets (no new subsystem) ✅
+
+**Built and staged — all first-try, no header reconstruction.** Copied
+`CONTROL/{CURSORS,PROFILE,VIDEO,UPS,SCRNSAVE}` plus the shared `CONTROL/H`
+(`cplib.h`). `build_{cursors,profile,display,ups,scrnsavers}` wired into
+`USERLAND_GUI_TARGETS`; `cursors.cpl`/`profile.cpl`/`display.cpl`/`ups.cpl` and
+the six `.scr` savers staged in `_GUI_FILES`. Two path fixups: PROFILE's
+`SOURCES` used `$(_NTBINDIR)` (unset here) → `$(BASEDIR)`, and the SCRNSAVE
+`SOURCES` had hardcoded absolute `\nt\public\sdk\lib` paths → `$(BASEDIR)`.
+`scrnsavers` builds the `scrnsave.lib` framework (COMMON) then the six savers
+(default/bezier/marquee/mystify/stars/logon, each `UMAPPL_NOLIB` +
+`UMAPPLEXT=.scr`). Not yet boot-tested.
 
 | Applet | Source dir | Output | Notes |
 |--------|-----------|--------|-------|
@@ -243,6 +255,6 @@ land binaries first (File→Run works at once), add icons as a follow-up.
 1. ✅ Tier 1 (4 apps) — proves the pattern end to end.
 2. ✅ Tier 2 (comctl32 → winfile).
 3. ✅ Tier 3 (lz32/version/prsinf/t1instal → main.cpl → control panel).
-4. Phase 4a (cursors/profile/display/ups/screensavers).
+4. ✅ Phase 4a (cursors/profile/display/ups/screensavers).
 5. Phase 4b (sound/midi/multimed/drivers) — only after Plan B multimedia.
 6. Optional follow-up: Program Manager group icons via `mkhive.py`.
