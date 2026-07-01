@@ -602,6 +602,13 @@ _GUI_FILES: list[tuple[str, Path]] = [
     ("System32/logon.scr",           OBJ("WINDOWS/SHELL/CONTROL/SCRNSAVE/LOGON") / "logon.scr"),
     # Multimedia API DLL — winmm.dll (the keystone of the MEDIA subsystem).
     ("System32/winmm.dll",           SDK_LIB / "winmm.dll"),
+    # Phase 4b multimedia Control Panel applets. drivers.cpl/multimed.cpl are
+    # auto-discovered by control.exe; sound.dll/midimap.dll are the Sound and
+    # MIDI-Mapper driver applets (MMCPL-registered / loaded by multimed).
+    ("System32/sound.dll",           OBJ("WINDOWS/SHELL/CONTROL/SOUND") / "sound.dll"),
+    ("System32/midimap.dll",         OBJ("WINDOWS/SHELL/CONTROL/MIDI") / "midimap.dll"),
+    ("System32/drivers.cpl",         OBJ("WINDOWS/SHELL/CONTROL/DRIVERS") / "drivers.cpl"),
+    ("System32/multimed.cpl",        OBJ("WINDOWS/SHELL/CONTROL/MULTIMED") / "multimed.cpl"),
     # TCP/IP utilities — arp / route query the kernel stack via TDI IOCTLs.
     # Console apps, so GUI-only (need cmd.exe + the console server). Built as
     # newarp/newroute (UMAPPL name); staged under their canonical names.

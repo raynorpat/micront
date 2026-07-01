@@ -12,10 +12,11 @@ Source disk: `/Users/raynorpat/Projects/NT782Source/SOURCE1B.782_disc1`
 Manager, Clock, the Control Panel launcher, File Manager (+comctl32), the Main
 Control Panel applet (+lz32/version/prsinf/t1instal), the Cursors / Hardware
 Profiles / Display / UPS applets, and six screen savers all build under
-`./build.sh` and stage into the `gui` image. None are boot-tested yet. Only
-Phase 4b (sound/MIDI/multimedia/drivers applets) remains — gated on the
-multimedia stack (`MEDIA-PRINT-GL-PLAN.md`). Tier 2 needed substantial header
-reconstruction (see its section); everything else was straight wiring.
+`./build.sh` and stage into the `gui` image. plus the multimedia keystone `winmm.dll` and the four Phase 4b applets
+(Sound / MIDI Mapper / Drivers / Multimedia) all build under `./build.sh` and
+stage into the `gui` image. None are boot-tested yet. **All shell tiers +
+phases are now complete.** Tier 2 needed substantial header reconstruction
+(see its section); everything else was straight wiring.
 
 ## Why this is mostly wiring, not porting
 
@@ -228,7 +229,27 @@ These pull only libs already built in Tiers 1–3 (user32/gdi32/shell32/
 comdlg32/version/userpri). Stage each `.cpl` as `System32/<name>.cpl`,
 screensavers as `System32/<name>.scr`.
 
-### Phase 4b — multimedia-dependent applets (gated on Plan B)
+### Phase 4b — multimedia-dependent applets ✅
+
+**Built and staged.** Only `winmm.dll` was actually needed — none of the four
+applets link `msacm32` (the plan over-estimated the dependency; MULTIMED's
+`TARGETLIBS` is just user32/kernel32/winmm). So after building the multimedia
+keystone (`MEDIA/WINMM`, see `MEDIA-PRINT-GL-PLAN.md` §2), all four built
+first-try:
+
+- `sound.dll` (SOUND) and `midimap.dll` (MIDI) — CPlApplet driver DLLs
+  (MMCPL-registered / loaded by the Multimedia applet, not `*.cpl`-discovered).
+- `drivers.cpl` (DRIVERS) — needed `TARGETEXT=cpl` added (missing from its
+  `SOURCES`, unlike every sibling applet) so control.exe discovers it.
+- `multimed.cpl` (MULTIMED) — auto-discovered.
+
+All copied under `SHELL/CONTROL/{SOUND,MIDI,DRIVERS,MULTIMED}` with the usual
+`$(_NTBINDIR)`→`$(BASEDIR)` fix, wired as `sound midimap drivers_cpl multimed`
+in `USERLAND_GUI_TARGETS`, and staged in `_GUI_FILES`. `msacm32.dll` (audio
+compression) was **not** required here and remains part of the deeper MEDIA
+stack. Not yet boot-tested.
+
+Original notes (the dependency turned out lighter than expected):
 
 These applets drive the audio/MCI stack, so they need `winmm.dll`/`msacm32`
 from `MEDIA-PRINT-GL-PLAN.md` §2. **Do them only after multimedia builds.**
@@ -256,5 +277,5 @@ land binaries first (File→Run works at once), add icons as a follow-up.
 2. ✅ Tier 2 (comctl32 → winfile).
 3. ✅ Tier 3 (lz32/version/prsinf/t1instal → main.cpl → control panel).
 4. ✅ Phase 4a (cursors/profile/display/ups/screensavers).
-5. Phase 4b (sound/midi/multimed/drivers) — only after Plan B multimedia.
+5. ✅ Phase 4b (sound/midi/multimed/drivers) — winmm built; msacm not needed.
 6. Optional follow-up: Program Manager group icons via `mkhive.py`.

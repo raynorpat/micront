@@ -1820,6 +1820,27 @@ build_winmm(){
     build_mmcntrls || return 1
     run_nmake "$NT_ROOT/PRIVATE/WINDOWS/MEDIA/WINMM" "MEDIA/WINMM - winmm.dll" makedll=1
 }
+# --- Phase 4b: multimedia Control Panel applets (need winmm) ----------------
+# sound.dll / midimap.dll are CPlApplet .dll applets (MMCPL-registered);
+# drivers.cpl / multimed.cpl are auto-discovered. All link only winmm + libs
+# already built. All were $(_NTBINDIR) → $(BASEDIR)-fixed on copy.
+build_sound(){
+    build_winmm || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/CONTROL/SOUND" "SHELL/CONTROL/SOUND - sound.dll" makedll=1
+}
+build_midimap(){
+    build_winmm  || return 1
+    build_pwin32 || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/CONTROL/MIDI" "SHELL/CONTROL/MIDI - midimap.dll" makedll=1
+}
+build_drivers_cpl(){
+    build_winmm || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/CONTROL/DRIVERS" "SHELL/CONTROL/DRIVERS - drivers.cpl" makedll=1
+}
+build_multimed(){
+    build_winmm || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/CONTROL/MULTIMED" "SHELL/CONTROL/MULTIMED - multimed.cpl" makedll=1
+}
 build_scrnsavers(){
     # Screen savers (SCRNSAVE DIRS): the scrnsave.lib framework (COMMON) then
     # each saver (UMAPPL_NOLIB + UMAPPLEXT=.scr → <name>.scr). Savers link
@@ -2422,6 +2443,9 @@ USERLAND_GUI_TARGETS=(
     # that import it (sound recorder, media player, mm Control Panel applets)
     # can load once this is present. Pulls mmcntrls.lib.
     winmm
+    # Phase 4b — multimedia Control Panel applets (all link winmm): the Sound
+    # and MIDI-Mapper driver applets plus the Drivers and Multimedia .cpl icons.
+    sound midimap drivers_cpl multimed
     # TCP/IP command-line utilities (arp, route, ping, tracert) — console
     # apps run from cmd. ping/tracert pull in icmp.dll (ICMP Echo API).
     arp route ping tracert
