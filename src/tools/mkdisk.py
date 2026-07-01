@@ -572,6 +572,16 @@ _GUI_FILES: list[tuple[str, Path]] = [
     ("System32/progman.exe",         OBJ("WINDOWS/SHELL/PROGMAN") / "progman.exe"),
     # cmd.exe — Console shell. Reachable via progman File → Run → cmd.exe.
     ("System32/cmd.exe",             OBJ("WINDOWS/CMD") / "cmd.exe"),
+    # Classic NT 3.5 shell apps (Tier 1). Present on disk → launchable via
+    # Progman → File → Run. control.exe is inert until an applet (main.cpl)
+    # is staged.
+    ("System32/notepad.exe",         OBJ("WINDOWS/SHELL/ACCESORY/NOTEPAD") / "notepad.exe"),
+    ("System32/taskman.exe",         OBJ("WINDOWS/SHELL/TASKMAN") / "taskman.exe"),
+    ("System32/clock.exe",           OBJ("WINDOWS/SHELL/ACCESORY/CLOCK") / "clock.exe"),
+    ("System32/control.exe",         OBJ("WINDOWS/SHELL/CONTROL/CPANEL") / "control.exe"),
+    # File Manager (Tier 2) + its common-controls DLL.
+    ("System32/comctl32.dll",        SDK_LIB / "comctl32.dll"),
+    ("System32/winfile.exe",         OBJ("WINDOWS/SHELL/WINFILE") / "winfile.exe"),
     # TCP/IP utilities — arp / route query the kernel stack via TDI IOCTLs.
     # Console apps, so GUI-only (need cmd.exe + the console server). Built as
     # newarp/newroute (UMAPPL name); staged under their canonical names.

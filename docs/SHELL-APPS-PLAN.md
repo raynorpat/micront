@@ -46,7 +46,15 @@ in the tree.
 `version.dll`, `lz32.dll`, `main.cpl`) land in `PUBLIC/SDK/LIB/I386`
 (`SDK_LIB` in mkdisk), same as the other DLLs.
 
-## Tier 1 — zero new libraries
+## Tier 1 — zero new libraries ✅
+
+**Built and staged.** Notepad, Task Manager, Clock, and the Control Panel
+launcher were copied under `SHELL/{ACCESORY/NOTEPAD,TASKMAN,ACCESORY/CLOCK,
+CONTROL/CPANEL}`, wired via `build_{notepad,taskman,clock,control}` (all
+`KEEP_UMAPPL=1`, appended to `USERLAND_GUI_TARGETS` after `progman cmd`), and
+staged into `_GUI_FILES` as `System32/{notepad,taskman,clock,control}.exe`.
+`./build.sh notepad taskman clock control` produces all four EXEs. Not yet
+boot-tested. control.exe stays inert until Tier 3 supplies an applet.
 
 Each is copy + 4 lines of wiring. No new `.lib` to build.
 
@@ -64,7 +72,51 @@ pipeline.
 **Verify:** `./build.sh notepad taskman control clock` → EXEs appear in each
 `obj/i386/`. Boot the `gui` disk, launch each via Progman → File → Run.
 
-## Tier 2 — File Manager (+1 DLL)
+## Tier 2 — File Manager (+1 DLL) ✅
+
+**Built and staged, but it was NOT "mostly wiring."** The `COMMCTRL` source on
+the disk is a *newer* comctl32 (tab control, property sheets, full listview/
+treeview) than the pre-tab-control public `commctrl.h` the tree was seeded
+with, and it compiles against public headers that don't exist in usable form
+on either leak disc. Making it build required real reconstruction:
+
+- **Adopted the newer `commctrl.h`** — copied `SHELL/CHIPORT/MSCTLS/COMMCTRL.H`
+  (a "daytona 612 + chicago b89" merge, purpose-built for this transition)
+  over `PUBLIC/SDK/INC/commctrl.h`, then filled its gaps against this source:
+  header hit-test (`HDM_HITTEST`/`HD_HITTESTINFO`/`HHT_*`), treeview
+  (`TVE_ACTIONMASK`, `TVS_DISABLEDRAGDROP`, `TVIF_ALL`), listview
+  (`LVM_GETITEMSPACING/GETSELECTEDCOUNT/SETITEMPOSITION32`, `LVFI_WRAP`,
+  `LVSCW_*`, `NM_LISTVIEW.lParam`), tab (`TCM_GETCURFOCUS`, `TCS_FORCE*`),
+  status (`SBARS_SIZEGRIP`, `SB_GETRECT`), toolbar (`TBNOTIFY`, `TBSAVEPARAMS`,
+  `TBADDBITMAP` alias, `IDB_*`, `TBSTATE_WRAP`, `HINST_COMMCTRL`, `TB_*`),
+  tooltips (`TTM_GETTOOLCOUNT/ENUMTOOLS`, `TTS_NOPREFIX`), updown
+  (`UDM_DELTAPOS`), the whole animate control, `OVERLAYMASKTOINDEX`, and the
+  `Animate_*` helper macros. The winuser-derived structs it bundles
+  (`NMHDR`/`SCROLLINFO`/`STYLESTRUCT`/`NONCLIENTMETRICS`) are `#ifndef
+  _WINUSERP_`-guarded so Unicode clients (winfile) that include `winuserp.h`
+  don't get a redefinition.
+- **Wrote `PUBLIC/SDK/INC/prsht.h` from scratch** — the property-sheet public
+  header is absent from both discs (only the private `prshtp.h` ships).
+  Reconstructed the `PROPSHEETPAGE`/`PROPSHEETHEADER` structs (incl. this
+  version's `pfnRelease` + `PSP_IS16`), the `PSP_/PSH_/PSN_/PSM_/PSNRET_`
+  constants, `ID_PSRESTART*`, and the three entry points.
+- **Reconstructed missing private definitions in `COMMCTRL/{ctlspriv,daytona}.h`
+  and a few `.c` fixes**: the retail debug NOPs (`DebugMsg`/`AssertMsg`/
+  `Assert` + `DM_*`), the MRU API (`MRUINFO`/`MRU_*`/`MRUCMP*PROC` +
+  prototypes), the `PHASHTABLE` forward decl, NT4 winuser bits used by the
+  controls (`DS_3DLOOK/CONTROL/CONTEXTHELP`, `SS_SUNKEN`, `IDHELP`, `WS_EX_*`,
+  `WM_SETTINGCHANGE/HELP/CONTEXTMENU/DEVICECHANGE/SETICON`, `DrawTextEx` +
+  `DT_*`, `LoadImage`, `HELPINFO`), forward protos for `StrStrI`/
+  `ImageList_LoadImage`, and `StrNCmpI`→`StrCmpNI`. A `CreateStatusWindowW`
+  wrapper + `.def` fixups export the Unicode entry winfile imports.
+- Changed `COMMCTRL/SOURCES` `TARGETPATH` to `public\sdk\lib` (like comdlg32)
+  so `comctl32.dll`/`.lib` land in `SDK_LIB` for winfile to link + mkdisk to
+  stage.
+
+`build_comctl32`/`build_winfile` wired into `USERLAND_GUI_TARGETS`; both staged
+in `_GUI_FILES`. Not yet boot-tested.
+
+## Tier 2 — File Manager (+1 DLL): original notes
 
 | Need | Source dir | Type | Flag |
 |------|-----------|------|------|
