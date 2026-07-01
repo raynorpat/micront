@@ -919,13 +919,14 @@ build_tracert() {
 # dhcplib (packet build/parse/dump helpers) and dhcpcli2 (the lease state
 # machine). A mc pre-pass turns DHCPMSG.MC into CLIENT/INC/dhcpmsg.h (event
 # message ids, included by dhcpcli2) + NEWNT/dhcpmsg.rc (pulled by dhcp.rc).
-DHCP="$NET/SOCKETS/TCPCMD/DHCP"
-build_dhcplib()  { run_nmake "$DHCP/LIB"         "NET/DHCP/LIB - dhcplib.lib"; }
+# DHCPDIR (not DHCP — that name is the DHCP=1 disk-assembly env toggle).
+DHCPDIR="$NET/SOCKETS/TCPCMD/DHCP"
+build_dhcplib()  { run_nmake "$DHCPDIR/LIB"         "NET/DHCP/LIB - dhcplib.lib"; }
 # dhcpcli2's SOURCES writes its lib to ..\..\..\obj (TCPCMD/obj), which the
 # dhcpcsvc link then reads — create it so the lib step doesn't silently fail.
-build_dhcpcli2() { mkdir -p "$NET/SOCKETS/TCPCMD/obj/i386"; run_nmake "$DHCP/CLIENT/DHCP" "NET/DHCP/CLIENT - dhcpcli2.lib (lease state machine)"; }
+build_dhcpcli2() { mkdir -p "$NET/SOCKETS/TCPCMD/obj/i386"; run_nmake "$DHCPDIR/CLIENT/DHCP" "NET/DHCP/CLIENT - dhcpcli2.lib (lease state machine)"; }
 _ensure_dhcpmsg() {
-    local dir="$DHCP/CLIENT/NEWNT" hdr="$DHCP/CLIENT/INC/dhcpmsg.h"
+    local dir="$DHCPDIR/CLIENT/NEWNT" hdr="$DHCPDIR/CLIENT/INC/dhcpmsg.h"
     if [ -f "$hdr" ] && [ "$hdr" -nt "$dir/DHCPMSG.MC" ]; then
         return 0
     fi
@@ -933,7 +934,7 @@ _ensure_dhcpmsg() {
     run_wibo_tool "$dir" mc -d -r ".\\" -h "..\\inc" DHCPMSG.MC \
         || { echo "!!! mc on DHCPMSG.MC failed"; return 1; }
     # Lowercase-normalise for a case-sensitive FS (no-op on macOS).
-    [ -f "$hdr" ]            || { [ -f "$DHCP/CLIENT/INC/DHCPMSG.H" ] && cp -f "$DHCP/CLIENT/INC/DHCPMSG.H" "$hdr"; }
+    [ -f "$hdr" ]            || { [ -f "$DHCPDIR/CLIENT/INC/DHCPMSG.H" ] && cp -f "$DHCPDIR/CLIENT/INC/DHCPMSG.H" "$hdr"; }
     [ -f "$dir/dhcpmsg.rc" ] || { [ -f "$dir/DHCPMSG.RC" ]           && cp -f "$dir/DHCPMSG.RC" "$dir/dhcpmsg.rc"; }
     return 0
 }
@@ -942,7 +943,7 @@ build_dhcpcsvc() {
     _ensure_dhcpmsg || return 1
     build_dhcplib   || return 1
     build_dhcpcli2  || return 1
-    run_nmake "$DHCP/CLIENT/NEWNT" "NET/DHCP - DHCP client service (dhcpcsvc.dll)" makedll=1
+    run_nmake "$DHCPDIR/CLIENT/NEWNT" "NET/DHCP - DHCP client service (dhcpcsvc.dll)" makedll=1
 }
 
 # --- TCP/IP command-line utilities (NTOS/TDI/TCPIP/UTILS) --------------------
@@ -1669,6 +1670,45 @@ build_progman(){
 build_cmd(){
     KEEP_UMAPPL=1 run_nmake "$NT_ROOT/PRIVATE/WINDOWS/CMD" "WINDOWS/CMD - cmd.exe"
 }
+# --- Classic NT 3.5 shell apps (Tier 1: no new libraries) -------------------
+# Each is TARGETTYPE=LIBRARY (or UMAPPL_NOLIB) + UMAPPL=<name>, the same
+# pattern build_progman uses: KEEP_UMAPPL=1 runs the UMAPPL link pass that
+# produces the .exe. They link only comdlg32/shell32/user32/ntdll, all built
+# earlier in the gui tier.
+build_notepad(){
+    build_comdlg32 || return 1
+    KEEP_UMAPPL=1 run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/ACCESORY/NOTEPAD" "SHELL/NOTEPAD - notepad.exe"
+}
+build_taskman(){
+    build_shell32 || return 1
+    KEEP_UMAPPL=1 run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/TASKMAN" "SHELL/TASKMAN - taskman.exe"
+}
+build_clock(){
+    build_comdlg32 || return 1
+    KEEP_UMAPPL=1 run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/ACCESORY/CLOCK" "SHELL/CLOCK - clock.exe"
+}
+build_control(){
+    # Control Panel launcher (UMAPPL_NOLIB). Enumerates + launches *.cpl files;
+    # inert until an applet (main.cpl, Tier 3) is staged. Links shell32 + the
+    # userpri.lib that build_shell32 produces.
+    build_shell32 || return 1
+    KEEP_UMAPPL=1 run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/CONTROL/CPANEL" "SHELL/CONTROL - control.exe"
+}
+# --- File Manager (Tier 2: +comctl32.dll) -----------------------------------
+build_comctl32(){
+    # Common controls (listview/treeview/toolbar/property sheets). DYNLINK →
+    # makedll=1, same as build_comdlg32. Links only kernel32/user32/gdi32/
+    # advapi32, all built earlier in the gui tier. WinFile is the only Tier 1/2
+    # app that needs it.
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/COMMCTRL" "SHELL/COMMCTRL - comctl32.dll" makedll=1
+}
+build_winfile(){
+    # File Manager (WinFile). TARGETTYPE=LIBRARY + UMAPPL=winfile → KEEP_UMAPPL.
+    # Links shell32 + comctl32 + user32p + ntdll.
+    build_comctl32 || return 1
+    build_shell32  || return 1
+    KEEP_UMAPPL=1 run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/WINFILE" "SHELL/WINFILE - winfile.exe"
+}
 # --- GUI userland (USER + GDI + console + winsrv + winlogon) ----------------
 #
 # GDI dependency chain: efloat (FP math) + font drivers (fscaler, ttfd, bmfd,
@@ -2240,6 +2280,11 @@ USERLAND_GUI_TARGETS=(
     winlogon userinit
     # Program Manager (the default NT 3.5 shell) and cmd.exe.
     progman cmd
+    # Classic NT 3.5 shell apps (Tier 1) — Notepad, Task Manager, Clock, and
+    # the Control Panel launcher; then File Manager (Tier 2) with its common
+    # controls DLL. All reachable via Progman → File → Run.
+    notepad taskman clock control
+    comctl32 winfile
     # TCP/IP command-line utilities (arp, route, ping, tracert) — console
     # apps run from cmd. ping/tracert pull in icmp.dll (ICMP Echo API).
     arp route ping tracert
