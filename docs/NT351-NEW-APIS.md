@@ -307,6 +307,42 @@ See also: `docs/NT351-SERVICE-PACKS.md` for the full service-pack timeline.
 
 ---
 
+## Implementation status in micront
+
+All four families are now implemented from the NT4 reference source. The entry
+points are exported unconditionally (matching their SP5 debut); the public
+header declarations are **not** gated on `_WIN32_WINNT >= 0x0400`, because
+micront's headers do not use that versioning scheme.
+
+| API | Where it lives | Commit |
+| --- | --- | --- |
+| Fibers (6 functions) | `KERNEL32`: `windows/base/client/thread.c` (`CreateFiber` / `DeleteFiber` / `ConvertThreadToFiber`), `i386/thunk.asm` (`SwitchToFiber`), `i386/context.c` (`BaseFiberStart`). `FIBER` struct + `GetCurrentFiber` / `GetFiberData` macros in `ntpsapi.h`; `NT_TIB.FiberData` union; `Fb*` / `Tb*` offsets in `ks386.inc` + `geni386.c` | `ed9d66f7` |
+| `ReadDirectoryChangesW` | `KERNEL32`: `windows/base/client/filefind.c`, over the pre-existing `NtNotifyChangeDirectoryFile`. `FILE_ACTION_*` and the two missing `FILE_NOTIFY_CHANGE_*` filters added to `winnt.h` | `ed9d66f7` |
+| `AcceptEx` / `GetAcceptExSockaddrs` | `WSOCK32`: `net/sockets/winsock/acceptex.c`, exported at ordinals 1141 / 1142; new public `mswsock.h`. Backed by a new `IOCTL_AFD_SUPER_ACCEPT` in `ntos/afd` | `40fbdb64`, `55ee4966` |
+| `ROUTE METRIC` | `ntos/tdi/tcpip/utils/ip/route/newroute.c`: optional `METRIC` keyword before the metric value | `a581ae0b` |
+
+### Notes on the AcceptEx / AFD super-accept path
+
+- `IOCTL_AFD_SUPER_ACCEPT` (request 32, `METHOD_OUT_DIRECT`) pipelines
+  wait-for-listen → accept → local/remote address capture → first-data receive
+  in a single overlapped IRP, which is what AcceptEx needs.
+- **Worker-thread deferral (micront-specific).** micront's 3.51 AFD completes
+  the wait-for-listen at `DISPATCH_LEVEL`, but its accept core opens a TDI
+  address handle (`ObOpenObjectByPointer` / `KeAttachProcess`) that requires
+  `PASSIVE_LEVEL`. The completion routine therefore hands the remaining work to
+  a passive worker (`AfdSuperAcceptWorker`). NT 4.0 avoids this because its
+  later, factored `AfdAcceptCore` is dispatch-safe.
+- The local address is obtained with a real `TDI_QUERY_ADDRESS_INFO` query on
+  the accepted connection, so it matches `getsockname` even for wildcard binds.
+- micront's `AFD_CONNECTION` has no `DeviceObject` field (NT 4.0's does), so the
+  transport device is reached via `connection->FileObject->DeviceObject`.
+- **Not yet build- or run-verified.** The AFD and wsock32 changes are kernel and
+  service-provider code that has not been compiled or exercised; they need a
+  checked build and a VM test (start with `dwReceiveDataLength == 0`, then with
+  first-data receive).
+
+---
+
 ## Sources
 
 - [Q128531 — README.TXT: Windows NT 3.51 U.S. Service Pack (KB archive)](https://jeffpar.github.io/kbarchive/kb/128/Q128531/)
