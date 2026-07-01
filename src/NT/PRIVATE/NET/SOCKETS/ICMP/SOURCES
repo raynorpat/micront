@@ -1,0 +1,33 @@
+!IF 0
+
+Copyright (c) 1989-91  Microsoft Corporation
+
+Module Name:
+
+    sources.
+
+Abstract:
+
+    This file specifies the target component being built and the list of
+    sources files needed to build that component.
+
+!ENDIF
+
+MAJORCOMP=sockets
+MINORCOMP=icmp
+
+TARGETNAME=icmp
+TARGETPATH=$(BASEDIR)\public\sdk\lib
+TARGETTYPE=DYNLINK
+
+TARGETLIBS= \
+    $(BASEDIR)\Public\Sdk\Lib\*\kernel32.lib \
+    $(BASEDIR)\Public\Sdk\Lib\*\ntdll.lib
+
+USE_CRTDLL=1
+
+INCLUDES=$(BASEDIR)\private\inc;..\..\..\inc;
+
+SOURCES= \
+        icmp.c \
+        icmp.rc

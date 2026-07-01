@@ -416,3 +416,5 @@ src/NT/PUBLIC/SDK/LIB/I386/wsock32.dll
 src/NT/PUBLIC/SDK/LIB/I386/wsock32.exp
 src/NT/PUBLIC/SDK/LIB/I386/wshtcpip.dll
 src/NT/PUBLIC/SDK/LIB/I386/wshtcpip.exp
+src/NT/PUBLIC/SDK/LIB/I386/icmp.dll
+src/NT/PUBLIC/SDK/LIB/I386/icmp.exp

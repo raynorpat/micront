@@ -721,6 +721,17 @@ build_wshtcpip() {
     build_wsock32 || return 1
     run_nmake "$NET/SOCKETS/WSHTCPIP" "NET/WSHTCPIP - wshtcpip.dll (TCP/IP Winsock helper)" makedll=1
 }
+# icmp.dll — the ICMP Echo API (IcmpCreateFile/IcmpSendEcho). Leak-absent
+# (shipped as a binary), so this is a reimplementation that drives the IP
+# driver's IOCTL_ICMP_ECHO_REQUEST on \Device\Ip. ping.exe links its import.
+build_icmp() { run_nmake "$NET/SOCKETS/ICMP" "NET/ICMP - icmp.dll (ICMP Echo API)" makedll=1; }
+# ping.exe — the classic ICMP echo tool. Links icmp.lib (echo API) + wsock32
+# (name resolution). Console UMAPPL, so KEEP_UMAPPL=1.
+build_ping() {
+    build_icmp    || return 1
+    build_wsock32 || return 1
+    KEEP_UMAPPL=1 run_nmake "$NET/SOCKETS/PING" "NET/PING - ping.exe" makedll=1
+}
 
 # --- TCP/IP command-line utilities (NTOS/TDI/TCPIP/UTILS) --------------------
 # arp.exe / route.exe query and manage the kernel TCP/IP stack directly via
@@ -2000,8 +2011,9 @@ USERLAND_GUI_TARGETS=(
     winlogon userinit
     # Program Manager (the default NT 3.5 shell) and cmd.exe.
     progman cmd
-    # TCP/IP command-line utilities (arp, route) — console apps run from cmd.
-    arp route
+    # TCP/IP command-line utilities (arp, route, ping) — console apps run
+    # from cmd. ping pulls in icmp.dll (ICMP Echo API).
+    arp route ping
 )
 
 build_group() {

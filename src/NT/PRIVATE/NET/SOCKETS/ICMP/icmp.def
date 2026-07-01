@@ -1,0 +1,13 @@
+;
+;         File: icmp.def
+;      Summary: Module definition file for the ICMP Echo API DLL.
+;
+
+LIBRARY         ICMP
+
+DESCRIPTION     'ICMP Echo request API DLL'
+
+EXPORTS
+        IcmpCreateFile
+        IcmpCloseHandle
+        IcmpSendEcho

@@ -567,6 +567,10 @@ _GUI_FILES: list[tuple[str, Path]] = [
     # newarp/newroute (UMAPPL name); staged under their canonical names.
     ("System32/arp.exe",             OBJ("NTOS/TDI/TCPIP/UTILS/ARP/ARP") / "newarp.exe"),
     ("System32/route.exe",           OBJ("NTOS/TDI/TCPIP/UTILS/IP/ROUTE") / "newroute.exe"),
+    # ping.exe + its ICMP Echo API DLL. icmp.dll drives the IP driver's
+    # IOCTL_ICMP_ECHO_REQUEST on \Device\Ip.
+    ("System32/icmp.dll",            SDK_LIB / "icmp.dll"),
+    ("System32/ping.exe",            OBJ("NET/SOCKETS/PING") / "ping.exe"),
     # Login
     ("System32/winlogon.exe",       OBJ("WINDOWS/USER/WINLOGON/DAYTONA") / "winlogon.exe"),
     ("System32/userinit.exe",       OBJ("WINDOWS/USER/USERINIT") / "userinit.exe"),
