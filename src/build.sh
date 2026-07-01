@@ -732,6 +732,13 @@ build_ping() {
     build_wsock32 || return 1
     KEEP_UMAPPL=1 run_nmake "$NET/SOCKETS/PING" "NET/PING - ping.exe" makedll=1
 }
+# tracert.exe — traceroute. Same icmp.lib + wsock32 deps as ping; walks the
+# path by sending echoes with an increasing IP TTL.
+build_tracert() {
+    build_icmp    || return 1
+    build_wsock32 || return 1
+    KEEP_UMAPPL=1 run_nmake "$NET/SOCKETS/TRACERT" "NET/TRACERT - tracert.exe" makedll=1
+}
 
 # --- TCP/IP command-line utilities (NTOS/TDI/TCPIP/UTILS) --------------------
 # arp.exe / route.exe query and manage the kernel TCP/IP stack directly via
@@ -2011,9 +2018,9 @@ USERLAND_GUI_TARGETS=(
     winlogon userinit
     # Program Manager (the default NT 3.5 shell) and cmd.exe.
     progman cmd
-    # TCP/IP command-line utilities (arp, route, ping) — console apps run
-    # from cmd. ping pulls in icmp.dll (ICMP Echo API).
-    arp route ping
+    # TCP/IP command-line utilities (arp, route, ping, tracert) — console
+    # apps run from cmd. ping/tracert pull in icmp.dll (ICMP Echo API).
+    arp route ping tracert
 )
 
 build_group() {

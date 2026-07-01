@@ -571,6 +571,7 @@ _GUI_FILES: list[tuple[str, Path]] = [
     # IOCTL_ICMP_ECHO_REQUEST on \Device\Ip.
     ("System32/icmp.dll",            SDK_LIB / "icmp.dll"),
     ("System32/ping.exe",            OBJ("NET/SOCKETS/PING") / "ping.exe"),
+    ("System32/tracert.exe",         OBJ("NET/SOCKETS/TRACERT") / "tracert.exe"),
     # Login
     ("System32/winlogon.exe",       OBJ("WINDOWS/USER/WINLOGON/DAYTONA") / "winlogon.exe"),
     ("System32/userinit.exe",       OBJ("WINDOWS/USER/USERINIT") / "userinit.exe"),
