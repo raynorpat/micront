@@ -533,14 +533,62 @@ build_srvsvc_lib() { build_srvsvc_idl || return 1; run_nmake "$NET/SVCDLLS/SRVSV
 # srvsvc.dll — the Server service. Serves shares to modern SMB clients over
 # RPC. The legacy downlevel (LanMan/OS2 RAP) transaction server is stubbed
 # out (xsstub.c), so this doesn't pull in the xactsrv/browser/RPCXLATE
-# subsystem (not imported). browser.dll (network browsing) is likewise
-# omitted — optional for file sharing and gated behind that same subsystem.
+# subsystem.
 build_srvsvc() {
     build_srvsvc_idl || return 1
     build_srvcomn    || return 1
     build_srvsvc_lib || return 1
     run_nmake "$NET/SVCDLLS/SRVSVC/SERVER" "SRVSVC - Server service (srvsvc.dll)" makedll=1
 }
+
+# --- Computer Browser + downlevel transaction server -----------------------
+# browser.dll (the Computer Browser service, "Network Neighborhood") and
+# xactsrv.dll (the LanMan/OS2 downlevel RAP transaction server) have a
+# circular DLL import: browser links xactsrv.lib, xactsrv links browser.lib.
+# It's broken the same way as samsrv<->lsasrv: compile both to objs, then
+# synthesize each import lib from its .def (+ objs for @N decorations), then
+# link both DLLs. xactsrv also needs the RPCXLATE stack (dosprint marshalling
+# + rxcommon/rxapi RAP descriptors + netrap).
+build_dosprint() { run_nmake "$NET/DOSPRINT"          "NET/DOSPRINT - DosPrint API (dosprint.lib)"; }
+build_rxcommon() { run_nmake "$NET/RPCXLATE/RXCOMMON" "NET/RXCOMMON - RAP marshalling common (rxcommon.lib)"; }
+build_rxapi()    { run_nmake "$NET/RPCXLATE/RXAPI"    "NET/RXAPI - RAP API descriptors (rxapi.lib)"; }
+build_netrap()   { run_nmake "$NET/RAP"               "NET/RAP - Remote Admin Protocol (netrap.dll)" makedll=1; }
+build_brcommon() { run_nmake "$NET/SVCDLLS/BROWSER/COMMON" "BROWSER/COMMON - browser helpers (brcommon.lib)"; }
+# BOWSER.IDL -> bowser.h + client/server stubs. -oldnames for the ServerIfHandle.
+build_browser_idl() {
+    local dir="$NET/SVCDLLS/BROWSER"
+    run_wibo_tool "$dir" midl /ms_ext /c_ext /app_config /D MIDL_PASS /D _M_IX86 /D _X86_ \
+        -oldnames /I "$NT_ROOT_WIN\\PRIVATE\\INC" BOWSER.IDL || return 1
+    cp -f "$dir/bowser_c.c" "$dir/CLIENT/" 2>/dev/null || cp -f "$dir/BOWSER_C.C" "$dir/CLIENT/bowser_c.c"
+    cp -f "$dir/bowser_s.c" "$dir/SERVER/" 2>/dev/null || cp -f "$dir/BOWSER_S.C" "$dir/SERVER/bowser_s.c"
+}
+build_browser_client() { build_browser_idl || return 1; run_nmake "$NET/SVCDLLS/BROWSER/CLIENT" "BROWSER/CLIENT - bowser.lib (RPC client stub)"; }
+# Break the xactsrv<->browser circular import: compile both, then generate
+# both import libs from their .def files, then link both DLLs.
+build_xactsrv_browser() {
+    build_dosprint       || return 1
+    build_rxcommon       || return 1
+    build_rxapi          || return 1
+    build_netrap         || return 1
+    build_brcommon       || return 1
+    build_browser_idl    || return 1
+    build_browser_client || return 1
+    build_srvsvc_lib     || return 1   # browser links srvsvc.lib (client)
+
+    local xdir="$NET/XACTSRV"
+    local bdir="$NET/SVCDLLS/BROWSER/SERVER"
+    local xobj="$xdir/obj/i386/*.obj"
+    local bobj="$bdir/obj/i386/*.obj"
+    # Compile-only passes so the obj files exist (links fail — no import libs yet).
+    if ! compgen -G "$xobj" > /dev/null; then _nmake_only_compile "$xdir" "XACTSRV compile-only (pre-imports)"; fi
+    if ! compgen -G "$bobj" > /dev/null; then _nmake_only_compile "$bdir" "BROWSER compile-only (pre-imports)"; fi
+    _lib_from_def xactsrv.lib "$xdir/XACTSRV.DEF"       "$xobj" || return 1
+    _lib_from_def browser.lib "$bdir/BROWSER.DEF"       "$bobj" || return 1
+    # Now both import libs exist; link the DLLs.
+    run_nmake "$xdir" "NET/XACTSRV - downlevel transaction server (xactsrv.dll)" makedll=1 || return 1
+    run_nmake "$bdir" "BROWSER - Computer Browser service (browser.dll)" makedll=1
+}
+build_browser() { build_xactsrv_browser; }
 
 # net.exe — the `net` command (net use / net view / ...). Built from the
 # NETCMD tree: common.lib (shared helpers) + netlib.lib feed the NETUSE
