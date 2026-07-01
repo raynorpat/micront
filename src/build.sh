@@ -421,6 +421,11 @@ build_msfs()   { run_nmake "$NTOS/MAILSLOT"  "MSFS - Mailslot filesystem driver"
 build_lfs()    { run_nmake "$NTOS/LFS"  "LFS - Log File Service (lfs.lib)"; }
 build_ntfs()   { build_lfs || return 1; run_nmake "$NTOS/NTFS" "NTFS - NT filesystem driver"; }
 build_hello()  { run_nmake "$NTOS/DD/HELLO"    "HELLO - MicroNT visibility driver"; }
+# Sound: kernel SB16 driver. soundlib.lib (kernel sound framework) links into
+# sndblst.sys, which programs QEMU's emulated Sound Blaster 16 (port/DMA/IRQ)
+# via the HAL. The user-mode sndblst.dll (MEDIA/DRIVERS) talks to it.
+build_soundlib(){ mkdir -p "$NTOS/DD/SOUND/SOUNDLIB/obj/i386"; run_nmake "$NTOS/DD/SOUND/SOUNDLIB" "SOUND/SOUNDLIB - soundlib.lib (kernel sound framework)"; }
+build_sndblst_sys(){ build_soundlib || return 1; mkdir -p "$NTOS/DD/SOUND/SNDBLST/obj/i386"; run_nmake "$NTOS/DD/SOUND/SNDBLST" "SOUND/SNDBLST - sndblst.sys (kernel SB16 driver)"; }
 
 # --- virtio shared lib + device drivers -------------------------------------
 # virtio.lib — shared bus / split-ring / PCI legacy transport. Every
@@ -1840,6 +1845,23 @@ build_drivers_cpl(){
 build_multimed(){
     build_winmm || return 1
     run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/CONTROL/MULTIMED" "SHELL/CONTROL/MULTIMED - multimed.cpl" makedll=1
+}
+build_drvlib(){
+    # User-mode MM driver framework (drvlib.lib) — wave/midi/aux/mixer device
+    # handlers shared by the sound-card driver DLLs.
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/MEDIA/DRIVERS/DRVLIB" "MEDIA/DRIVERS/DRVLIB - drvlib.lib"
+}
+build_synthlib(){
+    # Software MIDI synth lib (synth.lib) linked by the sound-card driver.
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/MEDIA/DRIVERS/SYNTHLIB" "MEDIA/DRIVERS/SYNTHLIB - synth.lib"
+}
+build_sndblst_dll(){
+    # User-mode Sound Blaster MM driver (sndblst.dll). winmm loads it (Drivers32
+    # wave/midi/aux/mixer) and it drives sndblst.sys via DeviceIoControl.
+    build_winmm    || return 1
+    build_drvlib   || return 1
+    build_synthlib || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/MEDIA/DRIVERS/SNDBLST/DLL" "MEDIA/DRIVERS/SNDBLST - sndblst.dll" makedll=1
 }
 build_msacm32(){
     # Audio Compression Manager (msacm32.dll) — codec/filter host. DYNLINK →
