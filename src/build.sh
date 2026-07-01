@@ -567,7 +567,7 @@ build_srvsvc() {
 build_dosprint() { run_nmake "$NET/DOSPRINT"          "NET/DOSPRINT - DosPrint API (dosprint.lib)"; }
 build_rxcommon() { run_nmake "$NET/RPCXLATE/RXCOMMON" "NET/RXCOMMON - RAP marshalling common (rxcommon.lib)"; }
 build_rxapi()    { run_nmake "$NET/RPCXLATE/RXAPI"    "NET/RXAPI - RAP API descriptors (rxapi.lib)"; }
-build_netrap()   { run_nmake "$NET/RAP"               "NET/RAP - Remote Admin Protocol (netrap.dll)" makedll=1; }
+build_netrap()   { build_netlib || return 1; run_nmake "$NET/RAP" "NET/RAP - Remote Admin Protocol (netrap.dll)" makedll=1; }
 build_brcommon() { build_browser_idl || return 1; run_nmake "$NET/SVCDLLS/BROWSER/COMMON" "BROWSER/COMMON - browser helpers (brcommon.lib)"; }
 # BOWSER.IDL -> bowser.h + client/server stubs. -oldnames for the ServerIfHandle.
 build_browser_idl() {
@@ -625,7 +625,17 @@ build_browser() { build_xactsrv_browser; }
 # the DosPrint API headers (dosprint.h/rxprint.h/xsdef16.h) via the shared
 # port header (NETCMD/INC/port1632.h); those were absent from the NT leaks
 # and restored from the OpenNT tree into PRIVATE/INC.
-build_netlib()      { run_nmake "$NET/NETLIB" "NET/NETLIB - net helper lib (netlib.lib)"; }
+build_netlib() {
+    run_nmake "$NET/NETLIB" "NET/NETLIB - net helper lib (netlib.lib)" || return 1
+    # SOURCES TARGETNAME is 'NetLib' → NetLib.lib, but consumers (NET/RAP,
+    # NETCMD/NETUSE) link 'netlib.lib'. Alias the lowercase name so the link
+    # resolves on case-sensitive Linux. On case-insensitive macOS the two names
+    # are already the same file (-ef), so skip the copy there.
+    local lib="$NT_ROOT/PUBLIC/SDK/LIB/I386"
+    if [ -f "$lib/NetLib.lib" ] && ! [ "$lib/NetLib.lib" -ef "$lib/netlib.lib" ]; then
+        cp -f "$lib/NetLib.lib" "$lib/netlib.lib"
+    fi
+}
 build_netcmd_common(){ run_nmake "$NET/NETCMD/COMMON" "NETCMD/COMMON - net command shared lib (common.lib)"; }
 build_net() {
     build_netlib       || return 1
