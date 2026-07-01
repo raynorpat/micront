@@ -572,11 +572,19 @@ _GUI_FILES: list[tuple[str, Path]] = [
     # newarp/newroute (UMAPPL name); staged under their canonical names.
     ("System32/arp.exe",             OBJ("NTOS/TDI/TCPIP/UTILS/ARP/ARP") / "newarp.exe"),
     ("System32/route.exe",           OBJ("NTOS/TDI/TCPIP/UTILS/IP/ROUTE") / "newroute.exe"),
+    # net.exe — the `net` command (net use / net view).
+    ("System32/net.exe",             OBJ("NET/NETCMD/NETUSE") / "net.exe"),
     # ping.exe + its ICMP Echo API DLL. icmp.dll drives the IP driver's
     # IOCTL_ICMP_ECHO_REQUEST on \Device\Ip.
     ("System32/icmp.dll",            SDK_LIB / "icmp.dll"),
     ("System32/ping.exe",            OBJ("NET/SOCKETS/PING") / "ping.exe"),
     ("System32/tracert.exe",         OBJ("NET/SOCKETS/TRACERT") / "tracert.exe"),
+    # Service Control Manager (services.exe) + the Workstation service DLL.
+    # winlogon execs services.exe at startup; it hosts wkssvc.dll, which
+    # binds the redirector on demand for `net use`. Only LanmanWorkstation is
+    # a Win32 service and it's demand-start, so the SCM idles at boot.
+    ("System32/services.exe",       OBJ("WINDOWS/SCREG/SC/SERVER/DAYTONA") / "services.exe"),
+    ("System32/wkssvc.dll",         SDK_LIB / "wkssvc.dll"),
     # Login
     ("System32/winlogon.exe",       OBJ("WINDOWS/USER/WINLOGON/DAYTONA") / "winlogon.exe"),
     ("System32/userinit.exe",       OBJ("WINDOWS/USER/USERINIT") / "userinit.exe"),

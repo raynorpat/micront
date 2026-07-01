@@ -513,15 +513,10 @@ build_wkssvc() {
 
 # net.exe — the `net` command (net use / net view / ...). Built from the
 # NETCMD tree: common.lib (shared helpers) + netlib.lib feed the NETUSE
-# component whose UMAPPL=net produces net.exe.
-#
-# BLOCKED: the netcmd/netlib tree pulls the DosPrint API headers (dosprint.h,
-# rxprint.h, xsdef16.h) transitively through the shared 16/32-bit port header
-# (NETCMD/INC/port1632.h), and those headers are absent from both the NT 3.5
-# and NT4 leaks. They're `net print` deps, irrelevant to `net use`, but baked
-# into the shared header. netlib builds once its print-only .c files are
-# pruned; common.lib (and thus net.exe) still needs dosprint.h. Left here for
-# a future pass — the redirector itself works via wkssvc + the WNet API.
+# component whose UMAPPL=net produces net.exe. The netcmd/netlib tree pulls
+# the DosPrint API headers (dosprint.h/rxprint.h/xsdef16.h) via the shared
+# port header (NETCMD/INC/port1632.h); those were absent from the NT leaks
+# and restored from the OpenNT tree into PRIVATE/INC.
 build_netlib()      { run_nmake "$NET/NETLIB" "NET/NETLIB - net helper lib (netlib.lib)"; }
 build_netcmd_common(){ run_nmake "$NET/NETCMD/COMMON" "NETCMD/COMMON - net command shared lib (common.lib)"; }
 build_net() {
@@ -2109,6 +2104,9 @@ USERLAND_GUI_TARGETS=(
     pwin32 userpri shell32
     # Common dialogs DLL — progman loads it for the Browse file picker.
     comdlg32
+    # SMB client services: the SCM server (services.exe) + the Workstation
+    # service DLL (wkssvc.dll) it hosts. winlogon execs services.exe.
+    scserver wkssvc
     # Login + shell
     winlogon userinit
     # Program Manager (the default NT 3.5 shell) and cmd.exe.
@@ -2116,6 +2114,9 @@ USERLAND_GUI_TARGETS=(
     # TCP/IP command-line utilities (arp, route, ping, tracert) — console
     # apps run from cmd. ping/tracert pull in icmp.dll (ICMP Echo API).
     arp route ping tracert
+    # net.exe — the `net` command (net use / net view). Drives the SMB
+    # redirector via the Workstation service.
+    net
 )
 
 build_group() {

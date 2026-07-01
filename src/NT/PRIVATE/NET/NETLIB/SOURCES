@@ -49,6 +49,7 @@ NET_C_DEFINES=-DUNICODE
 SOURCES= \
         Accessp.c  \
         AllocStr.c \
+        AlrtInfo.c \
         AToX.c     \
         Caller.c   \
         Canon.c    \
@@ -73,6 +74,8 @@ SOURCES= \
         ConfSetA.c \
         ConfSetB.c \
         ConfSetD.c \
+        ConvPrt.c  \
+        ConvSrv.c  \
         ConvWks.c  \
         CopyStr.c  \
         Data.c     \
@@ -81,6 +84,7 @@ SOURCES= \
         DispConn.c \
         DispFile.c \
         DispPlat.c \
+        DispPrt.c  \
         DispRepl.c \
         DispSess.c \
         DispSrv.c  \
@@ -102,12 +106,14 @@ SOURCES= \
         HexDump.c  \
         INames.c   \
         InitOem.c  \
+        JobCount.c \
         ListFunc.c \
         LogHours.c \
         Logonp.c   \
         Luidate.c  \
         Luiint.c   \
         Luitext.c  \
+        MapData.c  \
         MemAlloc.c \
         Message.c  \
         MidlUser.c \
@@ -125,6 +131,7 @@ SOURCES= \
         PathType.c \
         PrefMax.c  \
         ProdType.c \
+        PrtInfo.c  \
         RdrFsCtl.c \
         ReplInfo.c \
         RpcBind.c  \
