@@ -488,6 +488,13 @@ build_rdr() {
     mkdir -p "$NTOS/RDR/DAYTONA/obj/i386"
     run_nmake "$NTOS/RDR/DAYTONA" "RDR - SMB redirector (rdr.sys)" makedll=1
 }
+# srv.sys — the SMB server (serve local shares). Links tdi.lib + smbtrsup.lib
+# (already built for the redirector). LanmanServer service drives it.
+build_srv() {
+    build_smbtrsup || return 1
+    mkdir -p "$NTOS/SRV/DAYTONA/obj/i386"
+    run_nmake "$NTOS/SRV/DAYTONA" "SRV - SMB server (srv.sys)" makedll=1
+}
 
 # wkssvc.dll — the Workstation service. Hosted by services.exe (SCM), it
 # binds the redirector (rdr.sys) to transports and services net-use RPCs.
@@ -509,6 +516,30 @@ build_wkssvc() {
     build_wkssvc_idl || return 1
     build_wkssvc_lib || return 1
     run_nmake "$NET/SVCDLLS/WKSSVC/SERVER/DAYTONA" "WKSSVC - Workstation service (wkssvc.dll)" makedll=1
+}
+
+# srvsvc.dll — the Server service. Hosted by services.exe, it starts/binds
+# the SMB server (srv.sys) and manages shares. srvcomn.lib is its shared
+# helper; MIDL generates the client/server stubs from SRVSVC.IDL.
+build_srvsvc_idl() {
+    local dir="$NET/SVCDLLS/SRVSVC"
+    run_wibo_tool "$dir" midl /ms_ext /c_ext /app_config /D MIDL_PASS /D _M_IX86 /D _X86_ \
+        -oldnames /I "$NT_ROOT_WIN\\PRIVATE\\INC" SRVSVC.IDL || return 1
+    cp -f "$dir/srvsvc_c.c" "$dir/CLIENT/" 2>/dev/null || cp -f "$dir/SRVSVC_C.C" "$dir/CLIENT/srvsvc_c.c"
+    cp -f "$dir/srvsvc_s.c" "$dir/SERVER/" 2>/dev/null || cp -f "$dir/SRVSVC_S.C" "$dir/SERVER/srvsvc_s.c"
+}
+build_srvcomn()    { build_srvsvc_idl || return 1; run_nmake "$NET/SVCDLLS/SRVSVC/LIB" "SRVSVC/LIB - srvcomn.lib (server service helpers)"; }
+build_srvsvc_lib() { build_srvsvc_idl || return 1; run_nmake "$NET/SVCDLLS/SRVSVC/CLIENT" "SRVSVC/CLIENT - srvsvc.lib (RPC client stub)"; }
+# srvsvc.dll — the Server service. Serves shares to modern SMB clients over
+# RPC. The legacy downlevel (LanMan/OS2 RAP) transaction server is stubbed
+# out (xsstub.c), so this doesn't pull in the xactsrv/browser/RPCXLATE
+# subsystem (not imported). browser.dll (network browsing) is likewise
+# omitted — optional for file sharing and gated behind that same subsystem.
+build_srvsvc() {
+    build_srvsvc_idl || return 1
+    build_srvcomn    || return 1
+    build_srvsvc_lib || return 1
+    run_nmake "$NET/SVCDLLS/SRVSVC/SERVER" "SRVSVC - Server service (srvsvc.dll)" makedll=1
 }
 
 # net.exe — the `net` command (net use / net view / ...). Built from the
@@ -822,6 +853,39 @@ build_tracert() {
     build_icmp    || return 1
     build_wsock32 || return 1
     KEEP_UMAPPL=1 run_nmake "$NET/SOCKETS/TRACERT" "NET/TRACERT - tracert.exe" makedll=1
+}
+
+# dhcpcsvc.dll — the DHCP client service. Hosted by services.exe (SCM), it does
+# the DISCOVER/OFFER/REQUEST/ACK exchange over UDP (wsock32, :68->:67) and
+# writes the leased address into the running stack via IOCTL_IP_SET_ADDRESS on
+# \Device\Ip (+ NetBT/redirector notifications). Two static libs build first:
+# dhcplib (packet build/parse/dump helpers) and dhcpcli2 (the lease state
+# machine). A mc pre-pass turns DHCPMSG.MC into CLIENT/INC/dhcpmsg.h (event
+# message ids, included by dhcpcli2) + NEWNT/dhcpmsg.rc (pulled by dhcp.rc).
+DHCP="$NET/SOCKETS/TCPCMD/DHCP"
+build_dhcplib()  { run_nmake "$DHCP/LIB"         "NET/DHCP/LIB - dhcplib.lib"; }
+# dhcpcli2's SOURCES writes its lib to ..\..\..\obj (TCPCMD/obj), which the
+# dhcpcsvc link then reads — create it so the lib step doesn't silently fail.
+build_dhcpcli2() { mkdir -p "$NET/SOCKETS/TCPCMD/obj/i386"; run_nmake "$DHCP/CLIENT/DHCP" "NET/DHCP/CLIENT - dhcpcli2.lib (lease state machine)"; }
+_ensure_dhcpmsg() {
+    local dir="$DHCP/CLIENT/NEWNT" hdr="$DHCP/CLIENT/INC/dhcpmsg.h"
+    if [ -f "$hdr" ] && [ "$hdr" -nt "$dir/DHCPMSG.MC" ]; then
+        return 0
+    fi
+    echo ">>> mc DHCPMSG.MC -> CLIENT/INC/dhcpmsg.h + NEWNT/dhcpmsg.rc"
+    run_wibo_tool "$dir" mc -d -r ".\\" -h "..\\inc" DHCPMSG.MC \
+        || { echo "!!! mc on DHCPMSG.MC failed"; return 1; }
+    # Lowercase-normalise for a case-sensitive FS (no-op on macOS).
+    [ -f "$hdr" ]            || { [ -f "$DHCP/CLIENT/INC/DHCPMSG.H" ] && cp -f "$DHCP/CLIENT/INC/DHCPMSG.H" "$hdr"; }
+    [ -f "$dir/dhcpmsg.rc" ] || { [ -f "$dir/DHCPMSG.RC" ]           && cp -f "$dir/DHCPMSG.RC" "$dir/dhcpmsg.rc"; }
+    return 0
+}
+build_dhcpcsvc() {
+    build_wsock32   || return 1
+    _ensure_dhcpmsg || return 1
+    build_dhcplib   || return 1
+    build_dhcpcli2  || return 1
+    run_nmake "$DHCP/CLIENT/NEWNT" "NET/DHCP - DHCP client service (dhcpcsvc.dll)" makedll=1
 }
 
 # --- TCP/IP command-line utilities (NTOS/TDI/TCPIP/UTILS) --------------------
@@ -2007,6 +2071,8 @@ DRIVER_TARGETS=(
     netbios
     # SMB redirector (client). rdr.sys mounts remote shares over netbt.
     rdr
+    # SMB server. srv.sys serves local shares over netbt.
+    srv
 )
 
 # Drivers only useful with the GUI (input + video).
@@ -2063,6 +2129,10 @@ USERLAND_TARGETS=(
     # of afd.sys, plus wshtcpip.dll (the TCP/IP transport helper wsock32
     # loads at socket() time). User-mode sockets — useful headless.
     wsock32 wshtcpip
+    # DHCP client service (dhcpcsvc.dll) — leases the adapter address from
+    # QEMU's NAT DHCP server instead of the hardcoded static IP. Hosted by
+    # services.exe; needs afd.sys/tcpip.sys up.
+    dhcpcsvc
 )
 
 # GUI userland: pulls in the whole Win32 window/drawing stack. advapi32
@@ -2104,9 +2174,10 @@ USERLAND_GUI_TARGETS=(
     pwin32 userpri shell32
     # Common dialogs DLL — progman loads it for the Browse file picker.
     comdlg32
-    # SMB client services: the SCM server (services.exe) + the Workstation
-    # service DLL (wkssvc.dll) it hosts. winlogon execs services.exe.
-    scserver wkssvc
+    # SMB services: the SCM server (services.exe) + the Workstation service
+    # (wkssvc.dll, client) and Server service (srvsvc.dll, serve shares) it
+    # hosts. winlogon execs services.exe.
+    scserver wkssvc srvsvc
     # Login + shell
     winlogon userinit
     # Program Manager (the default NT 3.5 shell) and cmd.exe.
@@ -2162,7 +2233,11 @@ build_disk() {
     fi
 
     mkdir -p "$out_dir"
-    python3 "$SCRIPT_DIR/tools/mkhive.py" --profile "$profile" "$out_dir/SYSTEM"
+    # DHCP=1 leases the adapter IP via the DHCP client service instead of the
+    # hardcoded static 10.0.2.15 (see DHCP-PLAN.md); default is static.
+    local dhcp_arg=()
+    [ "${DHCP:-0}" = "1" ] && dhcp_arg=(--dhcp)
+    python3 "$SCRIPT_DIR/tools/mkhive.py" --profile "$profile" "${dhcp_arg[@]}" "$out_dir/SYSTEM"
     python3 "$SCRIPT_DIR/tools/mkdisk.py" --profile "$profile" \
         --output-dir "$out_dir" --efi-binary "$efi_bin"
 }

@@ -496,6 +496,8 @@ _CORE_FILES: list[tuple[str, Path]] = [
     ("System32/Drivers/netbios.sys",  SDK_LIB / "netbios.sys"),
     # SMB redirector (client) — mounts remote shares over netbt.
     ("System32/Drivers/rdr.sys",      SDK_LIB / "rdr.sys"),
+    # SMB server — serves local shares over netbt.
+    ("System32/Drivers/srv.sys",      SDK_LIB / "srv.sys"),
 ]
 
 # Headless adds the Win32 subsystem base.
@@ -526,6 +528,9 @@ _HEADLESS_FILES: list[tuple[str, Path]] = [
     # Winsock: user-mode sockets DLL + its TCP/IP transport helper.
     ("System32/wsock32.dll",        SDK_LIB / "wsock32.dll"),
     ("System32/wshtcpip.dll",       SDK_LIB / "wshtcpip.dll"),
+    # DHCP client service — hosted by services.exe, leases the adapter IP
+    # (loaded only when the hive is built with --dhcp; harmless otherwise).
+    ("System32/dhcpcsvc.dll",       SDK_LIB / "dhcpcsvc.dll"),
 ]
 
 FONTS = NT / "PRIVATE/WINDOWS/GDI/FONTS"
@@ -585,6 +590,8 @@ _GUI_FILES: list[tuple[str, Path]] = [
     # a Win32 service and it's demand-start, so the SCM idles at boot.
     ("System32/services.exe",       OBJ("WINDOWS/SCREG/SC/SERVER/DAYTONA") / "services.exe"),
     ("System32/wkssvc.dll",         SDK_LIB / "wkssvc.dll"),
+    # Server service DLL — hosted by services.exe, manages srv.sys shares.
+    ("System32/srvsvc.dll",         SDK_LIB / "srvsvc.dll"),
     # Login
     ("System32/winlogon.exe",       OBJ("WINDOWS/USER/WINLOGON/DAYTONA") / "winlogon.exe"),
     ("System32/userinit.exe",       OBJ("WINDOWS/USER/USERINIT") / "userinit.exe"),

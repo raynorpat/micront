@@ -498,7 +498,8 @@ def _apply_ole_keys(hive: "Hive", keys: "list") -> None:
 def build_micront_system_hive(profile: str = "headless",
                               init_exe: str | None = None,
                               init_args: str | None = None,
-                              init_stdio: str | None = None) -> Hive:
+                              init_stdio: str | None = None,
+                              dhcp: bool = False) -> Hive:
     """Return a Hive populated with the minimum NT 3.5 needs to boot.
 
     `profile` selects how much of the Win32 subsystem gets wired up:
@@ -841,12 +842,24 @@ def build_micront_system_hive(profile: str = "headless",
         .set_dword("BusType",   5) \
         .set_dword("BusNumber", 0)
     # tcpip reads per-adapter IP config from Services\<Adapter>\Parameters\Tcpip.
-    # Static config for QEMU's -netdev user NAT (guest 10.0.2.15, gw 10.0.2.2).
-    services["Vionet1"]["Parameters"]["Tcpip"] \
-        .set_dword("EnableDHCP",     0) \
-        .set_multi_sz("IPAddress",      ["10.0.2.15"]) \
-        .set_multi_sz("SubnetMask",     ["255.255.255.0"]) \
-        .set_multi_sz("DefaultGateway", ["10.0.2.2"])
+    # Two modes for QEMU's -netdev user NAT (server 10.0.2.2, hands out
+    # 10.0.2.15+):
+    #   dhcp=False (default) — known-good static config (guest 10.0.2.15).
+    #   dhcp=True            — EnableDHCP; the DHCP client service (dhcpcsvc.dll)
+    #                          leases the address and fills DhcpIPAddress etc.
+    # See DHCP-PLAN.md; --no-dhcp / --dhcp is the build-time escape hatch.
+    if dhcp:
+        services["Vionet1"]["Parameters"]["Tcpip"] \
+            .set_dword("EnableDHCP",     1) \
+            .set_multi_sz("IPAddress",      ["0.0.0.0"]) \
+            .set_multi_sz("SubnetMask",     ["0.0.0.0"]) \
+            .set_multi_sz("DefaultGateway", [])
+    else:
+        services["Vionet1"]["Parameters"]["Tcpip"] \
+            .set_dword("EnableDHCP",     0) \
+            .set_multi_sz("IPAddress",      ["10.0.2.15"]) \
+            .set_multi_sz("SubnetMask",     ["255.255.255.0"]) \
+            .set_multi_sz("DefaultGateway", ["10.0.2.2"])
     services["tdi"] \
         .set_dword("Type",         1) \
         .set_dword("Start",        1) \
@@ -928,6 +941,27 @@ def build_micront_system_hive(profile: str = "headless",
     lanwks["Linkage"] \
         .set_multi_sz("Bind", ["\\Device\\NetBT_Vionet1"])
 
+    # --- SMB server (serve shares): srv.sys + LanmanServer ---------------
+    # srv.sys is the SMB server (file-system driver, Type 2). The Server
+    # service (srvsvc.dll, hosted by services.exe) starts it, binds it to a
+    # transport, and manages shares. DEMAND start (like the client) — the
+    # server is registered but dormant until activated + boot-tested.
+    services["Srv"] \
+        .set_dword("Type",         2) \
+        .set_dword("Start",        3) \
+        .set_dword("ErrorControl", 1) \
+        .set_sz("Group", "NetworkProvider")
+    lansrv = services["LanmanServer"]
+    lansrv.set_dword("Type",         0x20) \
+          .set_dword("Start",        3) \
+          .set_dword("ErrorControl", 1) \
+          .set_sz("Group", "NetworkProvider") \
+          .set_multi_sz("DependOnService", ["NetBT", "Srv"])
+    lansrv["Parameters"] \
+        .set_expand_sz("ServiceDll", "%SystemRoot%\\System32\\srvsvc.dll")
+    lansrv["Linkage"] \
+        .set_multi_sz("Bind", ["\\Device\\NetBT_Vionet1"])
+
     # --- Winsock (user mode): wsock32.dll + wshtcpip.dll -----------------
     # wsock32 enumerates transports from Winsock\Parameters:Transports, then
     # for each opens <Transport>\Parameters\Winsock to learn the triple
@@ -951,6 +985,22 @@ def build_micront_system_hive(profile: str = "headless",
         .set_dword("MinSockaddrLength", 16) \
         .set_dword("MaxSockaddrLength", 16) \
         .set_expand_sz("HelperDllName", "%SystemRoot%\\System32\\wshtcpip.dll")
+
+    # --- DHCP client service (dhcpcsvc.dll) ------------------------------
+    # A SHARE_PROCESS service (Type 0x20) hosted inside services.exe: svcslib
+    # has a built-in table mapping the "DHCP" service name to dhcpcsvc.dll and
+    # calls its ServiceEntry. It enumerates DHCP-enabled adapters from
+    # TCPIP\Linkage\Bind, does the DISCOVER/OFFER/REQUEST/ACK over UDP, and
+    # writes the lease (DhcpIPAddress etc.) back to each adapter's
+    # Parameters\Tcpip. Only registered in DHCP mode; auto-start after the
+    # transport (Tcpip/Afd) is up.
+    if dhcp:
+        services["DHCP"] \
+            .set_dword("Type",         0x20) \
+            .set_dword("Start",        2) \
+            .set_dword("ErrorControl", 1) \
+            .set_expand_sz("ImagePath", "%SystemRoot%\\System32\\services.exe") \
+            .set_multi_sz("DependOnService", ["Tcpip", "Afd"])
 
     if profile == "gui":
         # Video: Bochs VGA miniport (QEMU stdvga, PCI 1234:1111).
@@ -1243,6 +1293,9 @@ def main() -> None:
                     help="path to write the hive to")
     ap.add_argument("--profile", choices=PROFILES, default="headless",
                     help="which registry layout to emit (default: headless)")
+    ap.add_argument("--dhcp", action="store_true",
+                    help="lease the adapter IP via the DHCP client service "
+                         "instead of the hardcoded static 10.0.2.15 (DHCP-PLAN.md)")
     args = ap.parse_args()
 
     # Banner the stamp we're building against so CI logs pin hive <-> binary
@@ -1256,9 +1309,10 @@ def main() -> None:
     except Exception as e:
         print(f"build stamp: unavailable ({e})")
 
-    h = build_micront_system_hive(profile=args.profile)
+    h = build_micront_system_hive(profile=args.profile, dhcp=args.dhcp)
     size = h.write(args.output)
-    print(f"SYSTEM hive ({args.profile}): {size} bytes -> {args.output}")
+    print(f"SYSTEM hive ({args.profile}, {'dhcp' if args.dhcp else 'static ip'}): "
+          f"{size} bytes -> {args.output}")
 
     # SOFTWARE hive — winlogon/csrss config; both Win32 profiles need it.
     sw = build_micront_software_hive(profile=args.profile)
