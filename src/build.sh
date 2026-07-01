@@ -1021,6 +1021,43 @@ build_cairole_olecnv32() { _cairole_comp OLECNV32; }
 # in 32-bit micront — build the objects + import lib only.
 build_cairole_olethunk() { _cairole_comp OLETHUNK all 0; }
 
+# oleprx32.dll — the OLE interface marshaling proxy/stub DLL (TYPES OLEPRX32).
+# Built directly (the TYPES makefile.inc isn't wibo-friendly): the MIDL proxy
+# files com_p.c/ole2x_p.c (from build_types) + call_as.c + dlldata.c +
+# transmit.cxx, linked against ole32/uuid/gdi32p/rpcrt4/crtdll. dlldata.c wires
+# only the com + ole2x proxies (OLEAUTO_PROXYTYPES is empty upstream). Needs
+# ole32.lib (cairole) and gdi32p.lib (gui GDI), so it follows both.
+build_cairole_oleprx32() {
+    local prx="$BASE_D/TYPES/OLEPRX32/DAYTONA" o="obj\\i386"
+    local com_p="$BASE_D/TYPES/COMPOBJ/com_p.c" ole2x_p="$BASE_D/TYPES/NEW_OLE/ole2x_p.c"
+    [ -f "$com_p" ] && [ -f "$ole2x_p" ] || { echo "!!! oleprx32: proxy _p.c missing — run build_types"; return 1; }
+    [ -f "$NT_ROOT/PUBLIC/SDK/LIB/I386/gdi32p.lib" ] || { echo "!!! oleprx32: gdi32p.lib missing — build the gui GDI first"; return 1; }
+    echo "========================================"
+    echo "Building: CAIROLE/OLEPRX32 - oleprx32.dll (OLE marshaling proxy)"
+    echo "========================================"
+    mkdir -p "$prx/obj/i386"
+    cp "$com_p" "$prx/com_p.c"; cp "$ole2x_p" "$prx/ole2x_p.c"
+    # Minimal link def in obj/ (NOT the tracked OLEPRX32.DEF, which is the same
+    # file on a case-insensitive FS). These two exports are what a proxy DLL
+    # needs — the SCM calls DllGetClassObject to fetch the PSFactory.
+    printf 'LIBRARY OLEPRX32\nEXPORTS\n    DllGetClassObject   PRIVATE\n    DllCanUnloadNow     PRIVATE\n' \
+        > "$prx/obj/i386/oleprx32.def"
+    local W="$NT_ROOT_WIN" defs=(-DWIN32=100 -D_NT1X_=100 -D_X86_=1 -Di386=1 -DSTD_CALL -DUNICODE -D_UNICODE -DFLAT)
+    local incs=(-I"$W\\PRIVATE\\BASE\\TYPES\\NEW_OLE\\gen" -I"$W\\PRIVATE\\BASE\\CINC" -I"$W\\PRIVATE\\BASE\\CAIROLE\\IH" -I.)
+    local f
+    for f in com_p ole2x_p call_as dlldata; do
+        run_wibo_tool "$prx" cl386 -nologo -c "${defs[@]}" "${incs[@]}" -Fo$o\\$f.obj $f.c || return 1
+    done
+    run_wibo_tool "$prx" cl386 -nologo -c "${defs[@]}" "${incs[@]}" -Fo$o\\transmit.obj transmit.cxx || return 1
+    local L="$W\\PUBLIC\\SDK\\LIB\\I386"
+    run_wibo_tool "$prx" LINK.EXE -nologo -dll -noentry -def:$o\\oleprx32.def -merge:.text=.orpc \
+        -base:@"$W\\PUBLIC\\SDK\\LIB\\coffbase.txt",oleprx32 -out:$o\\oleprx32.dll -nodefaultlib \
+        $o\\com_p.obj $o\\ole2x_p.obj $o\\call_as.obj $o\\dlldata.obj $o\\transmit.obj \
+        "$L\\ole32.lib" "$L\\uuid.lib" "$L\\gdi32p.lib" "$L\\rpcrt4.lib" "$L\\kernel32.lib" "$L\\CRTDLL.LIB" \
+        || return 1
+    echo ">>> CAIROLE/OLEPRX32: oleprx32.dll ($(ls -l "$prx/obj/i386/oleprx32.dll" | awk '{print $5}') bytes)"
+}
+
 # ole32.dll + scm link rpcns4.lib (RPC name service), but CAIROLE makes no
 # RpcNs* calls and micront doesn't build rpcns4 — provide an empty import lib
 # so the (dead) link reference resolves.
@@ -1069,8 +1106,9 @@ build_cairole() {
     _cairole_comp STG dlls 0  || return 1
     build_cairole_scm         || return 1   # scm.exe (links ole32)
     build_cairole_olethunk    || return 1   # olethk32: import lib only (16-bit/VDM)
-    echo ">>> CAIROLE: all components built (ole32.dll, olecnv32.dll, scm.exe;"
-    echo "    storag32/olethk32 compile-verified, runtime .dll N/A for 32-bit micront)"
+    build_cairole_oleprx32    || return 1   # oleprx32.dll (marshaling proxy)
+    echo ">>> CAIROLE: all components built (ole32.dll, olecnv32.dll, oleprx32.dll,"
+    echo "    scm.exe; storag32/olethk32 compile-verified, runtime .dll N/A for 32-bit)"
 }
 
 # INT64.LIB — 64-bit integer helpers (LLMUL/LLDIV/...) built from the

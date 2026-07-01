@@ -1015,10 +1015,8 @@ def build_micront_software_hive(profile: str = "headless") -> Hive:
         # OLE/COM class registry (HKCR == HKLM\SOFTWARE\Classes): CLSID entries
         # for the ole32-provided objects (StdOleLink, monikers, StdMem*),
         # Interface metadata (NumMethods/BaseInterface), and ProxyStubClsid32
-        # marshalers. Ported from CAIROLE NT2OLE.REG (test objects filtered).
-        # The ProxyStubClsid entries point at oleprx32.dll (the marshaling
-        # proxy DLL, a separate TYPES build not yet shipped) — benign until
-        # cross-apartment marshaling is exercised; in-proc OLE works on ole32.
+        # marshalers (→ oleprx32.dll, shipped alongside). Ported from CAIROLE
+        # NT2OLE.REG with the sample/test objects filtered out.
         _apply_ole_keys(h, _parse_nt2ole()[1])
 
     # IniFileMapping — BaseSrvInitializeIniFileMappings reads this tree

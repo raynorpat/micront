@@ -368,7 +368,7 @@ src/NT/PRIVATE/BASE/CRTLIB/LIB/I386/crtdll.def
 # are tracked; only the intermediate MIDL output is ignored.
 src/NT/PRIVATE/BASE/TYPES/*/gen/
 src/NT/PRIVATE/BASE/TYPES/*/*_i.c
-src/NT/PRIVATE/BASE/TYPES/*/*_p.c
+src/NT/PRIVATE/BASE/TYPES/**/*_p.c
 src/NT/PRIVATE/BASE/TYPES/*/*_x.c
 src/NT/PRIVATE/BASE/TYPES/*/*_y.c
 src/NT/PRIVATE/BASE/TYPES/*/dlldata.c

@@ -575,6 +575,10 @@ _GUI_FILES: list[tuple[str, Path]] = [
     ("System32/ole32.dll",          SDK_LIB / "ole32.dll"),
     ("System32/scm.exe",            OBJ("BASE/CAIROLE/SCM/DAYTONA") / "scm.exe"),
     ("System32/olecnv32.dll",       OBJ("BASE/CAIROLE/OLECNV32/DAYTONA") / "olecnv32.dll"),
+    # oleprx32.dll — OLE interface marshaling proxy/stub DLL. The HKCR
+    # ProxyStubClsid registrations point here; loaded on demand when COM
+    # marshals an interface across an apartment/process boundary.
+    ("System32/oleprx32.dll",       OBJ("BASE/TYPES/OLEPRX32/DAYTONA") / "oleprx32.dll"),
 ]
 
 

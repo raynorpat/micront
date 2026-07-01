@@ -66,8 +66,10 @@
 
 #ifndef _CHICAGO_
 extern "C" {
-    HBRUSH     GdiConvertBrush(HBRUSH hbrush);
-    HBRUSH     GdiCreateLocalBrush(HBRUSH hbrushRemote);
+    // gdi32p.lib exports these __stdcall (@4); declare them WINAPI so the
+    // decorated names match (the original relied on a private GDI header).
+    HBRUSH WINAPI GdiConvertBrush(HBRUSH hbrush);
+    HBRUSH WINAPI GdiCreateLocalBrush(HBRUSH hbrushRemote);
 }
 #endif  // _CHICAGO_
 
