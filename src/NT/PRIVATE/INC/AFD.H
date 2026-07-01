@@ -86,6 +86,24 @@ typedef struct _AFD_ACCEPT_RESPONSE_INFO {
 } AFD_ACCEPT_RESPONSE_INFO, *PAFD_ACCEPT_RESPONSE_INFO;
 
 //
+// The input structure for IOCTL_AFD_SUPER_ACCEPT.  This combines the
+// wait-for-listen, accept, get-local-address, and receive-first-data
+// operations into a single overlapped request.  AcceptEndpoint and
+// AcceptFileObject are filled in by the driver while the request is
+// being processed.
+//
+
+typedef struct _AFD_SUPER_ACCEPT_INFO {
+    HANDLE AcceptHandle;
+    PVOID AcceptEndpoint;
+    PVOID AcceptFileObject;
+    ULONG ReceiveDataLength;
+    ULONG LocalAddressLength;
+    ULONG RemoteAddressLength;
+    AFD_LISTEN_RESPONSE_INFO ListenResponseInfo;
+} AFD_SUPER_ACCEPT_INFO, *PAFD_SUPER_ACCEPT_INFO;
+
+//
 // Flags and input structure for IOCTL_AFD_PARTIAL_DISCONNECT.
 //
 
@@ -233,5 +251,7 @@ typedef struct _AFD_INFORMATION {
 #define IOCTL_AFD_SIZE_DISCONNECT_OPTIONS _AFD_CONTROL_CODE( 24, METHOD_BUFFERED )
 
 #define IOCTL_AFD_GET_INFORMATION         _AFD_CONTROL_CODE( 25, METHOD_BUFFERED )
+
+#define IOCTL_AFD_SUPER_ACCEPT            _AFD_CONTROL_CODE( 32, METHOD_OUT_DIRECT )
 
 #endif // ndef _AFD_

@@ -107,5 +107,8 @@ EXPORTS
 
         NPLoadNameSpaces               @1130
 
+        AcceptEx                       @1141
+        GetAcceptExSockaddrs           @1142
+
 ;eof
 

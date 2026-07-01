@@ -27,6 +27,19 @@ AfdAccept (
     IN PIO_STACK_LOCATION IrpSp
     );
 
+NTSTATUS
+AfdAcceptCore (
+    IN PAFD_ENDPOINT ListenEndpoint,
+    IN PAFD_ENDPOINT AcceptEndpoint,
+    IN ULONG Sequence
+    );
+
+NTSTATUS
+AfdSuperAccept (
+    IN PIRP Irp,
+    IN PIO_STACK_LOCATION IrpSp
+    );
+
 BOOLEAN
 AfdAreTransportAddressesEqual (
     IN PTRANSPORT_ADDRESS Address1,

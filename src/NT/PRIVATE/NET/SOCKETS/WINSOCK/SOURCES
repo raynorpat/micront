@@ -58,6 +58,7 @@ NTDEBUGTYPE=coff
 
 SOURCES= \
         accept.c   \
+        acceptex.c \
         async.c    \
         bind.c     \
         byteswap.c \

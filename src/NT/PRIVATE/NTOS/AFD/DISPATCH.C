@@ -265,6 +265,14 @@ Return Value:
 
         return status;
 
+    case IOCTL_AFD_SUPER_ACCEPT:
+
+        status = AfdSuperAccept( Irp, IrpSp );
+
+        ASSERT( KeGetCurrentIrql( ) == LOW_LEVEL );
+
+        return status;
+
     case IOCTL_AFD_PARTIAL_DISCONNECT:
 
         status = AfdPartialDisconnect( Irp, IrpSp );
