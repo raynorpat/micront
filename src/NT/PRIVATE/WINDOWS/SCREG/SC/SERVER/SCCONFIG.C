@@ -2877,11 +2877,18 @@ Note:
     RtlInitUnicodeString(&ValueName,lpValueName);
 
     //
-    // Allocate memory for the ValueKeyInfo
+    // Allocate memory for the ValueKeyInfo.  NtQueryValueKey aligns the Data
+    // that follows the (variable-length) Name up to a ULONG boundary, so the
+    // required length can exceed header+name+data by up to sizeof(ULONG)-1.
+    // The historical formula omitted that padding and under-allocated by a few
+    // bytes, so reads of small values (e.g. the REG_DWORDs under \System\Select)
+    // returned STATUS_BUFFER_OVERFLOW -> ERROR_MORE_DATA. Add the alignment
+    // slack so the single query succeeds.
     //
     bufSize = *lpcbData + sizeof(KEY_VALUE_FULL_INFORMATION) + ValueName.Length
-              - sizeof(WCHAR);  // subtract memory for 1 char because it's included
+              - sizeof(WCHAR)   // subtract memory for 1 char because it's included
                                 // in the sizeof(KEY_VALUE_FULL_INFORMATION).
+              + sizeof(ULONG);  // slack for the Data-offset alignment padding.
 
     KeyValueInfo = (PKEY_VALUE_FULL_INFORMATION)LocalAlloc(LMEM_ZEROINIT, (UINT) bufSize);
     if (KeyValueInfo == NULL) {
