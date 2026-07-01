@@ -491,6 +491,9 @@ _CORE_FILES: list[tuple[str, Path]] = [
     ("System32/Drivers/tdi.sys",      SDK_LIB / "tdi.sys"),
     ("System32/Drivers/tcpip.sys",    SDK_LIB / "tcpip.sys"),
     ("System32/Drivers/afd.sys",      SDK_LIB / "afd.sys"),
+    # NetBIOS over TCP/IP: netbt.sys (SMB transport) + netbios.sys (NCB API).
+    ("System32/Drivers/netbt.sys",    SDK_LIB / "netbt.sys"),
+    ("System32/Drivers/netbios.sys",  SDK_LIB / "netbios.sys"),
 ]
 
 # Headless adds the Win32 subsystem base.

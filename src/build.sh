@@ -464,6 +464,18 @@ build_tdi_tcpip_ip()  { mkdir -p "$NTOS/TDI/TCPIP/IP/obj/i386"; mkdir -p "$NTOS/
 build_tdi_tcpip_tcp() { mkdir -p "$NTOS/TDI/TCPIP/TCP/obj/i386"; run_nmake "$NTOS/TDI/TCPIP/TCP" "TDI/TCPIP/TCP - TCP/UDP transport (tcpip.sys)"; }
 build_afd()           { mkdir -p "$NTOS/AFD/obj/i386"; run_nmake "$NTOS/AFD" "AFD - socket emulation driver (afd.sys)"; }
 
+# --- NetBT: NetBIOS over TCP/IP ---------------------------------------------
+# nbt.lib (core, platform-independent NetBIOS-over-TCP engine) links into
+# netbt.sys (the NT driver wrapper). netbt.sys binds over tcpip via TDI and
+# is what SMB (rdr/srv) rides on. -DPROXY_NODE per its SOURCES.
+build_nbt_lib() { mkdir -p "$NTOS/NBT/NBT/obj/i386"; run_nmake "$NTOS/NBT/NBT" "NBT - NetBIOS-over-TCP core (nbt.lib)"; }
+build_netbt()   { build_nbt_lib || return 1; mkdir -p "$NTOS/NBT/NT/obj/i386"; run_nmake "$NTOS/NBT/NT" "NETBT - NetBIOS over TCP driver (netbt.sys)" makedll=1; }
+# netbios.sys — the NetBIOS interface driver (\Device\Netbios). Maps the NCB
+# API (Netbios() in the prebuilt netapi32) onto the TDI transports bound
+# under its registry Linkage (netbt). Not on the SMB critical path (rdr
+# binds netbt directly), but makes user-mode NetBIOS work.
+build_netbios() { mkdir -p "$NTOS/NETBIOS/obj/i386"; run_nmake "$NTOS/NETBIOS" "NETBIOS - NetBIOS interface driver (netbios.sys)" makedll=1; }
+
 # --- RPC stack ---------------------------------------------------------------
 # NT 3.5's RPC runtime is 180k LoC across NDRLIB + NDR20 + RUNTIME.
 # Builds in dependency order: NDRLIB (NDR marshaling primitives, the
@@ -1917,6 +1929,10 @@ DRIVER_TARGETS=(
     tdi_tcpip_ip
     tdi_tcpip_tcp
     afd
+    # NetBIOS: netbt.sys (NetBIOS-over-TCP, binds tcpip via TDI) + netbios.sys
+    # (the \Device\Netbios NCB interface). SMB (rdr/srv) rides on netbt.
+    netbt
+    netbios
 )
 
 # Drivers only useful with the GUI (input + video).

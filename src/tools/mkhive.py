@@ -670,6 +670,7 @@ def build_micront_system_hive(profile: str = "headless",
             "NDIS",
             "NDIS Miniport",
             "TDI",
+            "NetBIOSGroup",
             "Video Init",
             "Video",
             "Keyboard Class",
@@ -866,6 +867,43 @@ def build_micront_system_hive(profile: str = "headless",
         .set_dword("ErrorControl", 1) \
         .set_sz("Group", "TDI") \
         .set_multi_sz("DependOnService", ["tcpip"])
+
+    # --- NetBIOS over TCP/IP: netbt.sys + netbios.sys --------------------
+    # netbt binds the NetBIOS session/datagram/name services over tcpip.
+    # Its default transport device is the old STREAMS stack (\Device\Streams\);
+    # TransportBindName overrides that to "\Device\" so it opens our tcpip's
+    # \Device\Tcp + \Device\Udp. It reads the adapter IP by "groveling" the
+    # bind adapter's Services\<adapter>\Parameters\Tcpip (already populated for
+    # Vionet1). Export names the \Device\NetBT_* object other components bind.
+    # SMB (rdr/srv) rides on netbt. NodeType 1 = B-node (broadcast, no WINS).
+    netbt = services["NetBT"]
+    netbt.set_dword("Type",         1) \
+         .set_dword("Start",        1) \
+         .set_dword("ErrorControl", 1) \
+         .set_sz("Group", "NetBIOSGroup") \
+         .set_multi_sz("DependOnService", ["Tcpip"])
+    netbt["Linkage"] \
+        .set_multi_sz("Bind",   ["\\Device\\Vionet1"]) \
+        .set_multi_sz("Export", ["\\Device\\NetBT_Vionet1"])
+    netbt["Parameters"] \
+        .set_sz("TransportBindName", "\\Device\\") \
+        .set_dword("NodeType", 1)
+
+    # netbios.sys — the \Device\Netbios NCB interface layered on netbt.
+    # Bind lists the NetBIOS transports (netbt's export device); LanaMap is a
+    # REG_BINARY array of {Enum:BYTE, Lana:BYTE} pairing each binding to a
+    # LANA number ({enabled, LANA 0}); MaxLana bounds the LANA range.
+    netbios = services["Netbios"]
+    netbios.set_dword("Type",         1) \
+           .set_dword("Start",        1) \
+           .set_dword("ErrorControl", 1) \
+           .set_sz("Group", "NetBIOSGroup") \
+           .set_multi_sz("DependOnService", ["NetBT"])
+    netbios["Linkage"] \
+        .set_multi_sz("Bind",  ["\\Device\\NetBT_Vionet1"]) \
+        .set_binary("LanaMap", bytes([1, 0]))
+    netbios["Parameters"] \
+        .set_dword("MaxLana", 254)
 
     # --- Winsock (user mode): wsock32.dll + wshtcpip.dll -----------------
     # wsock32 enumerates transports from Winsock\Parameters:Transports, then
