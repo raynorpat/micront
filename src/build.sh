@@ -1841,6 +1841,23 @@ build_multimed(){
     build_winmm || return 1
     run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/CONTROL/MULTIMED" "SHELL/CONTROL/MULTIMED - multimed.cpl" makedll=1
 }
+build_msacm32(){
+    # Audio Compression Manager (msacm32.dll) — codec/filter host. DYNLINK →
+    # makedll=1. Links winmm; carries a WOW thunk (acmthunk.c) like winmm's own.
+    build_winmm || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/MEDIA/MSACM/MSACM" "MEDIA/MSACM - msacm32.dll" makedll=1
+}
+build_msacm_codecs(){
+    # ACM codec plug-ins (*.acm): MS-ADPCM, IMA-ADPCM, GSM 6.10, and the filter
+    # driver. DYNLINK with TARGETEXT=acm → makedll=1. They plug into msacm32.
+    build_msacm32 || return 1
+    local d
+    for d in MSADPCM IMAADPCM GSM610 MSFILTER; do
+        run_nmake "$NT_ROOT/PRIVATE/WINDOWS/MEDIA/MSACM/$d" "MEDIA/MSACM/$d - .acm codec" makedll=1 || return 1
+    done
+    # ACM mapper / Control Panel driver (msacm32.drv, from msacmcpl.c).
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/MEDIA/MSACM/MSACMMAP" "MEDIA/MSACM/MSACMMAP - msacm32.drv" makedll=1
+}
 build_scrnsavers(){
     # Screen savers (SCRNSAVE DIRS): the scrnsave.lib framework (COMMON) then
     # each saver (UMAPPL_NOLIB + UMAPPLEXT=.scr → <name>.scr). Savers link
@@ -2446,6 +2463,9 @@ USERLAND_GUI_TARGETS=(
     # Phase 4b — multimedia Control Panel applets (all link winmm): the Sound
     # and MIDI-Mapper driver applets plus the Drivers and Multimedia .cpl icons.
     sound midimap drivers_cpl multimed
+    # Audio Compression Manager — msacm32.dll + the ADPCM/IMA/GSM codecs, the
+    # filter driver, and the ACM Control Panel mapper (msacm32.drv).
+    msacm32 msacm_codecs
     # TCP/IP command-line utilities (arp, route, ping, tracert) — console
     # apps run from cmd. ping/tracert pull in icmp.dll (ICMP Echo API).
     arp route ping tracert

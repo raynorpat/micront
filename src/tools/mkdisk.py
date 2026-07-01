@@ -602,6 +602,14 @@ _GUI_FILES: list[tuple[str, Path]] = [
     ("System32/logon.scr",           OBJ("WINDOWS/SHELL/CONTROL/SCRNSAVE/LOGON") / "logon.scr"),
     # Multimedia API DLL — winmm.dll (the keystone of the MEDIA subsystem).
     ("System32/winmm.dll",           SDK_LIB / "winmm.dll"),
+    # Audio Compression Manager: core DLL, the ACM codecs (*.acm), and the
+    # mapper/Control-Panel driver (msacm32.drv).
+    ("System32/msacm32.dll",         SDK_LIB / "msacm32.dll"),
+    ("System32/msadp32.acm",         OBJ("WINDOWS/MEDIA/MSACM/MSADPCM") / "msadp32.acm"),
+    ("System32/imaadp32.acm",        OBJ("WINDOWS/MEDIA/MSACM/IMAADPCM") / "imaadp32.acm"),
+    ("System32/msgsm32.acm",         OBJ("WINDOWS/MEDIA/MSACM/GSM610") / "msgsm32.acm"),
+    ("System32/msfltr32.acm",        OBJ("WINDOWS/MEDIA/MSACM/MSFILTER") / "msfltr32.acm"),
+    ("System32/msacm32.drv",         OBJ("WINDOWS/MEDIA/MSACM/MSACMMAP") / "msacm32.drv"),
     # Phase 4b multimedia Control Panel applets. drivers.cpl/multimed.cpl are
     # auto-discovered by control.exe; sound.dll/midimap.dll are the Sound and
     # MIDI-Mapper driver applets (MMCPL-registered / loaded by multimed).
