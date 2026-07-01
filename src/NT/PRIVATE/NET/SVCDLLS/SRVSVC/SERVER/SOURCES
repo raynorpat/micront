@@ -39,11 +39,10 @@ TARGETLIBS= \
             $(BASEDIR)\public\sdk\lib\*\rpcndr.lib \
             $(BASEDIR)\public\sdk\lib\*\rpcrt4.lib \
             $(BASEDIR)\public\sdk\lib\*\winspool.lib \
-# MicroNT omits the downlevel transaction server (xactsrv) — see xsstub.c.
-#            $(BASEDIR)\public\sdk\lib\*\xactsrv.lib \
+            $(BASEDIR)\public\sdk\lib\*\xactsrv.lib \
             ..\lib\obj\*\srvcomn.lib
 
-INCLUDES=.;..;..\..\..\inc;$(BASEDIR)\private\inc
+INCLUDES=.;..;..\..\..\inc;$(BASEDIR)\private\inc;..\..\..\xactsrv
 
 USE_CRTDLL=1
 
@@ -77,6 +76,8 @@ SOURCES= \
          stats.c    \
          tod.c      \
          xport.c    \
-         xsstub.c
+         xsdata.c   \
+         xsinit.c   \
+         xsproc.c
 
 C_DEFINES=-DRPC_NO_WINDOWS_H

@@ -530,14 +530,15 @@ build_srvsvc_idl() {
 }
 build_srvcomn()    { build_srvsvc_idl || return 1; run_nmake "$NET/SVCDLLS/SRVSVC/LIB" "SRVSVC/LIB - srvcomn.lib (server service helpers)"; }
 build_srvsvc_lib() { build_srvsvc_idl || return 1; run_nmake "$NET/SVCDLLS/SRVSVC/CLIENT" "SRVSVC/CLIENT - srvsvc.lib (RPC client stub)"; }
-# srvsvc.dll — the Server service. Serves shares to modern SMB clients over
-# RPC. The legacy downlevel (LanMan/OS2 RAP) transaction server is stubbed
-# out (xsstub.c), so this doesn't pull in the xactsrv/browser/RPCXLATE
-# subsystem.
+# srvsvc.dll — the Server service. Serves shares over RPC, and remotes the
+# downlevel (LanMan/OS2 RAP) admin API to older clients via the transaction
+# server — so it links xactsrv.lib, which comes from the xactsrv<->browser
+# circular build below.
 build_srvsvc() {
-    build_srvsvc_idl || return 1
-    build_srvcomn    || return 1
-    build_srvsvc_lib || return 1
+    build_srvsvc_idl     || return 1
+    build_srvcomn        || return 1
+    build_srvsvc_lib     || return 1
+    build_xactsrv_browser || return 1   # provides xactsrv.lib (+ browser.dll)
     run_nmake "$NET/SVCDLLS/SRVSVC/SERVER" "SRVSVC - Server service (srvsvc.dll)" makedll=1
 }
 
