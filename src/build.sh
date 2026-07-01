@@ -2284,10 +2284,12 @@ build_disk() {
     echo "Building boot disk image ($profile)"
     echo "========================================"
 
-    # Build EFI loader if not already present.
-    if [ ! -f "$efi_bin" ]; then
-        build_efi
-    fi
+    # Always run the EFI loader build — `make` is a no-op when BOOTX64.EFI is
+    # up to date, but rebuilds when boot-efi sources change. (A bare
+    # `[ ! -f ]` guard served a stale loader after main.c changed — e.g. the
+    # NVMe/SCSI boot-driver set was added but the old loader still only loaded
+    # atdisk, so q35+nvme bugchecked 0x7B INACCESSIBLE_BOOT_DEVICE.)
+    build_efi
 
     mkdir -p "$out_dir"
     # DHCP=1 leases the adapter IP via the DHCP client service instead of the
