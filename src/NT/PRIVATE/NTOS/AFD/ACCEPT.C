@@ -694,11 +694,9 @@ Routine Description:
     caller's output buffer, optionally receives the first block of data,
     and completes the IRP.
 
-    Note: unlike NT 4.0, which issues a TDI query for the connection's
-    actual local address, this uses the local address inherited from the
-    listening endpoint (the same value returned by a normal accept).  For
-    wildcard binds this may be less specific than the connection's real
-    local address.
+    The local address is obtained with a TDI query on the connection, so it
+    reflects the connection's actual local address (matching a getsockname
+    on the accepted socket) even for wildcard binds.
 
 Arguments:
 
@@ -719,8 +717,8 @@ Return Value:
     PIO_STACK_LOCATION irpSp;
     NTSTATUS status;
     PUCHAR outputBuffer;
+    PAFD_CONNECTION connection;
     ULONG bytesReceived;
-    ULONG length;
 
     PAGED_CODE( );
 
@@ -753,27 +751,85 @@ Return Value:
     outputBuffer = MmGetSystemAddressForMdl( Irp->MdlAddress );
 
     //
-    // Store the local address.  GetAcceptExSockaddrs skips one ULONG before
-    // the TDI address in the local address section, so we write a ULONG of
-    // zero followed by the TDI transport address.
+    // Query the connection's actual local address directly into the local
+    // address section of the output buffer.  TDI returns a TDI_ADDRESS_INFO
+    // (a ULONG activity count followed by the transport address), which is
+    // exactly the layout GetAcceptExSockaddrs expects.
     //
 
-    if ( superAcceptInfo->LocalAddressLength > sizeof(ULONG) &&
-             acceptEndpoint->LocalAddress != NULL ) {
+    connection = AFD_CONNECTION_FROM_ENDPOINT( acceptEndpoint );
 
-        length = superAcceptInfo->LocalAddressLength - sizeof(ULONG);
-        if ( length > acceptEndpoint->LocalAddressLength ) {
-            length = acceptEndpoint->LocalAddressLength;
+    if ( connection != NULL && superAcceptInfo->LocalAddressLength > 0 ) {
+
+        PVOID localAddressVa;
+        PMDL localMdl;
+        PIRP queryIrp;
+        KEVENT queryEvent;
+
+        localAddressVa = (PCHAR)MmGetMdlVirtualAddress( Irp->MdlAddress ) +
+                             superAcceptInfo->ReceiveDataLength;
+
+        localMdl = IoAllocateMdl(
+                       localAddressVa,
+                       superAcceptInfo->LocalAddressLength,
+                       FALSE,
+                       FALSE,
+                       NULL
+                       );
+
+        if ( localMdl != NULL ) {
+
+            IoBuildPartialMdl(
+                Irp->MdlAddress,
+                localMdl,
+                localAddressVa,
+                superAcceptInfo->LocalAddressLength
+                );
+
+            queryIrp = IoAllocateIrp( connection->FileObject->DeviceObject->StackSize, FALSE );
+
+            if ( queryIrp != NULL ) {
+
+                KeInitializeEvent( &queryEvent, NotificationEvent, FALSE );
+
+                queryIrp->MdlAddress = localMdl;
+                queryIrp->Tail.Overlay.Thread = PsGetCurrentThread( );
+
+                TdiBuildQueryInformation(
+                    queryIrp,
+                    connection->FileObject->DeviceObject,
+                    connection->FileObject,
+                    AfdSuperAcceptSyncComplete,
+                    &queryEvent,
+                    TDI_QUERY_ADDRESS_INFO,
+                    localMdl
+                    );
+
+                status = IoCallDriver( connection->FileObject->DeviceObject, queryIrp );
+
+                if ( status == STATUS_PENDING ) {
+                    KeWaitForSingleObject(
+                        &queryEvent,
+                        Executive,
+                        KernelMode,
+                        FALSE,
+                        NULL
+                        );
+                }
+
+                IoFreeIrp( queryIrp );
+            }
+
+            IoFreeMdl( localMdl );
         }
-
-        *(PULONG)(outputBuffer + superAcceptInfo->ReceiveDataLength) = 0;
-
-        RtlCopyMemory(
-            outputBuffer + superAcceptInfo->ReceiveDataLength + sizeof(ULONG),
-            acceptEndpoint->LocalAddress,
-            length
-            );
     }
+
+    //
+    // The address query is best-effort; the connection is already
+    // established, so the accept itself succeeds regardless.
+    //
+
+    status = STATUS_SUCCESS;
 
     //
     // Store the remote address, captured by the wait for listen.
