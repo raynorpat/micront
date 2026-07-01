@@ -489,6 +489,47 @@ build_rdr() {
     run_nmake "$NTOS/RDR/DAYTONA" "RDR - SMB redirector (rdr.sys)" makedll=1
 }
 
+# wkssvc.dll — the Workstation service. Hosted by services.exe (SCM), it
+# binds the redirector (rdr.sys) to transports and services net-use RPCs.
+# MIDL generates wkssvc.h + client/server stubs from WKSSVC.IDL; the client
+# stub compiles into wkssvc.lib, the server stub into wkssvc.dll.
+build_wkssvc_idl() {
+    local dir="$NET/SVCDLLS/WKSSVC"
+    # -oldnames so MIDL emits wkssvc_ServerIfHandle (referenced by wsmain.c),
+    # not wkssvc_v1_0_s_ifspec.
+    run_wibo_tool "$dir" midl /ms_ext /c_ext /app_config /D MIDL_PASS /D _M_IX86 /D _X86_ \
+        -oldnames /I "$NT_ROOT_WIN\\PRIVATE\\INC" WKSSVC.IDL || return 1
+    # midl emits into WKSSVC/; the client lib compiles ..\..\wkssvc_c.c (CLIENT
+    # dir) and the server DLL ..\wkssvc_s.c (SERVER dir), so distribute stubs.
+    cp -f "$dir/wkssvc_c.c" "$dir/CLIENT/" 2>/dev/null || cp -f "$dir/WKSSVC_C.C" "$dir/CLIENT/wkssvc_c.c"
+    cp -f "$dir/wkssvc_s.c" "$dir/SERVER/" 2>/dev/null || cp -f "$dir/WKSSVC_S.C" "$dir/SERVER/wkssvc_s.c"
+}
+build_wkssvc_lib() { build_wkssvc_idl || return 1; run_nmake "$NET/SVCDLLS/WKSSVC/CLIENT" "WKSSVC/CLIENT - wkssvc.lib (RPC client stub)"; }
+build_wkssvc() {
+    build_wkssvc_idl || return 1
+    build_wkssvc_lib || return 1
+    run_nmake "$NET/SVCDLLS/WKSSVC/SERVER/DAYTONA" "WKSSVC - Workstation service (wkssvc.dll)" makedll=1
+}
+
+# net.exe — the `net` command (net use / net view / ...). Built from the
+# NETCMD tree: common.lib (shared helpers) + netlib.lib feed the NETUSE
+# component whose UMAPPL=net produces net.exe.
+#
+# BLOCKED: the netcmd/netlib tree pulls the DosPrint API headers (dosprint.h,
+# rxprint.h, xsdef16.h) transitively through the shared 16/32-bit port header
+# (NETCMD/INC/port1632.h), and those headers are absent from both the NT 3.5
+# and NT4 leaks. They're `net print` deps, irrelevant to `net use`, but baked
+# into the shared header. netlib builds once its print-only .c files are
+# pruned; common.lib (and thus net.exe) still needs dosprint.h. Left here for
+# a future pass — the redirector itself works via wkssvc + the WNet API.
+build_netlib()      { run_nmake "$NET/NETLIB" "NET/NETLIB - net helper lib (netlib.lib)"; }
+build_netcmd_common(){ run_nmake "$NET/NETCMD/COMMON" "NETCMD/COMMON - net command shared lib (common.lib)"; }
+build_net() {
+    build_netlib       || return 1
+    build_netcmd_common || return 1
+    KEEP_UMAPPL=1 run_nmake "$NET/NETCMD/NETUSE" "NETCMD/NETUSE - net.exe" makedll=1
+}
+
 # --- RPC stack ---------------------------------------------------------------
 # NT 3.5's RPC runtime is 180k LoC across NDRLIB + NDR20 + RUNTIME.
 # Builds in dependency order: NDRLIB (NDR marshaling primitives, the

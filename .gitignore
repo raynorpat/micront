@@ -423,3 +423,16 @@ src/NT/PUBLIC/SDK/LIB/I386/icmp.exp
 # consumed only by rdr.sys (like nbt.lib). Not seed import stubs.
 src/NT/PUBLIC/SDK/LIB/I386/bowser.lib
 src/NT/PUBLIC/SDK/LIB/I386/smbtrsup.lib
+
+# Workstation service (wkssvc) + net helper lib — generated DLL/exp/lib and
+# MIDL-generated stubs. netlib.lib's only consumer (net.exe) is blocked on
+# absent DosPrint headers, so it's a build output, not a seed lib.
+src/NT/PUBLIC/SDK/LIB/I386/wkssvc.dll
+src/NT/PUBLIC/SDK/LIB/I386/wkssvc.exp
+src/NT/PUBLIC/SDK/LIB/I386/wkssvc.lib
+src/NT/PUBLIC/SDK/LIB/I386/NetLib.lib
+src/NT/PRIVATE/NET/SVCDLLS/WKSSVC/WKSSVC.h
+src/NT/PRIVATE/NET/SVCDLLS/WKSSVC/WKSSVC_c.c
+src/NT/PRIVATE/NET/SVCDLLS/WKSSVC/WKSSVC_s.c
+src/NT/PRIVATE/NET/SVCDLLS/WKSSVC/CLIENT/wkssvc_c.c
+src/NT/PRIVATE/NET/SVCDLLS/WKSSVC/SERVER/wkssvc_s.c

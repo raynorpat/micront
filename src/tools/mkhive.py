@@ -905,6 +905,29 @@ def build_micront_system_hive(profile: str = "headless",
     netbios["Parameters"] \
         .set_dword("MaxLana", 254)
 
+    # --- SMB redirector (client): rdr.sys + LanmanWorkstation ------------
+    # rdr.sys is the SMB client / network filesystem (a file-system driver,
+    # Type 2). The Workstation service (wkssvc.dll, hosted by services.exe)
+    # binds it to a transport and opens connections. Both are DEMAND start
+    # (Start 3): the stack is registered but nothing auto-loads. Activating
+    # it needs services.exe staged + a boot test, so it's intentionally
+    # dormant here (see NETWORKING-PLAN.md Tier 3).
+    services["Rdr"] \
+        .set_dword("Type",         2) \
+        .set_dword("Start",        3) \
+        .set_dword("ErrorControl", 1) \
+        .set_sz("Group", "NetworkProvider")
+    lanwks = services["LanmanWorkstation"]
+    lanwks.set_dword("Type",         0x20) \
+          .set_dword("Start",        3) \
+          .set_dword("ErrorControl", 1) \
+          .set_sz("Group", "NetworkProvider") \
+          .set_multi_sz("DependOnService", ["NetBT", "Rdr"])
+    lanwks["Parameters"] \
+        .set_expand_sz("ServiceDll", "%SystemRoot%\\System32\\wkssvc.dll")
+    lanwks["Linkage"] \
+        .set_multi_sz("Bind", ["\\Device\\NetBT_Vionet1"])
+
     # --- Winsock (user mode): wsock32.dll + wshtcpip.dll -----------------
     # wsock32 enumerates transports from Winsock\Parameters:Transports, then
     # for each opens <Transport>\Parameters\Winsock to learn the triple
