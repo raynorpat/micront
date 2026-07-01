@@ -776,7 +776,10 @@ def build_micront_system_hive(profile: str = "headless",
     # --- SCSI / NVMe storage stack --------------------------------------
     # scsiport.sys is the miniport framework; nvme2k.sys registers against
     # it; scsidisk.sys surfaces \Device\Harddisk<N>\Partition<P>.
-    # DependOnService enforces load order on top of ServiceGroupOrder.
+    # Load order comes from the Group + ServiceGroupOrder — NOT DependOnService:
+    # the SCM rejects any boot/system-start driver that lists a service (rather
+    # than group) dependency (ScAddConfigInfoServiceRecord -> ERROR_INVALID_
+    # PARAMETER), dropping it from the service database so nothing can depend on it.
     services["scsiport"] \
         .set_dword("Type",         1) \
         .set_dword("Start",        1) \
@@ -786,14 +789,12 @@ def build_micront_system_hive(profile: str = "headless",
         .set_dword("Type",         1) \
         .set_dword("Start",        1) \
         .set_dword("ErrorControl", 1) \
-        .set_sz("Group", "SCSI miniport") \
-        .set_multi_sz("DependOnService", ["scsiport"])
+        .set_sz("Group", "SCSI miniport")
     services["scsidisk"] \
         .set_dword("Type",         1) \
         .set_dword("Start",        1) \
         .set_dword("ErrorControl", 1) \
-        .set_sz("Group", "SCSI Class") \
-        .set_multi_sz("DependOnService", ["scsiport"])
+        .set_sz("Group", "SCSI Class")
 
     # --- virtio device drivers ------------------------------------------
     # PCI bus-walk drivers in the "Virtio" group; load once the kernel +
@@ -829,8 +830,7 @@ def build_micront_system_hive(profile: str = "headless",
     vionet.set_dword("Type",         1) \
           .set_dword("Start",        1) \
           .set_dword("ErrorControl", 1) \
-          .set_sz("Group", "NDIS Miniport") \
-          .set_multi_sz("DependOnService", ["ndis"])
+          .set_sz("Group", "NDIS Miniport")
     vionet["Linkage"] \
         .set_multi_sz("Bind",   ["\\Device\\Vionet1"]) \
         .set_multi_sz("Export", ["\\Device\\Vionet1"]) \
@@ -869,8 +869,7 @@ def build_micront_system_hive(profile: str = "headless",
     tcpip.set_dword("Type",         1) \
          .set_dword("Start",        1) \
          .set_dword("ErrorControl", 1) \
-         .set_sz("Group", "TDI") \
-         .set_multi_sz("DependOnService", ["ndis", "tdi"])
+         .set_sz("Group", "TDI")
     tcpip["Linkage"].set_multi_sz("Bind", ["\\Device\\Vionet1"])
     tcpip["Parameters"]
     # afd.sys - socket emulation above TDI (\Device\Afd). No static config.
@@ -878,8 +877,7 @@ def build_micront_system_hive(profile: str = "headless",
         .set_dword("Type",         1) \
         .set_dword("Start",        1) \
         .set_dword("ErrorControl", 1) \
-        .set_sz("Group", "TDI") \
-        .set_multi_sz("DependOnService", ["tcpip"])
+        .set_sz("Group", "TDI")
 
     # --- NetBIOS over TCP/IP: netbt.sys + netbios.sys --------------------
     # netbt binds the NetBIOS session/datagram/name services over tcpip.
@@ -893,8 +891,7 @@ def build_micront_system_hive(profile: str = "headless",
     netbt.set_dword("Type",         1) \
          .set_dword("Start",        1) \
          .set_dword("ErrorControl", 1) \
-         .set_sz("Group", "NetBIOSGroup") \
-         .set_multi_sz("DependOnService", ["Tcpip"])
+         .set_sz("Group", "NetBIOSGroup")
     netbt["Linkage"] \
         .set_multi_sz("Bind",   ["\\Device\\Vionet1"]) \
         .set_multi_sz("Export", ["\\Device\\NetBT_Vionet1"])
@@ -910,8 +907,7 @@ def build_micront_system_hive(profile: str = "headless",
     netbios.set_dword("Type",         1) \
            .set_dword("Start",        1) \
            .set_dword("ErrorControl", 1) \
-           .set_sz("Group", "NetBIOSGroup") \
-           .set_multi_sz("DependOnService", ["NetBT"])
+           .set_sz("Group", "NetBIOSGroup")
     netbios["Linkage"] \
         .set_multi_sz("Bind",  ["\\Device\\NetBT_Vionet1"]) \
         .set_binary("LanaMap", bytes([1, 0]))
@@ -1007,16 +1003,16 @@ def build_micront_system_hive(profile: str = "headless",
     # Parameters\Tcpip. Only registered in DHCP mode; auto-start after the
     # transport (Tcpip/Afd) is up.
     if dhcp:
+        # DHCP is a Win32 service (Type 0x20), so a service DependOnService is
+        # valid: it waits for the tcpip/afd drivers to be running before the SCM
+        # starts it. (Those drivers must NOT themselves carry a service
+        # DependOnService — see the SCSI/networking driver blocks above.)
         services["DHCP"] \
             .set_dword("Type",         0x20) \
             .set_dword("Start",        2) \
             .set_dword("ErrorControl", 1) \
-            .set_expand_sz("ImagePath", "%SystemRoot%\\System32\\services.exe")
-        # No DependOnService: Tcpip/Afd are boot-start drivers (already up
-        # before services.exe runs), but the SCM's ScDependenciesStarted()
-        # doesn't recognize boot-loaded drivers as "started", so listing them
-        # blocks DHCP's autostart indefinitely. The dependency is moot here
-        # since the drivers are always present by the time the SCM autostarts.
+            .set_expand_sz("ImagePath", "%SystemRoot%\\System32\\services.exe") \
+            .set_multi_sz("DependOnService", ["Tcpip", "Afd"])
 
     if profile == "gui":
         # Video: Bochs VGA miniport (QEMU stdvga, PCI 1234:1111).
