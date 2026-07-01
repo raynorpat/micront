@@ -2375,6 +2375,11 @@ USERLAND_GUI_TARGETS=(
     consrv
     # winsrv.dll — aggregator (usersrv + gdisrv + consrv + basesrv)
     winsrv
+    # CAIROLE (OLE2/COM) — ole32.dll, scm.exe, olecnv32.dll, oleprx32.dll.
+    # All import USER32/GDI32 (OLE is GUI-only) and oleprx32 links gdi32p.lib,
+    # so it follows the GDI/USER stack; rpcrt4.lib comes from the userland phase.
+    # mkdisk.py stages these into System32 for the gui profile.
+    cairole
     # LSA client stub + winreg server lib (winlogon links both)
     lsadll winregsrv
     # Framebuffer display driver (pairs with bochsvga.sys miniport)
