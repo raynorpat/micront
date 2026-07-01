@@ -1011,8 +1011,12 @@ def build_micront_system_hive(profile: str = "headless",
             .set_dword("Type",         0x20) \
             .set_dword("Start",        2) \
             .set_dword("ErrorControl", 1) \
-            .set_expand_sz("ImagePath", "%SystemRoot%\\System32\\services.exe") \
-            .set_multi_sz("DependOnService", ["Tcpip", "Afd"])
+            .set_expand_sz("ImagePath", "%SystemRoot%\\System32\\services.exe")
+        # No DependOnService: Tcpip/Afd are boot-start drivers (already up
+        # before services.exe runs), but the SCM's ScDependenciesStarted()
+        # doesn't recognize boot-loaded drivers as "started", so listing them
+        # blocks DHCP's autostart indefinitely. The dependency is moot here
+        # since the drivers are always present by the time the SCM autostarts.
 
     if profile == "gui":
         # Video: Bochs VGA miniport (QEMU stdvga, PCI 1234:1111).
