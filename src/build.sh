@@ -602,7 +602,17 @@ build_xactsrv_browser() {
     build_brcommon       || return 1
     build_browser_idl    || return 1
     build_browser_client || return 1
-    build_srvsvc_lib     || return 1   # browser links srvsvc.lib (client)
+    build_srvsvc_lib     || return 1
+    # browser links public\sdk\lib\srvsvc.lib, but the srvsvc SERVER that
+    # publishes that import lib is built AFTER this browser pass (the
+    # xactsrv<->browser<->srvsvc circular build). On a fresh tree that file
+    # doesn't exist yet, so stage the CLIENT stub there to satisfy the link.
+    # Skip when an import lib is already present (full-build second pass) so we
+    # don't clobber the real one.
+    if [ ! -f "$NT_ROOT/PUBLIC/SDK/LIB/I386/srvsvc.lib" ]; then
+        cp -f "$NET/SVCDLLS/SRVSVC/CLIENT/obj/i386/srvsvc.lib" \
+              "$NT_ROOT/PUBLIC/SDK/LIB/I386/srvsvc.lib" || return 1
+    fi
 
     local xdir="$NET/XACTSRV"
     local bdir="$NET/SVCDLLS/BROWSER/SERVER"

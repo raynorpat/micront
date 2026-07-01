@@ -37,9 +37,9 @@ TARGETLIBS= \
             $(BASEDIR)\public\sdk\lib\*\rpcndr.lib \
             $(BASEDIR)\public\sdk\lib\*\rpcrt4.lib \
             $(BASEDIR)\public\sdk\lib\*\advapi32.lib \
-            $(BASEDIR)\Public\Sdk\Lib\*\xactsrv.lib \
-            $(BASEDIR)\Public\Sdk\Lib\*\srvsvc.lib \
-            $(BASEDIR)\Public\Sdk\Lib\*\wsock32.lib \
+            $(BASEDIR)\public\sdk\lib\*\xactsrv.lib \
+            $(BASEDIR)\public\sdk\lib\*\srvsvc.lib \
+            $(BASEDIR)\public\sdk\lib\*\wsock32.lib \
 
 
 INCLUDES=..;..\..\..\inc;..\..\..\..\inc;..\..\..\api;..\..\..\xactsrv;..\..\srvsvc\server;..\..\srvsvc
