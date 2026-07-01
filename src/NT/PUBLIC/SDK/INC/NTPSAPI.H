@@ -166,7 +166,10 @@ typedef struct _NT_TIB {
     PVOID StackBase;
     PVOID StackLimit;
     PVOID SubSystemTib;
-    ULONG Version;
+    union {
+        PVOID FiberData;
+        ULONG Version;
+    };
     PVOID ArbitraryUserPointer;
     struct _NT_TIB *Self;
 } NT_TIB;
@@ -482,6 +485,36 @@ typedef struct _THREAD_BASIC_INFORMATION {
     LONG BasePriority;
 } THREAD_BASIC_INFORMATION;
 typedef THREAD_BASIC_INFORMATION *PTHREAD_BASIC_INFORMATION;
+
+typedef struct _FIBER {
+
+    PVOID FiberData;
+
+    //
+    // Matches first three DWORDs of TEB
+    //
+
+    struct _EXCEPTION_REGISTRATION_RECORD *ExceptionList;
+    PVOID StackBase;
+    PVOID StackLimit;
+
+    //
+    // Used by base to free a thread's stack
+    //
+
+    PVOID DeallocationStack;
+
+    CONTEXT FiberContext;
+
+} FIBER, *PFIBER;
+
+//
+// Define functions to get the address of the current fiber and the
+// current fiber data.
+//
+
+#define GetCurrentFiber() (((PNT_TIB)NtCurrentTeb())->FiberData)
+#define GetFiberData() (*(PVOID *)(GetCurrentFiber()))
 
 //
 //

@@ -195,7 +195,7 @@ Return Value:
         lpParameter,
         (PVOID)lpStartAddress,
         InitialTeb.StackBase,
-        TRUE
+        BaseContextTypeThread
         );
 
     pObja = BaseFormatObjectAttributes(&Obja,lpThreadAttributes,NULL);
@@ -1850,4 +1850,134 @@ Return Value:
         }
 
     return rv;
+}
+
+WINBASEAPI
+LPVOID
+WINAPI
+CreateFiber(
+    DWORD dwStackSize,
+    LPFIBER_START_ROUTINE lpStartAddress,
+    LPVOID lpParameter
+    )
+{
+
+    NTSTATUS Status;
+    PFIBER Fiber;
+    INITIAL_TEB InitialTeb;
+    MEMORY_BASIC_INFORMATION MemInfo;
+
+    Fiber = RtlAllocateHeap( RtlProcessHeap(), 0, sizeof(*Fiber) );
+    if ( !Fiber ) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return Fiber;
+        }
+
+    Status = BaseCreateStack(
+                NtCurrentProcess(),
+                dwStackSize,
+                0L,
+                &InitialTeb
+                );
+
+    if ( !NT_SUCCESS(Status) ) {
+        BaseSetLastNTError(Status);
+        RtlFreeHeap(RtlProcessHeap(), 0, Fiber);
+        return NULL;
+        }
+
+    Fiber->FiberData = lpParameter;
+    Fiber->StackBase = InitialTeb.StackBase;
+    Fiber->StackLimit = InitialTeb.StackLimit;
+
+    //
+    // Find the base of the reserved stack region so that DeleteFiber
+    // can release the entire stack.
+    //
+
+    Status = NtQueryVirtualMemory(
+                NtCurrentProcess(),
+                InitialTeb.StackLimit,
+                MemoryBasicInformation,
+                (PVOID)&MemInfo,
+                sizeof(MemInfo),
+                NULL
+                );
+    if ( NT_SUCCESS(Status) ) {
+        Fiber->DeallocationStack = MemInfo.AllocationBase;
+        }
+    else {
+        Fiber->DeallocationStack = InitialTeb.StackLimit;
+        }
+
+    Fiber->ExceptionList = (struct _EXCEPTION_REGISTRATION_RECORD *)-1;
+
+    //
+    // Create an initial context for the new fiber.
+    //
+
+    BaseInitializeContext(
+        &Fiber->FiberContext,
+        lpParameter,
+        (PVOID)lpStartAddress,
+        InitialTeb.StackBase,
+        BaseContextTypeFiber
+        );
+
+    return Fiber;
+}
+
+WINBASEAPI
+VOID
+WINAPI
+DeleteFiber(
+    LPVOID lpFiber
+    )
+{
+    DWORD dwStackSize;
+
+    //
+    // If the current fiber makes this call, then it's just a thread exit
+    //
+
+    if ( NtCurrentTeb()->NtTib.FiberData == lpFiber ) {
+        ExitThread(1);
+        }
+
+    dwStackSize = 0;
+
+    NtFreeVirtualMemory( NtCurrentProcess(),
+                        &((PFIBER)lpFiber)->DeallocationStack,
+                        &dwStackSize,
+                        MEM_RELEASE
+                        );
+    RtlFreeHeap(RtlProcessHeap(),0,lpFiber);
+}
+
+
+WINBASEAPI
+LPVOID
+WINAPI
+ConvertThreadToFiber(
+    LPVOID lpParameter
+    )
+{
+
+    PFIBER Fiber;
+    PTEB Teb;
+
+    Fiber = RtlAllocateHeap( RtlProcessHeap(), 0, sizeof(*Fiber) );
+    if ( !Fiber ) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return Fiber;
+        }
+    Teb = NtCurrentTeb();
+    Fiber->FiberData = lpParameter;
+    Fiber->StackBase = Teb->NtTib.StackBase;
+    Fiber->StackLimit = Teb->NtTib.StackLimit;
+    Fiber->DeallocationStack = Teb->DeallocationStack;
+    Fiber->ExceptionList = Teb->NtTib.ExceptionList;
+    Teb->NtTib.FiberData = Fiber;
+
+    return Fiber;
 }

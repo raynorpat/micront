@@ -194,6 +194,11 @@ BaseCreateStack(
     );
 
 VOID
+BaseFiberStart(
+    VOID
+    );
+
+VOID
 BaseThreadStart(
     LPTHREAD_START_ROUTINE lpStartAddress,
     LPVOID lpParameter
@@ -211,13 +216,19 @@ BaseProcessStartThunk(
     LPVOID lpParameter
     );
 
+typedef enum _BASE_CONTEXT_TYPE {
+    BaseContextTypeProcess,
+    BaseContextTypeThread,
+    BaseContextTypeFiber
+} BASE_CONTEXT_TYPE, *PBASE_CONTEXT_TYPE;
+
 VOID
 BaseInitializeContext(
     PCONTEXT Context,
     PVOID Parameter,
     PVOID InitialPc,
     PVOID InitialSp,
-    BOOLEAN NewThread
+    BASE_CONTEXT_TYPE ContextType
     );
 
 BOOL

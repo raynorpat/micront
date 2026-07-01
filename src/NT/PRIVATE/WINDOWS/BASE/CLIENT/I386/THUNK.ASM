@@ -245,6 +245,106 @@ gettick10:                                  ;
 
 stdENDP _BaseGetTickCount
 
+;++
+;
+; VOID
+; SwitchToFiber(
+;    PFIBER NewFiber
+;    )
+;
+; Routine Description:
+;
+;    This function saves the state of the current fiber and switches
+;    to the new fiber.
+;
+; Arguments:
+;
+;    NewFiber (TOS+4) - Supplies the address of the new fiber.
+;
+; Return Value:
+;
+;    None
+;
+;--
+
+cPublicProc _SwitchToFiber,1
+
+        mov     edx,fs:[PcTeb]              ; edx is flat TEB
+        mov     eax,[edx]+TbFiberData       ; eax points to current fiber
+
+
+        ;
+        ; Setup and save nonvolitile state
+        ;
+
+
+        mov     ecx,esp
+
+        mov     [eax]+FbFiberContext+CsEbx,ebx
+        mov     [eax]+FbFiberContext+CsEdi,edi
+        mov     [eax]+FbFiberContext+CsEsi,esi
+        mov     [eax]+FbFiberContext+CsEbp,ebp
+
+        mov     ebx,[esp]                   ; get return address
+
+        add     ecx,8                       ; adjust esp to account for args + ra
+        mov     [eax]+FbFiberContext+CsEsp,ecx
+
+        mov     [eax]+FbFiberContext+CsEip,ebx
+
+        ;
+        ; Save exception list, stack base, stack limit
+        ;
+
+        mov     ecx,[edx]+PcExceptionList
+        mov     ebx,[edx]+PcStackLimit
+
+        mov     [eax]+FbExceptionList,ecx
+        mov     [eax]+FbStackLimit,ebx
+
+
+        ;
+        ; Now restore the new fiber
+        ;
+
+        mov     eax,[esp]+4                 ; eax is new fiber
+
+
+        ;
+        ; now restore new fiber TEB state
+        ;
+
+        mov     ecx,[eax]+FbExceptionList
+        mov     ebx,[eax]+FbStackBase
+        mov     esi,[eax]+FbStackLimit
+        mov     edi,[eax]+FbDeallocationStack
+
+        mov     [edx]+PcExceptionList,ecx
+        mov     [edx]+PcInitialStack,ebx
+        mov     [edx]+PcStackLimit,esi
+        mov     [edx]+TbDeallocationStack,edi
+
+        ;
+        ; Restore FiberData
+        ;
+
+        mov     [edx]+TbFiberData,eax
+
+        ;
+        ; Restore new fiber nonvolitile state
+        ;
+
+        mov     edi,[eax]+FbFiberContext+CsEdi
+        mov     esi,[eax]+FbFiberContext+CsEsi
+        mov     ebp,[eax]+FbFiberContext+CsEbp
+        mov     ebx,[eax]+FbFiberContext+CsEbx
+        mov     ecx,[eax]+FbFiberContext+CsEip
+        mov     esp,[eax]+FbFiberContext+CsEsp
+
+        jmp     ecx
+
+stdENDP _SwitchToFiber
+
 _TEXT   ends
         end
 

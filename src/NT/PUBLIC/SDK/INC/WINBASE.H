@@ -214,6 +214,11 @@ typedef DWORD (WINAPI *PTHREAD_START_ROUTINE)(
     );
 typedef PTHREAD_START_ROUTINE LPTHREAD_START_ROUTINE;
 
+typedef VOID (WINAPI *PFIBER_START_ROUTINE)(
+    LPVOID lpFiberParameter
+    );
+typedef PFIBER_START_ROUTINE LPFIBER_START_ROUTINE;
+
 typedef RTL_CRITICAL_SECTION CRITICAL_SECTION;
 typedef PRTL_CRITICAL_SECTION PCRITICAL_SECTION;
 typedef PRTL_CRITICAL_SECTION LPCRITICAL_SECTION;
@@ -1607,6 +1612,36 @@ CreateRemoteThread(
     LPVOID lpParameter,
     DWORD dwCreationFlags,
     LPDWORD lpThreadId
+    );
+
+WINBASEAPI
+LPVOID
+WINAPI
+CreateFiber(
+    DWORD dwStackSize,
+    LPFIBER_START_ROUTINE lpStartAddress,
+    LPVOID lpParameter
+    );
+
+WINBASEAPI
+VOID
+WINAPI
+DeleteFiber(
+    LPVOID lpFiber
+    );
+
+WINBASEAPI
+LPVOID
+WINAPI
+ConvertThreadToFiber(
+    LPVOID lpParameter
+    );
+
+WINBASEAPI
+VOID
+WINAPI
+SwitchToFiber(
+    LPVOID lpFiber
     );
 
 WINBASEAPI
@@ -6214,6 +6249,20 @@ BOOL
 WINAPI
 FindCloseChangeNotification(
     HANDLE hChangeHandle
+    );
+
+WINBASEAPI
+BOOL
+WINAPI
+ReadDirectoryChangesW(
+    HANDLE hDirectory,
+    LPVOID lpBuffer,
+    DWORD nBufferLength,
+    BOOL bWatchSubtree,
+    DWORD dwNotifyFilter,
+    LPDWORD lpBytesReturned,
+    LPOVERLAPPED lpOverlapped,
+    LPOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
     );
 
 WINBASEAPI

@@ -1417,7 +1417,7 @@ itsok:
             Peb,
             ImageInformation.TransferAddress,
             InitialTeb.StackBase,
-            FALSE
+            BaseContextTypeProcess
             );
 
         //

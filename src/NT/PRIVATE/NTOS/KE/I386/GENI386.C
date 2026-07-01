@@ -394,6 +394,7 @@ main(
     p2("TbStackLimit", OFFSET(TEB, NtTib.StackLimit));
     p2("TbEnvironmentPointer", OFFSET(TEB, EnvironmentPointer));
     p2("TbVersion", OFFSET(TEB, NtTib.Version));
+    p2("TbFiberData", OFFSET(TEB, NtTib.FiberData));
     p2("TbArbitraryUserPointer", OFFSET(TEB, NtTib.ArbitraryUserPointer));
     p2("TbClientId", OFFSET(TEB, ClientId));
     p2("TbThreadLocalStoragePointer", OFFSET(TEB,
@@ -415,6 +416,19 @@ main(
     p2("TbWin32ProcessInfo", OFFSET(TEB, Win32ProcessInfo));
     p2("TbWin32ThreadInfo", OFFSET(TEB, Win32ThreadInfo));
     p2("TbSpare1", OFFSET(TEB, Spare1));
+    p2("TbDeallocationStack", OFFSET(TEB, DeallocationStack));
+
+    p1("\n");
+    p1("; \n");
+    p1(";  Fiber Structure Offset Definitions\n");
+    p1("; \n");
+    p1("\n");
+    p2("FbFiberData", OFFSET(FIBER, FiberData));
+    p2("FbExceptionList", OFFSET(FIBER, ExceptionList));
+    p2("FbStackBase", OFFSET(FIBER, StackBase));
+    p2("FbStackLimit", OFFSET(FIBER, StackLimit));
+    p2("FbDeallocationStack", OFFSET(FIBER, DeallocationStack));
+    p2("FbFiberContext", OFFSET(FIBER, FiberContext));
 
   EnableInc (HAL386);
     p1("\n");

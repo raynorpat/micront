@@ -225,6 +225,7 @@ TbStackBase equ 04H
 TbStackLimit equ 08H
 TbEnvironmentPointer equ 01CH
 TbVersion equ 010H
+TbFiberData equ 010H
 TbArbitraryUserPointer equ 014H
 TbClientId equ 020H
 TbThreadLocalStoragePointer equ 02CH
@@ -245,8 +246,20 @@ TbglContext equ 0BF0H
 TbWin32ProcessInfo equ 03CH
 TbWin32ThreadInfo equ 040H
 TbSpare1 equ 01A4H
+TbDeallocationStack equ 0E0AH
 
-; 
+;
+;  Fiber Structure Offset Definitions
+;
+
+FbFiberData equ 00H
+FbExceptionList equ 04H
+FbStackBase equ 08H
+FbStackLimit equ 0CH
+FbDeallocationStack equ 010H
+FbFiberContext equ 014H
+
+;
 ;  System Time Structure Offset Definitions
 ; 
 

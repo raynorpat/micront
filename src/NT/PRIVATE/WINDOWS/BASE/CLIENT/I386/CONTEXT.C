@@ -47,7 +47,7 @@ BaseInitializeContext(
     IN PVOID Parameter OPTIONAL,
     IN PVOID InitialPc OPTIONAL,
     IN PVOID InitialSp OPTIONAL,
-    IN BOOLEAN NewThread
+    IN BASE_CONTEXT_TYPE ContextType
     )
 
 /*++
@@ -104,8 +104,11 @@ Return Value:
 
     Context->Esp = (ULONG) InitialSp;
 
-    if ( NewThread ) {
+    if ( ContextType == BaseContextTypeThread ) {
         Context->Eip = (ULONG) BaseThreadStartThunk;
+        }
+    else if ( ContextType == BaseContextTypeFiber ) {
+        Context->Eip = (ULONG) BaseFiberStart;
         }
     else {
         Context->Eip = (ULONG) BaseProcessStartThunk;
@@ -116,4 +119,35 @@ Return Value:
 
     Context->ContextFlags = CONTEXT_FULL;
     Context->Esp -= sizeof(Parameter); // Reserve room for ret address
+}
+
+VOID
+BaseFiberStart(
+    VOID
+    )
+
+/*++
+
+Routine Description:
+
+    This function is called to start a Win32 fiber. Its purpose
+    is to call BaseThreadStart, getting the necessary arguments
+    from the fiber context record.
+
+Arguments:
+
+    None.
+
+Return Value:
+
+    None.
+
+--*/
+
+{
+    PFIBER Fiber;
+
+    Fiber = GetCurrentFiber();
+    BaseThreadStart( (LPTHREAD_START_ROUTINE)Fiber->FiberContext.Eax,
+                     (LPVOID)Fiber->FiberContext.Ebx );
 }

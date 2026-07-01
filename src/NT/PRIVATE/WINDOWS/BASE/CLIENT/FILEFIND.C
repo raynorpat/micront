@@ -23,6 +23,18 @@ Revision History:
 
 #define FIND_BUFFER_SIZE 4096
 
+//
+// Defined in filehops.c; used to dispatch overlapped completion routines.
+//
+
+VOID
+WINAPI
+BasepIoCompletion(
+    PVOID ApcContext,
+    PIO_STATUS_BLOCK IoStatusBlock,
+    DWORD Reserved
+    );
+
 PFINDFILE_HANDLE
 BasepInitializeFindFileHandle(
     IN HANDLE DirectoryHandle
@@ -1092,4 +1104,154 @@ Return Value:
 
 {
     return CloseHandle(hChangeHandle);
+}
+
+BOOL
+WINAPI
+ReadDirectoryChangesW(
+    HANDLE hDirectory,
+    LPVOID lpBuffer,
+    DWORD nBufferLength,
+    BOOL bWatchSubtree,
+    DWORD dwNotifyFilter,
+    LPDWORD lpBytesReturned,
+    LPOVERLAPPED lpOverlapped,
+    LPOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
+    )
+
+/*++
+
+Routine Description:
+
+    This API monitors a directory for changes and returns, for each change,
+    the name of the affected file along with the kind of change that
+    occurred.  Unlike FindFirstChangeNotification, the caller is told which
+    file changed rather than merely that the directory changed.
+
+Arguments:
+
+    hDirectory - Supplies a handle to the directory to be watched.  The
+        handle must be opened with FILE_LIST_DIRECTORY access.
+
+    lpBuffer - Supplies a buffer that is filled with a sequence of
+        FILE_NOTIFY_INFORMATION records describing the changes.
+
+    nBufferLength - Supplies the length, in bytes, of lpBuffer.
+
+    bWatchSubtree - If TRUE, the entire directory tree rooted at hDirectory
+        is watched.  If FALSE, only the directory itself is watched.
+
+    dwNotifyFilter - Supplies a set of FILE_NOTIFY_CHANGE_* flags that
+        specify the changes to report.
+
+    lpBytesReturned - For synchronous calls, returns the number of bytes
+        placed in lpBuffer.
+
+    lpOverlapped - If specified, the operation is performed asynchronously.
+
+    lpCompletionRoutine - If specified along with lpOverlapped, this routine
+        is called via APC when the operation completes.
+
+Return Value:
+
+    TRUE - The operation was successful.
+
+    FALSE - The operation failed. Extended error status is available
+        using GetLastError.
+
+--*/
+
+{
+    NTSTATUS Status;
+    BOOL ReturnValue;
+    IO_STATUS_BLOCK IoStatusBlock;
+    HANDLE Event;
+    PIO_APC_ROUTINE ApcRoutine;
+    PVOID ApcContext;
+
+    ReturnValue = TRUE;
+
+    if ( ARGUMENT_PRESENT(lpOverlapped) ) {
+
+        if ( ARGUMENT_PRESENT(lpCompletionRoutine) ) {
+
+            //
+            // completion is via APC routine
+            //
+
+            Event = NULL;
+            ApcRoutine = BasepIoCompletion;
+            ApcContext = (PVOID) lpCompletionRoutine;
+
+            }
+        else {
+
+            //
+            // completion is via completion port or get overlapped result
+            //
+
+            Event = lpOverlapped->hEvent;
+            ApcRoutine = NULL;
+            ApcContext = (DWORD)lpOverlapped->hEvent & 1 ? NULL : lpOverlapped;
+
+            }
+
+        lpOverlapped->Internal = (DWORD)STATUS_PENDING;
+
+        Status = NtNotifyChangeDirectoryFile(
+                    hDirectory,
+                    Event,
+                    ApcRoutine,
+                    ApcContext,
+                    (PIO_STATUS_BLOCK)&lpOverlapped->Internal,
+                    lpBuffer,
+                    nBufferLength,
+                    dwNotifyFilter,
+                    (BOOLEAN)bWatchSubtree
+                    );
+
+        //
+        // Anything other than an error means that I/O completion will
+        // occur and caller only gets return data via completion mechanism
+        //
+
+        if ( NT_ERROR(Status) ) {
+            BaseSetLastNTError(Status);
+            ReturnValue = FALSE;
+            }
+        }
+    else {
+        Status = NtNotifyChangeDirectoryFile(
+                    hDirectory,
+                    NULL,
+                    NULL,
+                    NULL,
+                    &IoStatusBlock,
+                    lpBuffer,
+                    nBufferLength,
+                    dwNotifyFilter,
+                    (BOOLEAN)bWatchSubtree
+                    );
+        if ( Status == STATUS_PENDING) {
+
+            //
+            // Operation must complete before return & IoStatusBlock destroyed
+            //
+
+            Status = NtWaitForSingleObject( hDirectory, FALSE, NULL );
+            if ( NT_SUCCESS(Status)) {
+                Status = IoStatusBlock.Status;
+                }
+            }
+        if ( NT_SUCCESS(Status) ) {
+            *lpBytesReturned = IoStatusBlock.Information;
+            }
+        else {
+            BaseSetLastNTError(Status);
+            ReturnValue = FALSE;
+            }
+        }
+
+    return ReturnValue;
+
 }
