@@ -1858,6 +1858,41 @@ build_msacm_codecs(){
     # ACM mapper / Control Panel driver (msacm32.drv, from msacmcpl.c).
     run_nmake "$NT_ROOT/PRIVATE/WINDOWS/MEDIA/MSACM/MSACMMAP" "MEDIA/MSACM/MSACMMAP - msacm32.drv" makedll=1
 }
+build_mci(){
+    # 32-bit MCI command drivers loaded by winmm's MCI layer: waveaudio,
+    # sequencer (MIDI), and cdaudio. All DYNLINK, link winmm.
+    # MCIOLE (mciole32) is skipped — it's the OLE-compound-document embedding
+    # control, built on the OLE1 API (LPOLEOBJECT/OLESTATUS, absent here) and
+    # the 16-bit ptypes16 path; not needed for media playback.
+    build_winmm || return 1
+    local d
+    for d in MCIWAVE MCISEQ MCICDA; do
+        run_nmake "$NT_ROOT/PRIVATE/WINDOWS/MEDIA/$d" "MEDIA/$d - MCI driver" makedll=1 || return 1
+    done
+}
+# --- Multimedia apps (PROGRAM/EXE, link winmm) ------------------------------
+build_sndvol(){
+    build_winmm || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/MEDIA/SNDVOL" "MEDIA/SNDVOL - sndvol32.exe"
+}
+build_mplayer2(){
+    build_winmm || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/MEDIA/MPLAYER2" "MEDIA/MPLAYER2 - mplay32.exe"
+}
+build_cdplayer(){
+    build_winmm || return 1
+    build_shell32 || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/MEDIA/CDPLAYER" "MEDIA/CDPLAYER - cdplayer.exe"
+}
+build_sndrec32(){
+    # Sound Recorder (SndRec32.exe) — records/plays WAV via winmm; embeds the
+    # clip as an OLE2 object, so it links ole32/uuid + its o2base32 helper lib
+    # (O2BASE, staged into MEDIA/lib alongside mmcntrls).
+    build_winmm || return 1
+    mkdir -p "$NT_ROOT/PRIVATE/WINDOWS/MEDIA/lib/i386"
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/MEDIA/SNDREC32/O2BASE" "MEDIA/SNDREC32/O2BASE - o2base32.lib" || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/MEDIA/SNDREC32/SOUNDREC" "MEDIA/SNDREC32 - sndrec32.exe"
+}
 build_scrnsavers(){
     # Screen savers (SCRNSAVE DIRS): the scrnsave.lib framework (COMMON) then
     # each saver (UMAPPL_NOLIB + UMAPPLEXT=.scr → <name>.scr). Savers link
@@ -2466,6 +2501,11 @@ USERLAND_GUI_TARGETS=(
     # Audio Compression Manager — msacm32.dll + the ADPCM/IMA/GSM codecs, the
     # filter driver, and the ACM Control Panel mapper (msacm32.drv).
     msacm32 msacm_codecs
+    # MCI command drivers (waveaudio / sequencer / cdaudio) — winmm loads these
+    # by device type for the MCI string/command interface.
+    mci
+    # Multimedia apps — Volume Control, Media Player, CD Player, Sound Recorder.
+    sndvol mplayer2 cdplayer sndrec32
     # TCP/IP command-line utilities (arp, route, ping, tracert) — console
     # apps run from cmd. ping/tracert pull in icmp.dll (ICMP Echo API).
     arp route ping tracert

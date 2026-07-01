@@ -31,6 +31,16 @@ provider in the SOFTWARE hive (`mkhive.py`).
 
 ## 2. Multimedia — `WINDOWS/MEDIA`
 
+**Status: the pure-Win32 stack is built and staged.** `winmm.dll` (keystone),
+`msacm32.dll` + the ADPCM/IMA/GSM codecs + `msacm32.drv` mapper, the MCI
+drivers (`mciwave`/`mciseq`/`mcicda`), and the apps (`sndvol32`, `mplay32`,
+`cdplayer`, `sndrec32`) all build under `./build.sh` and stage into the `gui`
+image. Not boot-tested; actual audio playback still needs a kernel sound-card
+miniport (see the gating note below). Skipped as 16-bit/OLE1: `mciole32` (OLE1
+compound-doc control) and the `*16`/`VFW16`/thunk subdirs. `MMDRV` (the
+device-driver line) and `SNDBLST`/`SYNTH` are the remaining device-side pieces,
+gated on the sound hardware decision.
+
 Core API then drivers then apps.
 
 - `WINMM`   — multimedia API (`winmm.dll`) — the keystone; build first

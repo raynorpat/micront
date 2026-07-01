@@ -610,6 +610,15 @@ _GUI_FILES: list[tuple[str, Path]] = [
     ("System32/msgsm32.acm",         OBJ("WINDOWS/MEDIA/MSACM/GSM610") / "msgsm32.acm"),
     ("System32/msfltr32.acm",        OBJ("WINDOWS/MEDIA/MSACM/MSFILTER") / "msfltr32.acm"),
     ("System32/msacm32.drv",         OBJ("WINDOWS/MEDIA/MSACM/MSACMMAP") / "msacm32.drv"),
+    # MCI command drivers (loaded by winmm's MCI layer by device type).
+    ("System32/mciwave.dll",         OBJ("WINDOWS/MEDIA/MCIWAVE") / "mciwave.dll"),
+    ("System32/mciseq.dll",          OBJ("WINDOWS/MEDIA/MCISEQ") / "mciseq.dll"),
+    ("System32/mcicda.dll",          OBJ("WINDOWS/MEDIA/MCICDA") / "mcicda.dll"),
+    # Multimedia apps — reachable via Progman -> File -> Run.
+    ("System32/sndvol32.exe",        OBJ("WINDOWS/MEDIA/SNDVOL") / "sndvol32.exe"),
+    ("System32/mplay32.exe",         OBJ("WINDOWS/MEDIA/MPLAYER2") / "MPlay32.exe"),
+    ("System32/cdplayer.exe",        OBJ("WINDOWS/MEDIA/CDPLAYER") / "cdplayer.exe"),
+    ("System32/sndrec32.exe",        OBJ("WINDOWS/MEDIA/SNDREC32/SOUNDREC") / "SndRec32.exe"),
     # Phase 4b multimedia Control Panel applets. drivers.cpl/multimed.cpl are
     # auto-discovered by control.exe; sound.dll/midimap.dll are the Sound and
     # MIDI-Mapper driver applets (MMCPL-registered / loaded by multimed).
