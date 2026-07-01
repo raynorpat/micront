@@ -506,10 +506,17 @@ build_wkssvc_idl() {
     # not wkssvc_v1_0_s_ifspec.
     run_wibo_tool "$dir" midl /ms_ext /c_ext /app_config /D MIDL_PASS /D _M_IX86 /D _X86_ \
         -oldnames /I "$NT_ROOT_WIN\\PRIVATE\\INC" WKSSVC.IDL || return 1
-    # midl emits into WKSSVC/; the client lib compiles ..\..\wkssvc_c.c (CLIENT
-    # dir) and the server DLL ..\wkssvc_s.c (SERVER dir), so distribute stubs.
-    cp -f "$dir/wkssvc_c.c" "$dir/CLIENT/" 2>/dev/null || cp -f "$dir/WKSSVC_C.C" "$dir/CLIENT/wkssvc_c.c"
-    cp -f "$dir/wkssvc_s.c" "$dir/SERVER/" 2>/dev/null || cp -f "$dir/WKSSVC_S.C" "$dir/SERVER/wkssvc_s.c"
+    # midl emits into WKSSVC/ as WKSSVC_c.c / WKSSVC_s.c (uppercase base from
+    # WKSSVC.IDL, lowercase _c/_s suffix). Locate each case-insensitively — a
+    # fixed-case cp works on macOS by luck but misses the mixed case on Linux —
+    # and copy to the lowercase names the CLIENT/SERVER SOURCES compile.
+    local cstub sstub
+    cstub="$(find "$dir" -maxdepth 1 -iname 'wkssvc_c.c' | head -1)"
+    sstub="$(find "$dir" -maxdepth 1 -iname 'wkssvc_s.c' | head -1)"
+    [ -n "$cstub" ] || { echo "!!! wkssvc: MIDL produced no client stub"; return 1; }
+    [ -n "$sstub" ] || { echo "!!! wkssvc: MIDL produced no server stub"; return 1; }
+    cp -f "$cstub" "$dir/CLIENT/wkssvc_c.c"
+    cp -f "$sstub" "$dir/SERVER/wkssvc_s.c"
 }
 build_wkssvc_lib() { build_wkssvc_idl || return 1; run_nmake "$NET/SVCDLLS/WKSSVC/CLIENT" "WKSSVC/CLIENT - wkssvc.lib (RPC client stub)"; }
 build_wkssvc() {
@@ -525,8 +532,15 @@ build_srvsvc_idl() {
     local dir="$NET/SVCDLLS/SRVSVC"
     run_wibo_tool "$dir" midl /ms_ext /c_ext /app_config /D MIDL_PASS /D _M_IX86 /D _X86_ \
         -oldnames /I "$NT_ROOT_WIN\\PRIVATE\\INC" SRVSVC.IDL || return 1
-    cp -f "$dir/srvsvc_c.c" "$dir/CLIENT/" 2>/dev/null || cp -f "$dir/SRVSVC_C.C" "$dir/CLIENT/srvsvc_c.c"
-    cp -f "$dir/srvsvc_s.c" "$dir/SERVER/" 2>/dev/null || cp -f "$dir/SRVSVC_S.C" "$dir/SERVER/srvsvc_s.c"
+    # MIDL emits SRVSVC_c.c / SRVSVC_s.c (mixed case); find case-insensitively
+    # so this works on case-sensitive Linux, not just macOS.
+    local cstub sstub
+    cstub="$(find "$dir" -maxdepth 1 -iname 'srvsvc_c.c' | head -1)"
+    sstub="$(find "$dir" -maxdepth 1 -iname 'srvsvc_s.c' | head -1)"
+    [ -n "$cstub" ] || { echo "!!! srvsvc: MIDL produced no client stub"; return 1; }
+    [ -n "$sstub" ] || { echo "!!! srvsvc: MIDL produced no server stub"; return 1; }
+    cp -f "$cstub" "$dir/CLIENT/srvsvc_c.c"
+    cp -f "$sstub" "$dir/SERVER/srvsvc_s.c"
 }
 build_srvcomn()    { build_srvsvc_idl || return 1; run_nmake "$NET/SVCDLLS/SRVSVC/LIB" "SRVSVC/LIB - srvcomn.lib (server service helpers)"; }
 build_srvsvc_lib() { build_srvsvc_idl || return 1; run_nmake "$NET/SVCDLLS/SRVSVC/CLIENT" "SRVSVC/CLIENT - srvsvc.lib (RPC client stub)"; }
@@ -560,13 +574,19 @@ build_browser_idl() {
     local dir="$NET/SVCDLLS/BROWSER"
     run_wibo_tool "$dir" midl /ms_ext /c_ext /app_config /D MIDL_PASS /D _M_IX86 /D _X86_ \
         -oldnames /I "$NT_ROOT_WIN\\PRIVATE\\INC" BOWSER.IDL || return 1
-    cp -f "$dir/bowser_c.c" "$dir/CLIENT/" 2>/dev/null || cp -f "$dir/BOWSER_C.C" "$dir/CLIENT/bowser_c.c"
+    # MIDL emits BOWSER_c.c / BOWSER_s.c (mixed case); find case-insensitively
+    # so this works on case-sensitive Linux, not just macOS.
+    local cstub raw
+    cstub="$(find "$dir" -maxdepth 1 -iname 'bowser_c.c' | head -1)"
+    [ -n "$cstub" ] || { echo "!!! browser: MIDL produced no client stub"; return 1; }
+    cp -f "$cstub" "$dir/CLIENT/bowser_c.c"
     # The SERVER build wraps the raw server stub with precomp.h via a .mdl->.c
     # rule (BROWSER/SERVER/MAKEFILE.INC) that shells out to cmd's `type`
     # builtin — which our wibo cmd-stub can't exec. Do the wrap here instead:
     # emit bowser_s.mdl (raw stub, the makefile prerequisite) and a ready
     # bowser_s.c (precomp header + stub) that's newer, so the rule never fires.
-    local raw="$dir/bowser_s.c"; [ -f "$raw" ] || raw="$dir/BOWSER_S.C"
+    raw="$(find "$dir" -maxdepth 1 -iname 'bowser_s.c' | head -1)"
+    [ -n "$raw" ] || { echo "!!! browser: MIDL produced no server stub"; return 1; }
     cp -f "$raw" "$dir/SERVER/bowser_s.mdl"
     { printf '#include "precomp.h"\n#pragma hdrstop\n'; cat "$raw"; } > "$dir/SERVER/bowser_s.c"
     touch "$dir/SERVER/bowser_s.c"
