@@ -553,14 +553,22 @@ build_dosprint() { run_nmake "$NET/DOSPRINT"          "NET/DOSPRINT - DosPrint A
 build_rxcommon() { run_nmake "$NET/RPCXLATE/RXCOMMON" "NET/RXCOMMON - RAP marshalling common (rxcommon.lib)"; }
 build_rxapi()    { run_nmake "$NET/RPCXLATE/RXAPI"    "NET/RXAPI - RAP API descriptors (rxapi.lib)"; }
 build_netrap()   { run_nmake "$NET/RAP"               "NET/RAP - Remote Admin Protocol (netrap.dll)" makedll=1; }
-build_brcommon() { run_nmake "$NET/SVCDLLS/BROWSER/COMMON" "BROWSER/COMMON - browser helpers (brcommon.lib)"; }
+build_brcommon() { build_browser_idl || return 1; run_nmake "$NET/SVCDLLS/BROWSER/COMMON" "BROWSER/COMMON - browser helpers (brcommon.lib)"; }
 # BOWSER.IDL -> bowser.h + client/server stubs. -oldnames for the ServerIfHandle.
 build_browser_idl() {
     local dir="$NET/SVCDLLS/BROWSER"
     run_wibo_tool "$dir" midl /ms_ext /c_ext /app_config /D MIDL_PASS /D _M_IX86 /D _X86_ \
         -oldnames /I "$NT_ROOT_WIN\\PRIVATE\\INC" BOWSER.IDL || return 1
     cp -f "$dir/bowser_c.c" "$dir/CLIENT/" 2>/dev/null || cp -f "$dir/BOWSER_C.C" "$dir/CLIENT/bowser_c.c"
-    cp -f "$dir/bowser_s.c" "$dir/SERVER/" 2>/dev/null || cp -f "$dir/BOWSER_S.C" "$dir/SERVER/bowser_s.c"
+    # The SERVER build wraps the raw server stub with precomp.h via a .mdl->.c
+    # rule (BROWSER/SERVER/MAKEFILE.INC) that shells out to cmd's `type`
+    # builtin — which our wibo cmd-stub can't exec. Do the wrap here instead:
+    # emit bowser_s.mdl (raw stub, the makefile prerequisite) and a ready
+    # bowser_s.c (precomp header + stub) that's newer, so the rule never fires.
+    local raw="$dir/bowser_s.c"; [ -f "$raw" ] || raw="$dir/BOWSER_S.C"
+    cp -f "$raw" "$dir/SERVER/bowser_s.mdl"
+    { printf '#include "precomp.h"\n#pragma hdrstop\n'; cat "$raw"; } > "$dir/SERVER/bowser_s.c"
+    touch "$dir/SERVER/bowser_s.c"
 }
 build_browser_client() { build_browser_idl || return 1; run_nmake "$NET/SVCDLLS/BROWSER/CLIENT" "BROWSER/CLIENT - bowser.lib (RPC client stub)"; }
 # Break the xactsrv<->browser circular import: compile both, then generate
@@ -2223,9 +2231,10 @@ USERLAND_GUI_TARGETS=(
     # Common dialogs DLL — progman loads it for the Browse file picker.
     comdlg32
     # SMB services: the SCM server (services.exe) + the Workstation service
-    # (wkssvc.dll, client) and Server service (srvsvc.dll, serve shares) it
-    # hosts. winlogon execs services.exe.
-    scserver wkssvc srvsvc
+    # (wkssvc.dll, client), Server service (srvsvc.dll, serve shares), and
+    # Computer Browser (browser.dll + its xactsrv) it hosts. winlogon execs
+    # services.exe.
+    scserver wkssvc srvsvc browser
     # Login + shell
     winlogon userinit
     # Program Manager (the default NT 3.5 shell) and cmd.exe.

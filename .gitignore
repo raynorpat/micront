@@ -454,3 +454,27 @@ src/NT/PRIVATE/NET/SVCDLLS/SRVSVC/SRVSVC_c.c
 src/NT/PRIVATE/NET/SVCDLLS/SRVSVC/SRVSVC_s.c
 src/NT/PRIVATE/NET/SVCDLLS/SRVSVC/CLIENT/srvsvc_c.c
 src/NT/PRIVATE/NET/SVCDLLS/SRVSVC/SERVER/srvsvc_s.c
+
+# Computer Browser + downlevel transaction server (browser/xactsrv) and the
+# RPCXLATE stack (dosprint/rxapi/rxcommon/netrap) — all built from source.
+# xactsrv.lib / browser.lib are generated during the circular-import break.
+src/NT/PUBLIC/SDK/LIB/I386/browser.dll
+src/NT/PUBLIC/SDK/LIB/I386/browser.exp
+src/NT/PUBLIC/SDK/LIB/I386/browser.lib
+src/NT/PUBLIC/SDK/LIB/I386/xactsrv.dll
+src/NT/PUBLIC/SDK/LIB/I386/xactsrv.exp
+src/NT/PUBLIC/SDK/LIB/I386/xactsrv.lib
+src/NT/PUBLIC/SDK/LIB/I386/dosprint.lib
+src/NT/PUBLIC/SDK/LIB/I386/RxApi.lib
+src/NT/PUBLIC/SDK/LIB/I386/RxCommon.lib
+src/NT/PUBLIC/SDK/LIB/I386/NetRap.exp
+src/NT/PUBLIC/SDK/LIB/I386/NetRap.lib
+src/NT/PUBLIC/SDK/LIB/I386/netrap.exp
+src/NT/PUBLIC/SDK/LIB/I386/netrap.lib
+# browser MIDL-generated stubs + the precomp-wrapped server stub
+src/NT/PRIVATE/NET/SVCDLLS/BROWSER/BOWSER.h
+src/NT/PRIVATE/NET/SVCDLLS/BROWSER/BOWSER_c.c
+src/NT/PRIVATE/NET/SVCDLLS/BROWSER/BOWSER_s.c
+src/NT/PRIVATE/NET/SVCDLLS/BROWSER/CLIENT/bowser_c.c
+src/NT/PRIVATE/NET/SVCDLLS/BROWSER/SERVER/bowser_s.c
+src/NT/PRIVATE/NET/SVCDLLS/BROWSER/SERVER/bowser_s.mdl

@@ -962,6 +962,18 @@ def build_micront_system_hive(profile: str = "headless",
     lansrv["Linkage"] \
         .set_multi_sz("Bind", ["\\Device\\NetBT_Vionet1"])
 
+    # Computer Browser service (browser.dll) — maintains the list of servers
+    # on the network ("Network Neighborhood"). Hosted by services.exe, it
+    # rides on the workstation + server services. DEMAND start, dormant.
+    browser = services["Browser"]
+    browser.set_dword("Type",         0x20) \
+           .set_dword("Start",        3) \
+           .set_dword("ErrorControl", 1) \
+           .set_sz("Group", "NetworkProvider") \
+           .set_multi_sz("DependOnService", ["LanmanWorkstation", "LanmanServer"])
+    browser["Parameters"] \
+        .set_expand_sz("ServiceDll", "%SystemRoot%\\System32\\browser.dll")
+
     # --- Winsock (user mode): wsock32.dll + wshtcpip.dll -----------------
     # wsock32 enumerates transports from Winsock\Parameters:Transports, then
     # for each opens <Transport>\Parameters\Winsock to learn the triple

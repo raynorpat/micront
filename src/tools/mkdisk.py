@@ -592,6 +592,9 @@ _GUI_FILES: list[tuple[str, Path]] = [
     ("System32/wkssvc.dll",         SDK_LIB / "wkssvc.dll"),
     # Server service DLL — hosted by services.exe, manages srv.sys shares.
     ("System32/srvsvc.dll",         SDK_LIB / "srvsvc.dll"),
+    # Computer Browser service + the downlevel transaction server it uses.
+    ("System32/browser.dll",        SDK_LIB / "browser.dll"),
+    ("System32/xactsrv.dll",        SDK_LIB / "xactsrv.dll"),
     # Login
     ("System32/winlogon.exe",       OBJ("WINDOWS/USER/WINLOGON/DAYTONA") / "winlogon.exe"),
     ("System32/userinit.exe",       OBJ("WINDOWS/USER/USERINIT") / "userinit.exe"),
