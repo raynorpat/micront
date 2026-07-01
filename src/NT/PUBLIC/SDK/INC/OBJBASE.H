@@ -8910,10 +8910,15 @@ void __RPC_USER SNB_free_xmit( RemSNB __RPC_FAR * );
     DEFINE_GUID(name, l, w1, w2, 0xC0,0,0,0,0,0,0,0x46)
 
 #ifdef __cplusplus
-inline BOOL IsEqualGUID(REFGUID rguid1, REFGUID rguid2)
+// The comparison is an inline named InlineIsEqualGUID with IsEqualGUID a
+// macro alias (as in Win32 guiddef.h). This lets CAIROLE/COMMON/eqguid.cxx
+// #undef IsEqualGUID and export the real stdcall IsEqualGUID@8 without
+// colliding with an inline of the same name.
+inline BOOL InlineIsEqualGUID(REFGUID rguid1, REFGUID rguid2)
 {
     return !memcmp(&rguid1, &rguid2, sizeof(GUID));
 }
+#define IsEqualGUID(rguid1, rguid2) InlineIsEqualGUID(rguid1, rguid2)
 #else	//  ! __cplusplus
 #define IsEqualGUID(rguid1, rguid2) (!memcmp(rguid1, rguid2, sizeof(GUID)))
 #endif	//  __cplusplus

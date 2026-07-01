@@ -16,9 +16,10 @@
 //
 //--------------------------------------------------------------------------
 
-// Signature matches objbase.h's STDAPI_(BOOL) IsEqualGUID(REFGUID, REFGUID)
-// declaration (REFGUID == const GUID&); the original GUID& form gave a
-// second-C-linkage overload error against the public prototype.
+// objbase.h defines IsEqualGUID as a macro alias for the InlineIsEqualGUID
+// inline; drop the macro so this compiles to the real exported stdcall
+// symbol (IsEqualGUID@8, ordinal 38 in COMPOB32.DEF). REFGUID == const GUID&.
+#undef IsEqualGUID
 extern "C" BOOL  __stdcall IsEqualGUID(REFGUID guid1, REFGUID guid2)
 {
     return !memcmp((void *)&guid1,(void *)&guid2,sizeof(GUID));
