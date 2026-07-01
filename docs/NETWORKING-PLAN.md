@@ -118,3 +118,75 @@ File Manager's "Connect Network Drive" and the Control Panel applet. Stage
 5. Tier 4 — `ncpa.cpl` + minimal net UI.
 
 See `DHCP-PLAN.md` to replace the static IP once Winsock (Tier 1) is up.
+
+---
+
+# Implementation status
+
+**Tiers 1–3 are built and committed. Tier 4 was assessed and skipped.**
+
+Everything below builds under the normal `./build.sh` flow, stages into the
+disk image, and is registered in the hive. The whole user-mode service stack
+(`services.exe` + wkssvc/srvsvc/browser) is registered **demand-start**, so it
+is present but dormant — activating + boot-testing it is a separate step. None
+of the runtime paths (`ping`, `net use`, `net view`) have been booted yet.
+
+## Tier 1 — Winsock + TCP/IP utilities ✅
+
+- `wsock32.dll` — imported `NET/SOCKETS/{WINSOCK,SOCKREG,SOCKUTIL,LIBUEMUL}`.
+  Needed `$(BASEDIR)\private\inc` on the include path (BSD-style `sys/`,
+  `sockets/` headers) and `PRIVATE/INC/{SOCKETS,SYS}` imported.
+- **`wshtcpip.dll` — written from scratch.** The TCP/IP Winsock helper shipped
+  only as a prebuilt `.lib` in the leak. NT4's is Winsock 2 (drags in
+  `winsock2.h`/`ws2tcpip.h`), so this is a minimal 3.5-native reimplementation
+  on the `WSHNETBS.C` skeleton (8-function `wsahelp.h` interface), TCP+UDP.
+- **`icmp.dll` — written from scratch.** `IcmpCreateFile`/`IcmpSendEcho` over
+  the IP driver's existing `IOCTL_ICMP_ECHO_REQUEST` on `\Device\Ip`.
+- **`ping` / `tracert` — written** (minimal, use icmp.dll). **`arp` / `route`**
+  imported from `NTOS/TDI/TCPIP/UTILS`.
+- Registry: `Winsock\Parameters:Transports` + `Tcpip\Parameters\Winsock`
+  (Mapping blob + `HelperDllName`).
+
+## Tier 2 — NetBIOS over TCP/IP ✅
+
+- `netbt.sys` (from `NTOS/NBT`) + `netbios.sys` (from `NTOS/NETBIOS`, the
+  `\Device\Netbios` NCB interface — the plan's `NET/NETBIOS` is a static lib
+  redundant with the prebuilt netapi32).
+- **Key gotcha:** NT 3.5 netbt defaults to the old STREAMS stack
+  (`\Device\Streams\Tcp`); our tcpip exposes `\Device\Tcp`/`\Device\Udp`, so
+  `NetBT\Parameters\TransportBindName = "\Device\"` retargets it. It reads the
+  adapter IP by groveling `Services\Vionet1\Parameters\Tcpip`.
+
+## Tier 3 — SMB client + server ✅
+
+- **Client:** `rdr.sys` (+ smbtrsup/bowser libs), the SCM server
+  `services.exe` (from `SCREG/SC/SERVER`, which winlogon execs), `wkssvc.dll`,
+  and `net.exe`.
+- **`net.exe` unblock:** the netcmd/netlib tree pulls the DosPrint headers
+  (`dosprint.h`/`rxprint.h`/`xsdef16.h`) via `port1632.h`; these are absent
+  from both the NT 3.5 and NT4 leaks and were **recovered from the OpenNT
+  tree** into `PRIVATE/INC`.
+- **Server:** `srv.sys` + `srvsvc.dll`, and the Computer Browser `browser.dll`
+  + its downlevel transaction server `xactsrv.dll` (with the RPCXLATE stack:
+  dosprint/rxcommon/rxapi/netrap).
+- **Circular DLL break:** `xactsrv` ↔ `browser` each link the other's import
+  lib. Broken the samsrv↔lsasrv way — compile both, synthesize each import lib
+  from its `.def`, then link. The browser server's `.mdl→.c` precomp rule
+  shells out to cmd's `type` builtin (a no-op under wibo), so `bowser_s.c` is
+  pre-wrapped in `build_browser_idl`.
+- **MIDL `-oldnames`:** svcctl/wkssvc/srvsvc/bowser server stubs need it to
+  emit `<iface>_ServerIfHandle` (vs `<iface>_v1_0_s_ifspec`).
+- Registry: `Rdr`/`Srv` drivers + `LanmanWorkstation`/`LanmanServer`/`Browser`
+  services (ServiceDll + Linkage to netbt), all demand-start.
+
+## Tier 4 — Network UI ❌ skipped
+
+`ncpa.cpl` itself uses the standard build, but it links **`netui0/1/2`** — the
+BLT dialog framework, **~174,000 lines of C++** under `NET/UI/COMMON/SRC` built
+with a **custom `RULES.MK` system for the `cfront` compiler** (not in our
+toolchain, doesn't map to the SOURCES/cl386 build). Reconstructing enough of
+that framework from the headers to make the original applet link and behave is
+effectively writing a mini-MFC — too large and too speculative to be worth it,
+since networking is fully functional via the registry without a GUI applet.
+If revisited, the tractable path is a **fresh minimal Win32 `ncpa.cpl`** (no
+BLT) that edits the adapter's IP config via the registry.
