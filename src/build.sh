@@ -1476,8 +1476,8 @@ build_cmdstub() {
         "$WIBO_BIN" --chdir "$src_dir" \
             "${WIBO_TOOLS}/CL.EXE" -nologo cmd.c \
             -link -subsystem:console -out:cmd.exe -nodefaultlib:oldnames \
-            "${NT_ROOT_WIN}\\PUBLIC\\SDK\\LIB\\I386\\libc.lib" \
-            "${NT_ROOT_WIN}\\PUBLIC\\SDK\\LIB\\I386\\kernel32.lib" \
+            "${NT_ROOT_WIN}\\PUBLIC\\SDK\\LIB\\I386\\LIBC.LIB" \
+            "${NT_ROOT_WIN}\\PUBLIC\\SDK\\LIB\\I386\\KERNEL32.LIB" \
         || { echo ">>> cmd-stub: FAILED"; return 1; }
     # -nodefaultlib:oldnames: cmd.c uses the _-prefixed CRT names (_stricmp,
     # etc.), so it needs no OLDNAMES.lib aliases. The MS SDK's OLDNAMES.lib
@@ -2028,8 +2028,8 @@ build_hal() {
         -RELEASE "${hal_dbg[@]}" -OPT:REF \
         obj\\i386\\*.obj \
         "${NT_ROOT_WIN}\\PUBLIC\\SDK\\LIB\\I386\\ntoskrnl.lib" \
-        "${NT_ROOT_WIN}\\PUBLIC\\SDK\\LIB\\I386\\libcntpr.lib" \
-        "${NT_ROOT_WIN}\\PUBLIC\\SDK\\LIB\\I386\\int64.lib" \
+        "${NT_ROOT_WIN}\\PUBLIC\\SDK\\LIB\\I386\\LIBCNTPR.LIB" \
+        "${NT_ROOT_WIN}\\PUBLIC\\SDK\\LIB\\I386\\INT64.LIB" \
         "${NT_ROOT_WIN}\\PUBLIC\\SDK\\LIB\\I386\\hal.exp"
 
     if [ -f "$hal_dir/obj/i386/hal.dll" ]; then
