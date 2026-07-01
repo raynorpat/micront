@@ -1072,6 +1072,12 @@ build_imagehlp() {
     install_host_tool "$dir/obj/i386/splitsym.exe" "SPLITSYM.EXE" || return 1
     install_host_tool "$dir/obj/i386/binplace.exe" "BINPLACE.EXE"
 }
+# binplace.exe — NT's file-placement tool. A SOURCES `MISCFILES=` directive
+# (e.g. midimap.cfg in the MIDI Control Panel applet) expands to an
+# unconditional `binplace -R ... $(MISCFILES)` rule in MAKEFILE.DEF, so
+# binplace must be on PATH for a plain (non-syms) build, not just --syms.
+# It's produced by the IMAGEHLP build, so build that.
+build_binplace() { build_imagehlp; }
 build_cvpack() {
     build_mkmsg || return 1
     run_nmake "$NT_ROOT/PRIVATE/SDKTOOLS/VCTOOLS/PDB/DBI" "pdb/dbi.lib" || return 1
@@ -2351,6 +2357,9 @@ TOOL_TARGETS=(
     midleb midlyacc midlpg
     midl_support midl_expr midl_analysis midl_codegen midl
     gensrv
+    # binplace — needed by MISCFILES= rules (e.g. the MIDI cpl applet's
+    # midimap.cfg); provided by the IMAGEHLP build.
+    binplace
 )
 
 NTOSKRNL_TARGETS=(
