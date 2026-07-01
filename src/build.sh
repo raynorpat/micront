@@ -1806,6 +1806,20 @@ build_ups(){
     build_shell32 || return 1
     run_nmake "$NT_ROOT/PRIVATE/WINDOWS/SHELL/CONTROL/UPS" "SHELL/CONTROL/UPS - ups.cpl" makedll=1
 }
+build_mmcntrls(){
+    # Multimedia custom controls (mmcntrls.lib) — trackbar/toolbar/etc. that
+    # winmm.dll's UI helpers link. Static lib → MEDIA/lib/i386 (TARGETPATH=..\lib,
+    # which run_nmake doesn't auto-create).
+    mkdir -p "$NT_ROOT/PRIVATE/WINDOWS/MEDIA/lib/i386"
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/MEDIA/MMCNTRLS" "MEDIA/MMCNTRLS - mmcntrls.lib"
+}
+build_winmm(){
+    # Multimedia API (winmm.dll) — the keystone of the MEDIA subsystem. DYNLINK
+    # → makedll=1. Links only user32/gdi32/kernel32 (all built) + mmcntrls.lib.
+    # Its public headers (mmsystem/mmddk/mmreg) already ship in PUBLIC/SDK/INC.
+    build_mmcntrls || return 1
+    run_nmake "$NT_ROOT/PRIVATE/WINDOWS/MEDIA/WINMM" "MEDIA/WINMM - winmm.dll" makedll=1
+}
 build_scrnsavers(){
     # Screen savers (SCRNSAVE DIRS): the scrnsave.lib framework (COMMON) then
     # each saver (UMAPPL_NOLIB + UMAPPLEXT=.scr → <name>.scr). Savers link
@@ -2399,6 +2413,10 @@ USERLAND_GUI_TARGETS=(
     lz32 version prsinf t1instal main_cpl
     # Phase 4a — self-contained Control Panel applets + screen savers.
     cursors profile display ups scrnsavers
+    # Multimedia keystone — winmm.dll (WAVE/MIDI/MMIO/mixer/timer APIs). Apps
+    # that import it (sound recorder, media player, mm Control Panel applets)
+    # can load once this is present. Pulls mmcntrls.lib.
+    winmm
     # TCP/IP command-line utilities (arp, route, ping, tracert) — console
     # apps run from cmd. ping/tracert pull in icmp.dll (ICMP Echo API).
     arp route ping tracert

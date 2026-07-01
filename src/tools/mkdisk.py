@@ -600,6 +600,8 @@ _GUI_FILES: list[tuple[str, Path]] = [
     ("System32/ssmyst.scr",          OBJ("WINDOWS/SHELL/CONTROL/SCRNSAVE/MYSTIFY") / "ssmyst.scr"),
     ("System32/ssstars.scr",         OBJ("WINDOWS/SHELL/CONTROL/SCRNSAVE/STARS") / "ssstars.scr"),
     ("System32/logon.scr",           OBJ("WINDOWS/SHELL/CONTROL/SCRNSAVE/LOGON") / "logon.scr"),
+    # Multimedia API DLL — winmm.dll (the keystone of the MEDIA subsystem).
+    ("System32/winmm.dll",           SDK_LIB / "winmm.dll"),
     # TCP/IP utilities — arp / route query the kernel stack via TDI IOCTLs.
     # Console apps, so GUI-only (need cmd.exe + the console server). Built as
     # newarp/newroute (UMAPPL name); staged under their canonical names.
