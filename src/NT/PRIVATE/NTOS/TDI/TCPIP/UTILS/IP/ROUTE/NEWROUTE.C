@@ -107,6 +107,7 @@ CmdTabEnt CmdTab[] = {
 };
 
 #define	MASK_KW			"mask"
+#define	METRIC_KW		"metric"
 
 char	testname[_MAX_FNAME];
 
@@ -549,7 +550,7 @@ void
 Usage(void)
 {
 	printf("Usage:\n\n");
-	printf("%s [ADD | DELETE | PRINT] destination [MASK mask] gateway [metric]\n",
+	printf("%s [ADD | DELETE | PRINT] destination [MASK mask] gateway [METRIC metric]\n",
 		strlwr(testname));
 	printf("\nThe parameters are:\n");
 	printf("\tADD\tadd a route to the routing table.\n");
@@ -695,8 +696,21 @@ main(int argc, char *argv[])
 		ParamIndex++;
 		
 		Metric = 1;
-		// Now see if we have a metric.
+		// Now see if we have a metric. It may be preceded by the METRIC
+		// keyword, or given as a bare value.
 		if (ParamIndex < argc) {
+
+			if (stricmp(argv[ParamIndex], METRIC_KW) == 0) {
+				// He specified the METRIC keyword. The value must follow.
+				ParamIndex++;
+				if (ParamIndex >= argc) {
+					printf("%s: Too few parameters for METRIC keyword.\n",
+						testname);
+					Usage();
+					exit(1);
+				}
+			}
+
 			// We should have a metric. Convert it to a long.
 			Metric = strtoul(argv[ParamIndex], &EndPtr, 0);
 
