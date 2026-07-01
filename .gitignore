@@ -342,11 +342,15 @@ src/wibo-tools/
 
 # CRT libraries built from source (src/NT/PRIVATE/BASE/CRT*) — produced by
 # `build.sh crt` (auto-run when missing), not shipped as prebuilt binaries.
-# CRTDLL.DLL is the exception: it's a tracked bootstrap seed (see SEED note
-# below), since wibo must load it as a real PE to run the host toolchain —
-# NMAKE/LINK/LIB all import CRTDLL.dll, and those are the tools that build
-# the CRT. The build overwrites the seed in place; clean.sh restores it.
-src/NT/PUBLIC/SDK/LIB/I386/LIBC.LIB
+# Two exceptions are tracked bootstrap seeds (the build overwrites them in
+# place; clean.sh / git checkout restores them):
+#   - CRTDLL.DLL: wibo must load it as a real PE to run the host toolchain —
+#     NMAKE/LINK/LIB all import CRTDLL.dll, and those build the CRT.
+#   - LIBC.LIB: the very first build step (build_cmdstub) statically links it
+#     to produce NMAKE's COMSPEC (cmd-stub), which the from-source CRT build
+#     itself needs — so a fresh checkout must already have LIBC.LIB. Without
+#     it, CI fails at cmd-stub with "cannot open file ...LIBC.LIB". The
+#     from-source CRT still rebuilds it (LIBCNTPR/CRTDLL.LIB stay untracked).
 src/NT/PUBLIC/SDK/LIB/I386/LIBCMT.LIB
 src/NT/PUBLIC/SDK/LIB/I386/CRTDLL.LIB
 src/NT/PUBLIC/SDK/LIB/I386/LIBCNTPR.LIB
